@@ -1,0 +1,23 @@
+# Virtual environment
+venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Testing/Coverage
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Environment variables (may contain API keys)
+.env
+
+# Session file (user-specific, not to be committed)
+.lit-critic-session.json

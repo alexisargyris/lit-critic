@@ -1,0 +1,61 @@
+/**
+ * Status Bar — quick status overview in the VS Code status bar.
+ *
+ * States:
+ *   Ready                              — no active session
+ *   $(sync~spin) Analyzing...          — analysis in progress
+ *   📖 3/12 findings reviewed          — active session
+ *   📖 Complete                        — all findings processed
+ */
+
+import * as vscode from 'vscode';
+
+export class StatusBar implements vscode.Disposable {
+    private item: vscode.StatusBarItem;
+
+    constructor() {
+        this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+        this.item.command = 'literaryCritic.analyze';
+        this.setReady();
+        this.item.show();
+    }
+
+    /** No active session. */
+    setReady(): void {
+        this.item.text = '$(book) lit-critic';
+        this.item.tooltip = 'Click to analyze current scene';
+        this.item.command = 'literaryCritic.analyze';
+    }
+
+    /** Analysis is running. */
+    setAnalyzing(message?: string): void {
+        this.item.text = `$(sync~spin) ${message || 'Analyzing...'}`;
+        this.item.tooltip = message || 'Analysis in progress...';
+        this.item.command = undefined;
+    }
+
+    /** Active session — show progress. */
+    setProgress(current: number, total: number): void {
+        this.item.text = `$(book) ${current}/${total} findings`;
+        this.item.tooltip = `lit-critic: ${current} of ${total} findings reviewed`;
+        this.item.command = 'literaryCritic.nextFinding';
+    }
+
+    /** All findings processed. */
+    setComplete(): void {
+        this.item.text = '$(book) Review complete';
+        this.item.tooltip = 'All findings have been reviewed';
+        this.item.command = 'literaryCritic.analyze';
+    }
+
+    /** Server error or not running. */
+    setError(message: string): void {
+        this.item.text = '$(error) lit-critic';
+        this.item.tooltip = message;
+        this.item.command = 'literaryCritic.analyze';
+    }
+
+    dispose(): void {
+        this.item.dispose();
+    }
+}

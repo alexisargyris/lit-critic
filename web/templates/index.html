@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>lit-critic</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header>
+        <h1>lit-critic</h1>
+        <p class="subtitle">Multi-lens editorial review</p>
+    </header>
+
+    <main>
+        <!-- STATE 1: Setup -->
+        <section id="setup-view" class="view active">
+            <div class="card">
+                <h2>Start Review</h2>
+                <form id="setup-form">
+                    <div class="form-group">
+                        <label for="project-path">Project directory</label>
+                        <input type="text" id="project-path" placeholder="/path/to/your/novel/" required>
+                        <span class="hint">Directory containing CANON.md, CAST.md, etc.</span>
+                    </div>
+                    <div class="form-group">
+                        <label for="scene-path">Scene file</label>
+                        <input type="text" id="scene-path" placeholder="/path/to/your/novel/text/01.01.01_scene.txt" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="model-select">Model</label>
+                        <select id="model-select">
+                            <!-- Populated dynamically from /api/config -->
+                        </select>
+                        <span class="hint">Opus = deepest analysis, Haiku = fastest & cheapest</span>
+                    </div>
+                    <div class="form-group" id="api-key-group">
+                        <label for="api-key">API key <span class="optional">(optional if env var set)</span></label>
+                        <input type="password" id="api-key" placeholder="sk-ant-...">
+                        <span class="hint">Or set ANTHROPIC_API_KEY in a .env file</span>
+                    </div>
+                    <div id="api-key-configured" class="form-group hidden">
+                        <span class="hint">✓ API key configured (environment / .env)</span>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Start Analysis</button>
+                        <button type="button" id="check-session-btn" class="btn btn-secondary">Check for Saved Session</button>
+                    </div>
+                </form>
+
+                <div id="saved-session-info" class="saved-session hidden">
+                    <h3>Saved Session Found</h3>
+                    <p id="saved-session-details"></p>
+                    <button id="resume-btn" class="btn btn-primary">Resume Session</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- STATE 2: Analysis (loading) -->
+        <section id="analysis-view" class="view">
+            <div class="card">
+                <h2>Analyzing Scene...</h2>
+                <div id="analysis-progress">
+                    <div class="lens-progress">
+                        <div class="lens-item" data-lens="prose"><span class="lens-icon">⏳</span> Prose</div>
+                        <div class="lens-item" data-lens="structure"><span class="lens-icon">⏳</span> Structure</div>
+                        <div class="lens-item" data-lens="logic"><span class="lens-icon">⏳</span> Logic</div>
+                        <div class="lens-item" data-lens="clarity"><span class="lens-icon">⏳</span> Clarity</div>
+                        <div class="lens-item" data-lens="continuity"><span class="lens-icon">⏳</span> Continuity</div>
+                    </div>
+                    <div id="coordination-status" class="hidden">
+                        <span class="lens-icon">⏳</span> Coordinating results...
+                    </div>
+                </div>
+                <div id="analysis-error" class="error hidden"></div>
+            </div>
+        </section>
+
+        <!-- STATE 3: Review -->
+        <section id="review-view" class="view">
+            <!-- Summary bar -->
+            <div id="summary-bar" class="summary-bar">
+                <div class="summary-counts">
+                    <span class="count critical" title="Critical"><span id="count-critical">0</span> critical</span>
+                    <span class="count major" title="Major"><span id="count-major">0</span> major</span>
+                    <span class="count minor" title="Minor"><span id="count-minor">0</span> minor</span>
+                </div>
+                <div class="summary-model">
+                    <span id="model-label" class="model-label"></span>
+                </div>
+                <div class="summary-progress">
+                    <span id="progress-text">0 / 0</span>
+                </div>
+            </div>
+
+            <!-- Glossary issues (collapsible) -->
+            <div id="glossary-section" class="card glossary-card hidden">
+                <h3 class="collapsible" id="glossary-toggle">
+                    Glossary Check <span class="toggle-icon">▸</span>
+                </h3>
+                <ul id="glossary-list" class="collapsed"></ul>
+            </div>
+
+            <!-- Finding card -->
+            <div id="finding-card" class="card finding-card">
+                <div class="finding-header">
+                    <span id="finding-number" class="finding-number">#1</span>
+                    <span id="finding-severity" class="severity-badge">MAJOR</span>
+                    <span id="finding-lens" class="lens-badge">PROSE</span>
+                    <span id="finding-flagged" class="flagged-info"></span>
+                </div>
+
+                <div class="finding-body">
+                    <div class="finding-field">
+                        <label>Location</label>
+                        <p id="finding-location"></p>
+                    </div>
+                    <div class="finding-field">
+                        <label>Evidence</label>
+                        <p id="finding-evidence"></p>
+                    </div>
+                    <div class="finding-field">
+                        <label>Impact</label>
+                        <p id="finding-impact"></p>
+                    </div>
+                    <div class="finding-field">
+                        <label>Options</label>
+                        <ol id="finding-options"></ol>
+                    </div>
+                </div>
+
+                <div id="ambiguity-notice" class="ambiguity-notice hidden">
+                    ⚠️ This may be intentional ambiguity. Please clarify:
+                    <button class="btn btn-small" onclick="App.markAmbiguity(true)">Intentional</button>
+                    <button class="btn btn-small" onclick="App.markAmbiguity(false)">Accidental</button>
+                </div>
+            </div>
+
+            <!-- Discussion thread -->
+            <div id="discussion-section" class="card discussion-card">
+                <h3>Discussion</h3>
+                <div id="discussion-thread" class="discussion-thread"></div>
+                <div class="discussion-input">
+                    <input type="text" id="discussion-input" placeholder="Discuss with critic... (or use buttons below)" 
+                           onkeydown="if(event.key==='Enter')App.discuss()">
+                    <button class="btn btn-primary" onclick="App.discuss()">Send</button>
+                </div>
+                <div id="discussion-loading" class="hidden">
+                    <span class="spinner"></span> Critic is thinking...
+                </div>
+            </div>
+
+            <!-- Action buttons -->
+            <div class="actions-bar">
+                <div class="actions-primary">
+                    <button class="btn btn-accept" onclick="App.acceptFinding()">✓ Accept</button>
+                    <button class="btn btn-reject" onclick="App.rejectFinding()">✗ Reject</button>
+                    <button class="btn btn-secondary" onclick="App.continueFinding()">Continue ▸</button>
+                </div>
+                <div class="actions-skip">
+                    <button class="btn btn-small" onclick="App.skipMinor()">Skip Minor</button>
+                    <button class="btn btn-small" onclick="App.skipTo('structure')">Skip to Structure</button>
+                    <button class="btn btn-small" onclick="App.skipTo('coherence')">Skip to Coherence</button>
+                </div>
+                <div class="actions-session">
+                    <button class="btn btn-small" onclick="App.saveSession()">Save Session</button>
+                    <button class="btn btn-small" onclick="App.saveLearning()">Save Learning</button>
+                </div>
+            </div>
+
+            <!-- Complete state -->
+            <div id="complete-card" class="card complete-card hidden">
+                <h2>✓ Review Complete</h2>
+                <p>All findings have been presented.</p>
+                <div class="form-actions">
+                    <button class="btn btn-primary" onclick="App.saveLearning()">Save Learning</button>
+                    <button class="btn btn-secondary" onclick="App.backToSetup()">New Review</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Toast notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Reject reason modal -->
+    <div id="reject-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>Reject Finding</h3>
+            <div class="form-group">
+                <label for="reject-reason">Reason (brief):</label>
+                <input type="text" id="reject-reason" placeholder="e.g., Intentional style choice"
+                       onkeydown="if(event.key==='Enter')App.confirmReject()">
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-reject" onclick="App.confirmReject()">Reject</button>
+                <button class="btn btn-secondary" onclick="App.cancelReject()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <p>lit-critic v0.1.0 — Web UI</p>
+    </footer>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

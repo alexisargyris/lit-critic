@@ -1,0 +1,28 @@
+{
+  "name": "lit-critic",
+  "version": "1.0.0",
+  "description": "Multi-lens editorial review system for fiction manuscripts",
+  "private": true,
+  "scripts": {
+    "test": "npm run test:python && npm run test:ts",
+    "test:python": "python -m pytest",
+    "test:ts": "cd vscode-extension && npm test",
+    "test:python:cov": "python -m pytest --cov=server --cov=cli --cov=web",
+    "install:ts": "cd vscode-extension && npm install"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alexisargyris/lit-critic.git"
+  },
+  "keywords": [
+    "writing",
+    "fiction",
+    "editorial",
+    "analysis",
+    "claude",
+    "ai"
+  ],
+  "author": "Alexis Argyris",
+  "license": "MIT",
+  "devDependencies": {}
+}

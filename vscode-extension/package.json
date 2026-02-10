@@ -1,0 +1,205 @@
+{
+  "name": "lit-critic",
+  "displayName": "lit-critic",
+  "description": "Multi-lens editorial review system for fiction manuscripts",
+  "version": "1.0.0",
+  "publisher": "alexisargyris",
+  "repository": {
+    "type": "git",
+"url": "https://github.com/alexisargyris/lit-critic.git",
+    "directory": "vscode-extension"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:CANON.md"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "literaryCritic.analyze",
+        "title": "lit-critic: Analyze Current Scene",
+        "icon": "$(search)"
+      },
+      {
+        "command": "literaryCritic.resume",
+        "title": "lit-critic: Resume Session"
+      },
+      {
+        "command": "literaryCritic.nextFinding",
+        "title": "lit-critic: Next Finding"
+      },
+      {
+        "command": "literaryCritic.acceptFinding",
+        "title": "lit-critic: Accept Finding",
+        "icon": "$(check)"
+      },
+      {
+        "command": "literaryCritic.rejectFinding",
+        "title": "lit-critic: Reject Finding",
+        "icon": "$(close)"
+      },
+      {
+        "command": "literaryCritic.discuss",
+        "title": "lit-critic: Discuss Finding",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "literaryCritic.selectFinding",
+        "title": "lit-critic: Select Finding"
+      },
+      {
+        "command": "literaryCritic.skipMinor",
+        "title": "lit-critic: Skip Minor Findings"
+      },
+      {
+        "command": "literaryCritic.saveSession",
+        "title": "lit-critic: Save Session"
+      },
+      {
+        "command": "literaryCritic.clearSession",
+        "title": "lit-critic: Clear Session"
+      },
+      {
+        "command": "literaryCritic.saveLearning",
+        "title": "lit-critic: Save Learning"
+      },
+      {
+        "command": "literaryCritic.selectModel",
+        "title": "lit-critic: Select Model"
+      },
+      {
+        "command": "literaryCritic.stopServer",
+        "title": "lit-critic: Stop Server"
+      }
+    ],
+    "configuration": {
+      "title": "lit-critic",
+      "properties": {
+        "literaryCritic.repoPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the lit-critic installation directory (containing lit-critic-web.py). Required when opening a scene folder that is not inside the lit-critic repo."
+        },
+        "literaryCritic.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Path to Python interpreter"
+        },
+        "literaryCritic.serverPort": {
+          "type": "number",
+          "default": 8000,
+          "description": "Port for the backend server"
+        },
+        "literaryCritic.model": {
+          "type": "string",
+          "default": "sonnet",
+          "enum": [
+            "opus",
+            "opus-4-5",
+            "sonnet",
+            "haiku",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "o3"
+          ],
+          "enumDescriptions": [
+            "Opus 4.6 (deepest analysis)",
+            "Opus 4.5",
+            "Sonnet 4.5 (balanced, default)",
+            "Haiku 4.5 (fast & cheap)",
+            "GPT-4o (balanced)",
+            "GPT-4o Mini (fast & cheap)",
+            "o3 (reasoning)"
+          ],
+          "description": "Default model to use for analysis"
+        },
+        "literaryCritic.autoStartServer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the backend server on activation"
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "lit-critic",
+          "title": "lit-critic",
+          "icon": "$(book)"
+        }
+      ]
+    },
+    "views": {
+      "lit-critic": [
+        {
+          "id": "literaryCritic.findings",
+          "name": "Findings"
+        }
+      ]
+    },
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "literaryCritic.acceptFinding",
+          "when": "view == literaryCritic.findings",
+          "group": "inline"
+        },
+        {
+          "command": "literaryCritic.rejectFinding",
+          "when": "view == literaryCritic.findings",
+          "group": "inline"
+        },
+        {
+          "command": "literaryCritic.discuss",
+          "when": "view == literaryCritic.findings",
+          "group": "inline"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "literaryCritic.analyze",
+          "when": "resourceExtname == .txt",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "literaryCritic.analyze",
+        "key": "ctrl+shift+l",
+        "mac": "cmd+shift+l",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "literaryCritic.nextFinding",
+        "key": "ctrl+shift+]",
+        "mac": "cmd+shift+]",
+        "when": "editorTextFocus"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "npx @vscode/vsce package",
+    "test": "mocha --require ts-node/register \"../tests/vscode-extension/**/*.ts\""
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "mocha": "^10.2.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.0"
+  }
+}
