@@ -22,7 +22,7 @@ For the modular implementation, see the server/, cli/, and web/ directories.
 """
 
 import asyncio
-from cli.interface import main
+from cli.commands import main
 
 if __name__ == "__main__":
     asyncio.run(main())

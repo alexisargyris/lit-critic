@@ -166,9 +166,16 @@ Resume a previously saved session.
 ```json
 {
   "project_path": "/path/to/project/",
-  "api_key": "sk-ant-..."
+  "api_key": "sk-ant-...",
+  "scene_path_override": "/path/to/moved/scene.txt"
 }
 ```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+- `api_key` (string, optional) — API key for the analysis model provider. If omitted, resolved from environment
+- `discussion_api_key` (string, optional) — API key for the discussion model provider when it differs from analysis provider
+- `scene_path_override` (string, optional) — Correct scene path to use when the saved path no longer exists (e.g., project moved to another machine)
 
 **Response:**
 ```json
@@ -185,6 +192,21 @@ Resume a previously saved session.
 - `200 OK` Session resumed
 - `404 Not Found` No session file found
 - `400 Bad Request` Session validation failed (scene modified)
+- `409 Conflict` Saved scene path not found; response includes structured detail for recovery UIs
+
+**409 Error Example:**
+```json
+{
+  "detail": {
+    "code": "scene_path_not_found",
+    "message": "Saved scene file was not found. Provide scene_path_override to relink this session.",
+    "saved_scene_path": "D:/old-machine/project/ch01.md",
+    "attempted_scene_path": "D:/old-machine/project/ch01.md",
+    "project_path": "D:/new-machine/project",
+    "override_provided": false
+  }
+}
+```
 
 ---
 
@@ -238,43 +260,238 @@ Get current session information.
 
 ---
 
-#### `POST /api/session/save`
+### Session History and Management
 
-Save current session to disk.
+#### `GET /api/sessions`
+
+List all sessions for a project (active, completed, abandoned).
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
 
 **Request:** None
 
 **Response:**
 ```json
 {
-  "status": "success",
-  "path": "/path/to/project/.lit-critic-session.json"
+  "sessions": [
+    {
+      "id": 3,
+      "scene_path": "/path/to/scene.txt",
+      "model": "sonnet",
+      "status": "completed",
+      "created_at": "2026-02-09T10:30:00",
+      "completed_at": "2026-02-09T10:45:00",
+      "total_findings": 12,
+      "accepted_count": 5,
+      "rejected_count": 3,
+      "withdrawn_count": 1
+    },
+    {
+      "id": 2,
+      "scene_path": "/path/to/scene2.txt",
+      "model": "opus",
+      "status": "active",
+      "created_at": "2026-02-09T09:00:00",
+      "total_findings": 0
+    }
+  ]
 }
 ```
 
 **Status Codes:**
-- `200 OK` Session saved
-- `404 Not Found` No active session
+- `200 OK` Success
+- `404 Not Found` Project directory not found
 
 ---
 
-#### `POST /api/session/clear`
+#### `GET /api/sessions/{session_id}`
 
-Delete saved session file.
+Get detailed information about a specific session, including all findings.
+
+This endpoint returns the persisted per-finding discussion thread so clients
+can hydrate both active and historical views with full discussion context.
+
+**Path Parameters:**
+- `session_id` (int, required) — Session ID
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
 
 **Request:** None
 
 **Response:**
 ```json
 {
-  "status": "success",
-  "message": "Session file deleted"
+  "session": {
+    "id": 3,
+    "scene_path": "/path/to/scene.txt",
+    "scene_hash": "abc123...",
+    "model": "sonnet",
+    "status": "completed",
+    "created_at": "2026-02-09T10:30:00",
+    "completed_at": "2026-02-09T10:45:00",
+    "total_findings": 12,
+    "accepted_count": 5,
+    "rejected_count": 3,
+    "withdrawn_count": 1
+  },
+  "findings": [
+    {
+      "number": 1,
+      "severity": "major",
+      "lens": "prose",
+      "location": "L042-L045",
+      "evidence": "...",
+      "status": "accepted",
+      "discussion_turns": [
+        {"role": "user", "content": "I intended this ambiguity."},
+        {"role": "assistant", "content": "Understood; revising severity."}
+      ],
+      "revision_history": [],
+      "author_response": "",
+      "outcome_reason": ""
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200 OK` Success
+- `404 Not Found` Project directory not found
+- `404 Not Found` Session not found
+
+---
+
+#### `DELETE /api/sessions/{session_id}`
+
+Delete a session and all its findings.
+
+**Path Parameters:**
+- `session_id` (int, required) — Session ID
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
+
+**Request:** None
+
+**Response:**
+```json
+{
+  "deleted": true,
+  "session_id": 3
 }
 ```
 
 **Status Codes:**
 - `200 OK` Session deleted
-- `404 Not Found` No session file found
+- `404 Not Found` Session not found
+
+---
+
+### Learning Data Management
+
+#### `GET /api/learning`
+
+Get all learning data for a project.
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
+
+**Request:** None
+
+**Response:**
+```json
+{
+  "id": 1,
+  "project_name": "My Novel",
+  "review_count": 12,
+  "preferences": [
+    {"id": 1, "description": "Author uses sentence fragments for pacing", "created_at": "2026-02-09T10:00:00"}
+  ],
+  "blind_spots": [
+    {"id": 2, "description": "Author misses filter words", "created_at": "2026-02-09T10:05:00"}
+  ],
+  "resolutions": [],
+  "ambiguity_intentional": [],
+  "ambiguity_accidental": []
+}
+```
+
+**Status Codes:**
+- `200 OK` Success
+- `404 Not Found` Project directory not found
+
+---
+
+#### `POST /api/learning/export`
+
+Export learning data to LEARNING.md file.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/"
+}
+```
+
+**Response:**
+```json
+{
+  "exported": true,
+  "path": "/path/to/project/LEARNING.md"
+}
+```
+
+**Status Codes:**
+- `200 OK` Exported successfully
+
+---
+
+#### `DELETE /api/learning`
+
+Reset all learning data for a project (deletes all entries).
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
+
+**Request:** None
+
+**Response:**
+```json
+{
+  "reset": true
+}
+```
+
+**Status Codes:**
+- `200 OK` Learning data reset
+
+---
+
+#### `DELETE /api/learning/entries/{entry_id}`
+
+Delete a single learning entry.
+
+**Path Parameters:**
+- `entry_id` (int, required) — Entry ID
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
+
+**Request:** None
+
+**Response:**
+```json
+{
+  "deleted": true,
+  "entry_id": 5
+}
+```
+
+**Status Codes:**
+- `200 OK` Entry deleted
+- `404 Not Found` Entry not found
 
 ---
 
@@ -539,9 +756,20 @@ event: complete
 data: {
   "full_response": "The sentence is 47 words...",
   "finding_updated": true,
-  "changes": {"severity": "minor", "status": "revised"}
+  "changes": {"severity": "minor", "status": "revised"},
+  "finding": {
+    "number": 5,
+    "status": "revised",
+    "discussion_turns": [
+      {"role": "user", "content": "Why is this a problem?"},
+      {"role": "assistant", "content": "Because it interrupts pacing..."}
+    ]
+  }
 }
 ```
+
+`discussion_turns` is canonical backend state: clients should re-render from
+this array after a discussion completes so active and historical views stay in sync.
 
 **3. Error**
 ```

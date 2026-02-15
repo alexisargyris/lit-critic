@@ -8,6 +8,8 @@
     "test:python": "python -m pytest",
     "test:ts": "cd vscode-extension && npm test",
     "test:python:cov": "python -m pytest --cov=server --cov=cli --cov=web",
+    "install": "npm run install:python && npm run install:ts",
+    "install:python": "python -m pip install -r requirements.txt",
     "install:ts": "cd vscode-extension && npm install"
   },
   "repository": {
@@ -24,5 +26,8 @@
   ],
   "author": "Alexis Argyris",
   "license": "MIT",
-  "devDependencies": {}
+  "devDependencies": {
+    "@types/proxyquire": "^1.3.31",
+    "proxyquire": "^2.1.3"
+  }
 }

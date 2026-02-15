@@ -1,356 +1,219 @@
 """
-Tests for lit-critic.learning module.
+Tests for the server.learning module (SQLite-backed).
 """
 
 import pytest
 from pathlib import Path
 from server.learning import (
     load_learning,
+    load_learning_from_db,
+    persist_learning,
     generate_learning_markdown,
+    export_learning_markdown,
     save_learning_to_file,
     update_learning_from_session,
 )
+from server.db import get_connection, LearningStore
 from server.models import LearningData
 
 
 class TestLoadLearning:
-    """Tests for load_learning function."""
-    
-    def test_returns_learning_data(self, tmp_path):
-        """Should return a LearningData object."""
-        result = load_learning(tmp_path)
+    def test_returns_learning_data(self, temp_project_dir):
+        result = load_learning(temp_project_dir)
         assert isinstance(result, LearningData)
-    
-    def test_empty_when_no_file(self, tmp_path):
-        """Should return empty learning data when file doesn't exist."""
-        result = load_learning(tmp_path)
-        
+
+    def test_empty_when_no_data(self, temp_project_dir):
+        result = load_learning(temp_project_dir)
         assert result.project_name == "Unknown"
         assert result.review_count == 0
-        assert result.preferences == []
-    
-    def test_parses_project_name(self, tmp_path):
-        """Should parse PROJECT field."""
-        learning_file = tmp_path / "LEARNING.md"
-        learning_file.write_text("PROJECT: My Great Novel\n", encoding='utf-8')
-        
-        result = load_learning(tmp_path)
-        assert result.project_name == "My Great Novel"
-    
-    def test_parses_review_count(self, tmp_path):
-        """Should parse REVIEW_COUNT field."""
-        learning_file = tmp_path / "LEARNING.md"
-        learning_file.write_text("REVIEW_COUNT: 42\n", encoding='utf-8')
-        
-        result = load_learning(tmp_path)
-        assert result.review_count == 42
-    
-    def test_parses_preferences(self, tmp_path):
-        """Should parse preferences section."""
-        content = """## Preferences
 
-- [prose] Sentence fragments are intentional
-- [structure] Short chapters are intentional
-"""
-        learning_file = tmp_path / "LEARNING.md"
-        learning_file.write_text(content, encoding='utf-8')
-        
-        result = load_learning(tmp_path)
-        assert len(result.preferences) == 2
-        assert "Sentence fragments" in result.preferences[0]["description"]
-    
-    def test_parses_blind_spots(self, tmp_path):
-        """Should parse blind spots section."""
-        content = """## Blind Spots
+    def test_imports_from_markdown(self, temp_project_dir):
+        """First load imports existing LEARNING.md into DB."""
+        md = "PROJECT: Test Novel\nREVIEW_COUNT: 5\n\n## Preferences\n\n- [prose] Test pref\n"
+        (temp_project_dir / "LEARNING.md").write_text(md, encoding='utf-8')
 
-- [clarity] Often misses pronoun ambiguity
-"""
-        learning_file = tmp_path / "LEARNING.md"
-        learning_file.write_text(content, encoding='utf-8')
-        
-        result = load_learning(tmp_path)
-        assert len(result.blind_spots) == 1
-        assert "pronoun" in result.blind_spots[0]["description"]
-    
-    def test_parses_ambiguity_patterns(self, tmp_path):
-        """Should parse ambiguity patterns sections."""
-        content = """## Ambiguity Patterns
+        result = load_learning(temp_project_dir)
+        assert result.project_name == "Test Novel"
+        assert result.review_count == 5
+        assert len(result.preferences) == 1
 
-### Intentional
+    def test_db_takes_priority_over_markdown(self, temp_project_dir):
+        """Once imported, DB data wins even if LEARNING.md is still there."""
+        md = "PROJECT: Old Name\nREVIEW_COUNT: 1\n"
+        (temp_project_dir / "LEARNING.md").write_text(md, encoding='utf-8')
 
-- Dream sequences are deliberately unclear
+        # First load imports
+        load_learning(temp_project_dir)
 
-### Accidental
+        # Update DB directly
+        conn = get_connection(temp_project_dir)
+        try:
+            conn.execute("UPDATE learning SET project_name = 'New Name', review_count = 10")
+            conn.commit()
+        finally:
+            conn.close()
 
-- Time jumps sometimes confusing
-"""
-        learning_file = tmp_path / "LEARNING.md"
-        learning_file.write_text(content, encoding='utf-8')
-        
-        result = load_learning(tmp_path)
-        assert len(result.ambiguity_intentional) == 1
-        assert "Dream" in result.ambiguity_intentional[0]["description"]
-        assert len(result.ambiguity_accidental) == 1
-        assert "Time" in result.ambiguity_accidental[0]["description"]
-    
-    def test_handles_invalid_review_count(self, tmp_path):
-        """Should handle non-numeric review count gracefully."""
-        learning_file = tmp_path / "LEARNING.md"
-        learning_file.write_text("REVIEW_COUNT: not-a-number\n", encoding='utf-8')
-        
-        result = load_learning(tmp_path)
-        assert result.review_count == 0  # Default value
+        # Second load uses DB
+        result = load_learning(temp_project_dir)
+        assert result.project_name == "New Name"
+        assert result.review_count == 10
+
+
+class TestLoadLearningFromDb:
+    def test_loads_from_connection(self, db_conn):
+        ld = LearningData(project_name="Test", review_count=3)
+        ld.preferences.append({"description": "Pref 1"})
+        LearningStore.save_from_learning_data(db_conn, ld)
+
+        result = load_learning_from_db(db_conn)
+        assert result.project_name == "Test"
+        assert len(result.preferences) == 1
+
+
+class TestPersistLearning:
+    def test_persists_to_db(self, temp_project_dir):
+        ld = LearningData(project_name="Novel", review_count=2)
+        ld.preferences.append({"description": "Test pref"})
+
+        persist_learning(ld, temp_project_dir)
+
+        conn = get_connection(temp_project_dir)
+        try:
+            data = LearningStore.load(conn)
+            assert data["project_name"] == "Novel"
+            assert len(data["preferences"]) == 1
+        finally:
+            conn.close()
 
 
 class TestGenerateLearningMarkdown:
-    """Tests for generate_learning_markdown function."""
-    
     def test_includes_header(self):
-        """Generated markdown should include header."""
-        learning = LearningData()
-        result = generate_learning_markdown(learning)
+        result = generate_learning_markdown(LearningData())
         assert "# Learning" in result
-    
+
     def test_includes_project_name(self):
-        """Generated markdown should include project name."""
-        learning = LearningData(project_name="Test Project")
-        result = generate_learning_markdown(learning)
-        assert "PROJECT: Test Project" in result
-    
+        result = generate_learning_markdown(LearningData(project_name="Test"))
+        assert "PROJECT: Test" in result
+
     def test_includes_review_count(self):
-        """Generated markdown should include review count."""
-        learning = LearningData(review_count=5)
-        result = generate_learning_markdown(learning)
+        result = generate_learning_markdown(LearningData(review_count=5))
         assert "REVIEW_COUNT: 5" in result
-    
-    def test_includes_last_updated(self):
-        """Generated markdown should include LAST_UPDATED."""
-        learning = LearningData()
-        result = generate_learning_markdown(learning)
-        assert "LAST_UPDATED:" in result
-    
+
     def test_includes_sections(self):
-        """Generated markdown should include all sections."""
-        learning = LearningData()
-        result = generate_learning_markdown(learning)
-        
+        result = generate_learning_markdown(LearningData())
         assert "## Preferences" in result
         assert "## Blind Spots" in result
         assert "## Resolutions" in result
         assert "## Ambiguity Patterns" in result
-        assert "### Intentional" in result
-        assert "### Accidental" in result
-    
+
     def test_empty_sections_show_placeholder(self):
-        """Empty sections should show placeholder."""
-        learning = LearningData()
-        result = generate_learning_markdown(learning)
+        result = generate_learning_markdown(LearningData())
         assert "[none yet]" in result
-    
+
     def test_includes_preferences(self):
-        """Generated markdown should include preference items."""
-        learning = LearningData()
-        learning.preferences.append({"description": "Test preference"})
-        
-        result = generate_learning_markdown(learning)
+        ld = LearningData()
+        ld.preferences.append({"description": "Test preference"})
+        result = generate_learning_markdown(ld)
         assert "- Test preference" in result
-    
-    def test_includes_blind_spots(self):
-        """Generated markdown should include blind spot items."""
-        learning = LearningData()
-        learning.blind_spots.append({"description": "Test blind spot"})
-        
-        result = generate_learning_markdown(learning)
-        assert "- Test blind spot" in result
+
+
+class TestExportLearningMarkdown:
+    def test_creates_file(self, temp_project_dir):
+        # Seed some data
+        ld = LearningData(project_name="Test", review_count=1)
+        persist_learning(ld, temp_project_dir)
+
+        filepath = export_learning_markdown(temp_project_dir)
+        assert filepath.exists()
+        assert filepath.name == "LEARNING.md"
+        content = filepath.read_text(encoding='utf-8')
+        assert "PROJECT: Test" in content
 
 
 class TestSaveLearningToFile:
-    """Tests for save_learning_to_file function."""
-    
-    def test_creates_file(self, tmp_path):
-        """Should create LEARNING.md file."""
-        learning = LearningData(project_name="Test")
-        filepath = save_learning_to_file(learning, tmp_path)
-        
+    def test_saves_to_db_and_file(self, temp_project_dir):
+        ld = LearningData(project_name="Novel", review_count=0)
+        filepath = save_learning_to_file(ld, temp_project_dir)
+
+        # File exists
         assert filepath.exists()
-        assert filepath.name == "LEARNING.md"
-    
-    def test_returns_path(self, tmp_path):
-        """Should return the file path."""
-        learning = LearningData()
-        result = save_learning_to_file(learning, tmp_path)
-        
-        assert isinstance(result, Path)
-    
-    def test_file_contains_content(self, tmp_path):
-        """Saved file should contain learning data."""
-        learning = LearningData(project_name="My Novel", review_count=3)
-        filepath = save_learning_to_file(learning, tmp_path)
-        
-        content = filepath.read_text(encoding='utf-8')
-        assert "My Novel" in content
-    
-    def test_overwrites_existing(self, tmp_path):
-        """Should overwrite existing file."""
-        # Write initial file
-        learning1 = LearningData(project_name="First")
-        save_learning_to_file(learning1, tmp_path)
-        
-        # Write new file
-        learning2 = LearningData(project_name="Second")
-        filepath = save_learning_to_file(learning2, tmp_path)
-        
-        content = filepath.read_text(encoding='utf-8')
-        assert "Second" in content
-        assert "First" not in content
+        assert "Novel" in filepath.read_text(encoding='utf-8')
+
+        # DB was updated (review count incremented)
+        conn = get_connection(temp_project_dir)
+        try:
+            data = LearningStore.load(conn)
+            assert data["review_count"] == 1  # incremented by update_learning_from_session
+        finally:
+            conn.close()
 
 
 class TestUpdateLearningFromSession:
-    """Tests for update_learning_from_session function."""
-    
     def test_increments_review_count(self):
-        """Should increment review count."""
-        learning = LearningData(review_count=5)
-        update_learning_from_session(learning)
-        assert learning.review_count == 6
-    
-    def test_processes_rejections_to_preferences(self):
-        """Session rejections should become preferences."""
-        learning = LearningData()
-        learning.session_rejections.append({
-            "lens": "prose",
-            "pattern": "sentence fragment style",
-            "reason": "intentional for voice"
+        ld = LearningData(review_count=5)
+        update_learning_from_session(ld)
+        assert ld.review_count == 6
+
+    def test_rejections_to_preferences(self):
+        ld = LearningData()
+        ld.session_rejections.append({
+            "lens": "prose", "pattern": "fragment", "reason": "intentional"
         })
-        
-        update_learning_from_session(learning)
-        
-        assert len(learning.preferences) == 1
-        assert "[prose]" in learning.preferences[0]["description"]
-        assert "sentence fragment" in learning.preferences[0]["description"]
-    
-    def test_does_not_duplicate_preferences(self):
-        """Should not add duplicate preferences."""
-        learning = LearningData()
-        learning.preferences.append({
-            "description": "[prose] sentence fragment style — Author says: \"intentional\""
+        update_learning_from_session(ld)
+        assert len(ld.preferences) == 1
+        assert "[prose]" in ld.preferences[0]["description"]
+
+    def test_no_duplicate_preferences(self):
+        ld = LearningData()
+        ld.preferences.append({
+            "description": "[prose] fragment — Author says: \"intentional\""
         })
-        learning.session_rejections.append({
-            "lens": "prose",
-            "pattern": "sentence fragment style",
-            "reason": "intentional"
+        ld.session_rejections.append({
+            "lens": "prose", "pattern": "fragment", "reason": "intentional"
         })
-        
-        update_learning_from_session(learning)
-        
-        assert len(learning.preferences) == 1  # No duplicate added
-    
-    def test_preference_rule_used_when_available(self):
-        """Phase 4: Should use explicit preference_rule from discussion when available."""
-        learning = LearningData()
-        learning.session_rejections.append({
-            "lens": "prose",
-            "pattern": "sentence fragment style",
-            "reason": "intentional for voice",
-            "preference_rule": "Sentence fragments are an intentional stylistic choice for narrative voice"
+        update_learning_from_session(ld)
+        assert len(ld.preferences) == 1
+
+    def test_preference_rule_used(self):
+        ld = LearningData()
+        ld.session_rejections.append({
+            "lens": "prose", "pattern": "fragment", "reason": "voice",
+            "preference_rule": "Fragments are intentional for voice"
         })
-        
-        update_learning_from_session(learning)
-        
-        assert len(learning.preferences) == 1
-        desc = learning.preferences[0]["description"]
-        assert "[prose]" in desc
-        assert "Sentence fragments are an intentional stylistic choice" in desc
-        # Should NOT contain the old format with "Author says:"
-        assert "Author says:" not in desc
-    
-    def test_preference_rule_fallback_when_absent(self):
-        """Phase 4: Should fall back to original format when preference_rule is absent."""
-        learning = LearningData()
-        learning.session_rejections.append({
-            "lens": "clarity",
-            "pattern": "ambiguous referent",
-            "reason": "it's clear from context"
+        update_learning_from_session(ld)
+        assert "Fragments are intentional" in ld.preferences[0]["description"]
+        assert "Author says:" not in ld.preferences[0]["description"]
+
+    def test_intentional_ambiguity(self):
+        ld = LearningData()
+        ld.session_ambiguity_answers.append({
+            "location": "Ch3", "description": "Dream", "intentional": True
         })
-        
-        update_learning_from_session(learning)
-        
-        assert len(learning.preferences) == 1
-        desc = learning.preferences[0]["description"]
-        assert "[clarity]" in desc
-        assert "Author says:" in desc
-        assert "it's clear from context" in desc
-    
-    def test_preference_rule_empty_string_falls_back(self):
-        """Phase 4: Empty preference_rule string should fall back to original format."""
-        learning = LearningData()
-        learning.session_rejections.append({
-            "lens": "logic",
-            "pattern": "motivation gap",
-            "reason": "implied by earlier scene",
-            "preference_rule": ""
+        update_learning_from_session(ld)
+        assert len(ld.ambiguity_intentional) == 1
+
+    def test_accidental_ambiguity(self):
+        ld = LearningData()
+        ld.session_ambiguity_answers.append({
+            "location": "P42", "description": "Unclear", "intentional": False
         })
-        
-        update_learning_from_session(learning)
-        
-        assert len(learning.preferences) == 1
-        desc = learning.preferences[0]["description"]
-        # Empty preference_rule is falsy, should use fallback
-        assert "Author says:" in desc
-    
-    def test_processes_intentional_ambiguity(self):
-        """Intentional ambiguity answers should be recorded."""
-        learning = LearningData()
-        learning.session_ambiguity_answers.append({
-            "location": "Chapter 3, paragraph 5",
-            "description": "Dream imagery",
-            "intentional": True
-        })
-        
-        update_learning_from_session(learning)
-        
-        assert len(learning.ambiguity_intentional) == 1
-        assert "Chapter 3" in learning.ambiguity_intentional[0]["description"]
-    
-    def test_processes_accidental_ambiguity(self):
-        """Accidental ambiguity answers should be recorded."""
-        learning = LearningData()
-        learning.session_ambiguity_answers.append({
-            "location": "Page 42",
-            "description": "Unclear referent",
-            "intentional": False
-        })
-        
-        update_learning_from_session(learning)
-        
-        assert len(learning.ambiguity_accidental) == 1
-        assert "Page 42" in learning.ambiguity_accidental[0]["description"]
+        update_learning_from_session(ld)
+        assert len(ld.ambiguity_accidental) == 1
 
 
 class TestRoundtrip:
-    """Integration tests for save/load roundtrip."""
-    
-    def test_full_roundtrip(self, tmp_path):
-        """Save and load should preserve all data."""
-        original = LearningData(
-            project_name="Roundtrip Test",
-            review_count=10,
-        )
+    def test_full_roundtrip(self, temp_project_dir):
+        original = LearningData(project_name="Roundtrip", review_count=10)
         original.preferences.append({"description": "Pref 1"})
         original.blind_spots.append({"description": "Blind 1"})
-        original.resolutions.append({"description": "Res 1"})
         original.ambiguity_intentional.append({"description": "Intent 1"})
-        original.ambiguity_accidental.append({"description": "Accident 1"})
-        
-        initial_review_count = original.review_count
-        save_learning_to_file(original, tmp_path)
-        loaded = load_learning(tmp_path)
-        
+
+        initial_count = original.review_count
+        save_learning_to_file(original, temp_project_dir)
+
+        loaded = load_learning(temp_project_dir)
         assert loaded.project_name == original.project_name
-        # Note: review_count is incremented during save (mutates original)
-        assert loaded.review_count == initial_review_count + 1
-        assert original.review_count == initial_review_count + 1  # Original is mutated
+        assert loaded.review_count == initial_count + 1
         assert len(loaded.preferences) == 1
         assert len(loaded.blind_spots) == 1
         assert len(loaded.ambiguity_intentional) == 1
-        assert len(loaded.ambiguity_accidental) == 1

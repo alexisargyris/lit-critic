@@ -37,7 +37,6 @@ During review:
 | `skip to structure` | Jump to Structure lens |
 | `skip to coherence` | Jump to Coherence lens |
 | `quit` (or `q`) | End session |
-| `save session` | Save progress |
 | `clear session` | Delete saved session |
 | `help` | Show commands |
 | **Type anything else** | Discuss the current finding |
@@ -83,8 +82,7 @@ python lit-critic-web.py --reload            # Auto-reload for development
 2. **Choose model** (Claude: Opus/Sonnet/Haiku, or OpenAI: GPT-4o/GPT-4o-mini)
 3. **Start analysis** progress bars show each lens
 4. **Review findings** one at a time
-5. **Save session** to resume later
-6. **Save learning** to capture your preferences
+5. **Save learning** to capture your preferences
 
 ---
 
@@ -154,94 +152,105 @@ Shows progress:
 | Accept Finding | — | Accept current finding |
 | Reject Finding | — | Reject with reason |
 | Skip Minor | — | Skip minor findings |
-| Save Session | — | Save progress |
 | Clear Session | — | Delete saved session |
-| Save Learning | — | Write LEARNING.md |
+| Export Learning | — | Export LEARNING.md |
 | Select Model | — | Choose your model |
 | Stop Server | — | Stop backend |
 
 ### Interoperability
 
-The extension shares session files (`.lit-critic-session.json`) and `LEARNING.md` with the CLI and Web UI. Start in one interface, save, and resume in another.
+The extension shares the same SQLite database (`.lit-critic.db`) with the CLI and Web UI. Start a review in one interface, close it, and resume in another — everything is automatically saved.
 
 ---
 
 ## Session Management
 
-All three interfaces support session save/resume.
+All your work is **automatically saved** to a SQLite database (`.lit-critic.db`) in your project directory. Every action — accepting a finding, rejecting one, discussing, navigating — is immediately written to the database. There is no manual "save" step. You can close the tool at any time and pick up exactly where you left off.
 
-### Saving a Session
+### Auto-Save
 
-**CLI:**
-```
-Type: save session
-(or type 'quit' and answer 'y' when prompted)
-```
+Every mutation is written to the database immediately:
+- Accept/reject a finding → saved
+- Discuss a finding → saved
+- Navigate to next finding → saved
+- Skip minor findings → saved
 
-**Web UI:**
-```
-Click: Save Session button
-```
-
-**VS Code:**
-```
-Command Palette → lit-critic: Save Session
-```
-
-Session is saved to `.lit-critic-session.json` in your project directory.
+You never need to remember to save.
 
 ### Resuming a Session
 
+If an active session exists (a review you started but didn't finish), the tool offers to resume it:
+
 **CLI:**
 ```bash
-python lit-critic.py --resume --project ~/novel/
+python lit-critic.py resume --project ~/novel/
 ```
 
 **Web UI:**
-```
-The Web UI detects saved sessions automatically and offers to resume
-```
+The Web UI detects active sessions automatically and offers to resume.
+If the saved scene path is no longer valid (for example after moving your
+project to another machine), it prompts you for the corrected scene path and
+retries resume automatically.
 
 **VS Code:**
-```
-Command Palette → lit-critic: Resume Session
-```
+Command Palette → `lit-critic: Resume Session`
+
+If the saved scene path is no longer valid, the extension prompts for a corrected
+path and retries resume, including auto-resume on startup and from the Sessions
+tree "View Session" flow.
 
 ### Session Validation
 
-The tool validates that:
+When resuming, the tool validates that:
 - Scene file path matches
-- Scene content hasn't changed (hash check)
+- Scene content hasn't changed (SHA-256 hash check)
 
-If validation fails, start a fresh review.
+If validation fails (scene was edited since the session began), you can abandon the old session and start fresh.
 
-### Clearing a Session
+If the scene file was moved (instead of edited), provide the new path when
+prompted and the active session record is relinked to the new location.
+
+### Session History
+
+You can view all past sessions (active, completed, abandoned):
 
 **CLI:**
-```
-Type: clear session
+```bash
+python lit-critic.py sessions list --project ~/novel/
+python lit-critic.py sessions view 3 --project ~/novel/    # View session #3 details
+python lit-critic.py sessions delete 3 --project ~/novel/  # Delete session #3
 ```
 
 **Web UI:**
-```
-Click: Clear Session button
-```
+Navigate to http://localhost:8000/sessions — a dedicated page shows all sessions grouped by status, with options to view details and delete.
 
 **VS Code:**
-```
-Command Palette → lit-critic: Clear Session
+The **Sessions** sidebar tree view (in the lit-critic Activity Bar) shows all sessions grouped by status. Right-click to view details or delete.
+
+### Learning Management
+
+You can view and manage your learning data across all interfaces:
+
+**CLI:**
+```bash
+python lit-critic.py learning view --project ~/novel/      # View learning data
+python lit-critic.py learning export --project ~/novel/     # Export to LEARNING.md
 ```
 
-Or manually delete `.lit-critic-session.json` from your project.
+**Web UI:**
+Navigate to http://localhost:8000/learning — view all learned preferences, export to LEARNING.md, delete individual entries, or reset all learning data.
 
-### Important: Ignore Session Files in Git
+**VS Code:**
+The **Learning** sidebar tree view shows entries by category. Right-click entries to delete them. Use Command Palette for export and reset.
+
+### Important: Ignore Database Files in Git
 
 Add to your `.gitignore`:
 ```
-.lit-critic-session.json
+.lit-critic.db
 ```
 
-Session files are temporary review state—don't commit them.
+The database contains your review history—don't commit it.
 
 ---
 
@@ -298,7 +307,7 @@ Choose a model based on your needs:
 
 ## Learning System
 
-The tool tracks your preferences and saves them to `LEARNING.md`.
+The tool tracks your preferences and saves them to the project database. You can export them to `LEARNING.md` as a human-readable file.
 
 ### What Gets Learned
 
@@ -382,7 +391,7 @@ Discussion adds extra cost per message (usually $0.01–0.05 per turn).
 | **Streaming** | ✅ | ✅ | ✅ |
 | **Portability** | Any terminal | Any browser | VS Code only |
 
-All three share the same backend and session files—use whichever fits your workflow.
+All three share the same backend and SQLite database—use whichever fits your workflow.
 
 ---
 
@@ -398,9 +407,9 @@ All three share the same backend and session files—use whichever fits your wor
 
 Type `skip minor` to focus on critical and major findings. You can review minor ones later if you have time.
 
-### Save Often
+### Auto-Save Has You Covered
 
-Use `save session` periodically, especially for long scenes. If something crashes, you won't lose progress.
+All your progress is automatically saved to the database. If the tool crashes or you close it, you won't lose anything — just resume where you left off.
 
 ### Edit While Reviewing
 

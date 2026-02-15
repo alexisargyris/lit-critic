@@ -60,11 +60,14 @@ tests/
 ├── server/
 │   ├── test_api.py
 │   ├── test_config.py
+│   ├── test_db.py
 │   ├── test_discussion.py
 │   ├── test_learning.py
+│   ├── test_learning_management.py
 │   ├── test_models.py
 │   ├── test_prompts.py
 │   ├── test_session.py
+│   ├── test_session_management.py
 │   └── test_utils.py
 ├── cli/
 │   └── test_interface.py
@@ -288,7 +291,9 @@ tests/vscode-extension/
 ├── test_discussionPanel.ts
 ├── test_extension.ts
 ├── test_findingsTreeProvider.ts
+├── test_learningTreeProvider.ts
 ├── test_serverManager.ts
+├── test_sessionsTreeProvider.ts
 └── test_statusBar.ts
 ```
 

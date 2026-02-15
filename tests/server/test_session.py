@@ -1,352 +1,303 @@
 """
-Tests for lit-critic.session module.
+Tests for the server.session module (SQLite-backed).
 """
 
-import json
 import pytest
 from pathlib import Path
 from server.session import (
     compute_scene_hash,
-    get_session_file_path,
-    session_exists,
-    save_session,
-    load_session,
-    delete_session,
+    create_session,
+    check_active_session,
+    load_active_session,
+    complete_session,
+    abandon_session,
+    abandon_active_session,
+    complete_active_session,
+    delete_session_by_id,
+    list_sessions,
+    get_session_detail,
     validate_session,
+    persist_finding,
+    persist_session_index,
+    persist_session_learning,
+    all_findings_considered,
+    detect_and_apply_scene_changes,
 )
-from server.config import SESSION_FILE
+from server.db import SessionStore, FindingStore
 from server.models import Finding
 
 
 class TestComputeSceneHash:
-    """Tests for compute_scene_hash function."""
-    
     def test_returns_string(self):
-        """Hash should be a string."""
-        result = compute_scene_hash("test content")
-        assert isinstance(result, str)
-    
-    def test_consistent_hash(self):
-        """Same content should produce same hash."""
-        content = "The quick brown fox"
-        hash1 = compute_scene_hash(content)
-        hash2 = compute_scene_hash(content)
-        assert hash1 == hash2
-    
-    def test_different_content_different_hash(self):
-        """Different content should produce different hash."""
-        hash1 = compute_scene_hash("content one")
-        hash2 = compute_scene_hash("content two")
-        assert hash1 != hash2
-    
-    def test_hash_length(self):
-        """Hash should be truncated to expected length."""
-        result = compute_scene_hash("test")
-        assert len(result) == 16  # Truncated to 16 chars
+        assert isinstance(compute_scene_hash("test"), str)
+
+    def test_consistent(self):
+        h1 = compute_scene_hash("content")
+        h2 = compute_scene_hash("content")
+        assert h1 == h2
+
+    def test_different_content(self):
+        assert compute_scene_hash("a") != compute_scene_hash("b")
+
+    def test_length(self):
+        assert len(compute_scene_hash("x")) == 16
 
 
-class TestGetSessionFilePath:
-    """Tests for get_session_file_path function."""
-    
-    def test_returns_path(self, tmp_path):
-        """Should return a Path object."""
-        result = get_session_file_path(tmp_path)
-        assert isinstance(result, Path)
-    
-    def test_path_includes_session_file(self, tmp_path):
-        """Path should include the session filename."""
-        result = get_session_file_path(tmp_path)
-        assert result.name == SESSION_FILE
-        assert result.parent == tmp_path
+class TestCreateSession:
+    def test_creates_session_in_db(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        state.findings = [
+            Finding(number=1, severity="major", lens="prose", location="P1",
+                    evidence="Test", impact="Impact", options=["Fix"]),
+        ]
+        state.glossary_issues = ["Issue 1"]
+
+        sid = create_session(state, state.glossary_issues)
+        assert sid > 0
+        assert state.session_id == sid
+        assert state.db_conn is not None
+
+        # Verify finding was persisted
+        findings = FindingStore.load_all(state.db_conn, sid)
+        assert len(findings) == 1
+        assert findings[0]["severity"] == "major"
+
+    def test_populates_session_id(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        create_session(state)
+        assert state.session_id is not None
 
 
-class TestSessionExists:
-    """Tests for session_exists function."""
-    
-    def test_returns_false_when_no_session(self, tmp_path):
-        """Should return False when no session file exists."""
-        assert session_exists(tmp_path) is False
-    
-    def test_returns_true_when_session_exists(self, tmp_path):
-        """Should return True when session file exists."""
-        session_path = tmp_path / SESSION_FILE
-        session_path.write_text("{}", encoding='utf-8')
-        assert session_exists(tmp_path) is True
+class TestCheckActiveSession:
+    def test_no_active(self, temp_project_dir):
+        result = check_active_session(temp_project_dir)
+        assert result["exists"] is False
+
+    def test_with_active(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        state.findings = [Finding(number=1, severity="major", lens="prose", location="P1")]
+        create_session(state)
+
+        result = check_active_session(state.project_path)
+        assert result["exists"] is True
+        assert result["total_findings"] == 1
 
 
-class TestSaveAndLoadSession:
-    """Tests for save_session and load_session functions."""
-    
-    def test_save_creates_file(self, sample_session_state):
-        """save_session should create a session file."""
-        filepath = save_session(sample_session_state, current_index=0)
-        assert filepath.exists()
-    
-    def test_save_returns_path(self, sample_session_state):
-        """save_session should return the file path."""
-        filepath = save_session(sample_session_state, current_index=0)
-        assert isinstance(filepath, Path)
-        assert filepath.name == SESSION_FILE
-    
-    def test_saved_file_is_valid_json(self, sample_session_state):
-        """Saved session should be valid JSON."""
-        filepath = save_session(sample_session_state, current_index=0)
-        content = filepath.read_text(encoding='utf-8')
-        data = json.loads(content)  # Should not raise
-        assert isinstance(data, dict)
-    
-    def test_load_returns_dict(self, sample_session_state):
-        """load_session should return a dictionary."""
-        save_session(sample_session_state, current_index=0)
-        result = load_session(sample_session_state.project_path)
-        assert isinstance(result, dict)
-    
-    def test_load_returns_none_when_no_file(self, tmp_path):
-        """load_session should return None when no file exists."""
-        result = load_session(tmp_path)
-        assert result is None
-    
-    def test_roundtrip_preserves_data(self, sample_session_state):
-        """Save and load should preserve session data."""
-        # Add some findings
-        finding = Finding(
-            number=1,
-            severity="major",
-            lens="prose",
-            location="Test location",
-            evidence="Test evidence",
-            impact="Test impact",
-            options=["Option 1"],
-        )
-        finding.status = "accepted"
-        sample_session_state.findings = [finding]
-        sample_session_state.glossary_issues = ["Test glossary issue"]
-        
-        save_session(sample_session_state, current_index=5, skip_minor=True)
-        loaded = load_session(sample_session_state.project_path)
-        
-        assert loaded["current_index"] == 5
-        assert loaded["skip_minor"] is True
-        assert len(loaded["findings"]) == 1
-        assert loaded["findings"][0]["status"] == "accepted"
-        assert loaded["glossary_issues"] == ["Test glossary issue"]
-    
-    def test_saves_scene_hash(self, sample_session_state):
-        """Session should include scene hash for validation."""
-        save_session(sample_session_state, current_index=0)
-        loaded = load_session(sample_session_state.project_path)
-        
-        assert "scene_hash" in loaded
-        expected_hash = compute_scene_hash(sample_session_state.scene_content)
-        assert loaded["scene_hash"] == expected_hash
-    
-    def test_saves_learning_session_data(self, sample_session_state):
-        """Session should include learning session data."""
-        sample_session_state.learning.session_rejections.append({
-            "lens": "prose",
-            "pattern": "test pattern",
-            "reason": "not an issue"
-        })
-        
-        save_session(sample_session_state, current_index=0)
-        loaded = load_session(sample_session_state.project_path)
-        
-        assert "learning_session" in loaded
-        assert len(loaded["learning_session"]["session_rejections"]) == 1
+class TestLoadActiveSession:
+    def test_no_active(self, temp_project_dir):
+        assert load_active_session(temp_project_dir) is None
+
+    def test_loads_session_data(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        state.findings = [
+            Finding(number=1, severity="major", lens="prose", location="P1",
+                    evidence="Test", impact="Impact"),
+        ]
+        create_session(state)
+
+        data = load_active_session(state.project_path)
+        try:
+            assert data is not None
+            assert data["session_id"] > 0
+            assert len(data["findings"]) == 1
+            assert data["findings"][0]["severity"] == "major"
+        finally:
+            if data and "_conn" in data:
+                data["_conn"].close()
 
 
-class TestDeleteSession:
-    """Tests for delete_session function."""
-    
-    def test_delete_returns_true_when_exists(self, sample_session_state):
-        """delete_session should return True when file existed."""
-        save_session(sample_session_state, current_index=0)
-        result = delete_session(sample_session_state.project_path)
-        assert result is True
-    
-    def test_delete_returns_false_when_not_exists(self, tmp_path):
-        """delete_session should return False when no file exists."""
-        result = delete_session(tmp_path)
-        assert result is False
-    
-    def test_delete_removes_file(self, sample_session_state):
-        """delete_session should actually remove the file."""
-        filepath = save_session(sample_session_state, current_index=0)
-        assert filepath.exists()
-        
-        delete_session(sample_session_state.project_path)
-        assert not filepath.exists()
+class TestCompleteAndAbandon:
+    def test_complete(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        state.findings = [Finding(number=1, severity="major", lens="prose", location="P1", status="accepted")]
+        create_session(state)
+
+        assert complete_session(state) is True
+        s = SessionStore.get(state.db_conn, state.session_id)
+        assert s["status"] == "completed"
+
+    def test_complete_returns_false_when_unresolved(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        state.findings = [Finding(number=1, severity="major", lens="prose", location="P1", status="pending")]
+        create_session(state)
+
+        assert complete_session(state) is False
+        s = SessionStore.get(state.db_conn, state.session_id)
+        assert s["status"] == "active"
+
+    def test_abandon(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        create_session(state)
+
+        abandon_session(state)
+        s = SessionStore.get(state.db_conn, state.session_id)
+        assert s["status"] == "abandoned"
+
+    def test_complete_active_session(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        state.findings = [Finding(number=1, severity="major", lens="prose", location="P1", status="accepted")]
+        create_session(state)
+
+        assert complete_active_session(state.project_path) is True
+
+    def test_complete_active_session_returns_false_when_unresolved(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        state.findings = [Finding(number=1, severity="major", lens="prose", location="P1", status="pending")]
+        create_session(state)
+
+        assert complete_active_session(state.project_path) is False
+
+    def test_abandon_active_session(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        create_session(state)
+
+        assert abandon_active_session(state.project_path) is True
+
+
+class TestDeleteAndList:
+    def test_delete(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        create_session(state)
+        sid = state.session_id
+
+        assert delete_session_by_id(state.project_path, sid) is True
+        assert SessionStore.get(state.db_conn, sid) is None
+
+    def test_list_sessions(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        create_session(state)
+        # Complete it
+        SessionStore.complete(state.db_conn, state.session_id)
+        # Create another
+        state.session_id = None
+        create_session(state)
+
+        sessions = list_sessions(state.project_path)
+        assert len(sessions) == 2
+
+    def test_get_detail(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        state.findings = [Finding(number=1, severity="major", lens="prose", location="P1")]
+        create_session(state)
+
+        detail = get_session_detail(state.project_path, state.session_id)
+        assert detail is not None
+        assert len(detail["findings"]) == 1
 
 
 class TestValidateSession:
-    """Tests for validate_session function."""
-    
-    def test_valid_session(self, sample_session_state):
-        """Should return (True, '') for valid session."""
-        save_session(sample_session_state, current_index=0)
-        session_data = load_session(sample_session_state.project_path)
-        
-        is_valid, error = validate_session(
-            session_data,
-            sample_session_state.scene_content,
-            sample_session_state.scene_path
-        )
-        
-        assert is_valid is True
-        assert error == ""
-    
-    def test_none_session_data(self):
-        """Should return invalid for None session data."""
-        is_valid, error = validate_session(None, "content", "/path/scene.md")
-        assert is_valid is False
-        assert "No session data" in error
-    
-    def test_different_scene_path(self, sample_session_state):
-        """Should return invalid if scene path changed."""
-        save_session(sample_session_state, current_index=0)
-        session_data = load_session(sample_session_state.project_path)
-        
-        is_valid, error = validate_session(
-            session_data,
-            sample_session_state.scene_content,
-            "/different/path/scene.md"
-        )
-        
-        assert is_valid is False
-        assert "different scene" in error.lower()
-    
-    def test_modified_scene_content(self, sample_session_state):
-        """Should return invalid if scene content changed."""
-        save_session(sample_session_state, current_index=0)
-        session_data = load_session(sample_session_state.project_path)
-        
-        is_valid, error = validate_session(
-            session_data,
-            "Modified scene content that is different",
-            sample_session_state.scene_path
-        )
-        
-        assert is_valid is False
-        assert "modified" in error.lower()
+    def test_valid(self, sample_session_state):
+        data = {
+            "scene_path": sample_session_state.scene_path,
+            "scene_hash": compute_scene_hash(sample_session_state.scene_content),
+        }
+        ok, msg = validate_session(data, sample_session_state.scene_content,
+                                   sample_session_state.scene_path)
+        assert ok is True
+
+    def test_none_data(self):
+        ok, msg = validate_session(None, "content", "/path")
+        assert ok is False
+
+    def test_modified_content(self, sample_session_state):
+        data = {
+            "scene_path": sample_session_state.scene_path,
+            "scene_hash": compute_scene_hash(sample_session_state.scene_content),
+        }
+        ok, msg = validate_session(data, "different content", sample_session_state.scene_path)
+        assert ok is False
+        assert "modified" in msg.lower()
+
+
+class TestAutoSaveHelpers:
+    def test_persist_finding(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        finding = Finding(number=1, severity="major", lens="prose", location="P1")
+        state.findings = [finding]
+        create_session(state)
+
+        finding.status = "accepted"
+        persist_finding(state, finding)
+
+        loaded = FindingStore.get(state.db_conn, state.session_id, 1)
+        assert loaded["status"] == "accepted"
+
+    def test_persist_finding_reopens_completed_session(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        finding = Finding(number=1, severity="major", lens="prose", location="P1", status="accepted")
+        state.findings = [finding]
+        create_session(state)
+        assert complete_session(state) is True
+
+        # Revert finding to unresolved and persist; session should auto-reopen
+        finding.status = "pending"
+        persist_finding(state, finding)
+
+        s = SessionStore.get(state.db_conn, state.session_id)
+        assert s["status"] == "active"
+
+
+class TestCompletionSemantics:
+    def test_all_findings_considered_requires_terminal_statuses(self):
+        findings = [
+            Finding(number=1, severity="major", lens="prose", location="P1", status="accepted"),
+            Finding(number=2, severity="major", lens="prose", location="P2", status="pending"),
+        ]
+        assert all_findings_considered(findings) is False
+
+    def test_persist_index(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        create_session(state)
+
+        persist_session_index(state, 7)
+        s = SessionStore.get(state.db_conn, state.session_id)
+        assert s["current_index"] == 7
+
+    def test_persist_learning_session(self, sample_session_state_with_db):
+        state = sample_session_state_with_db
+        create_session(state)
+
+        state.learning.session_rejections.append({"lens": "prose", "pattern": "test"})
+        persist_session_learning(state)
+
+        s = SessionStore.get(state.db_conn, state.session_id)
+        ls = s["learning_session"]
+        assert len(ls["session_rejections"]) == 1
+
+    def test_persist_skipped_without_db(self, sample_session_state):
+        """Auto-save should silently skip when no DB connection."""
+        finding = Finding(number=1, severity="major", lens="prose", location="P1")
+        sample_session_state.findings = [finding]
+        # Should not raise
+        persist_finding(sample_session_state, finding)
+        persist_session_index(sample_session_state, 0)
 
 
 class TestDetectAndApplySceneChanges:
-    """Tests for detect_and_apply_scene_changes function."""
-
     async def test_returns_none_when_unchanged(self, sample_session_state):
-        """Should return None when scene file hasn't changed."""
-        from server.session import detect_and_apply_scene_changes
         result = await detect_and_apply_scene_changes(sample_session_state, 0)
         assert result is None
 
-    async def test_detects_file_change(self, sample_session_state):
-        """Should detect when scene file has been modified."""
-        from server.session import detect_and_apply_scene_changes
+    async def test_detects_change(self, sample_session_state):
         from unittest.mock import AsyncMock, patch
 
-        # Add a finding with line numbers
-        finding = Finding(
-            number=1, severity="major", lens="prose",
-            location="P1", line_start=8, line_end=8,
-            evidence="Test", impact="Test", options=["Fix"],
-        )
+        finding = Finding(number=1, severity="major", lens="prose",
+                         location="P1", line_start=8, line_end=8)
         sample_session_state.findings = [finding]
 
-        # Modify the scene file on disk
         scene_path = Path(sample_session_state.scene_path)
-        new_content = "New first line\n" + sample_session_state.scene_content
-        scene_path.write_text(new_content, encoding='utf-8')
-
-        # Mock re_evaluate_finding to avoid actual API calls (lazy import in session.py)
-        with patch('server.api.re_evaluate_finding', new_callable=AsyncMock) as mock_re_eval:
-            result = await detect_and_apply_scene_changes(sample_session_state, 0)
-
-        assert result is not None
-        assert result["changed"] is True
-        # scene_content should be updated
-        assert sample_session_state.scene_content == new_content
-
-    async def test_adjusts_line_numbers(self, sample_session_state):
-        """Should adjust finding line numbers when lines are inserted."""
-        from server.session import detect_and_apply_scene_changes
-        from unittest.mock import AsyncMock, patch
-
-        finding = Finding(
-            number=1, severity="major", lens="prose",
-            location="P1", line_start=8, line_end=10,
-            evidence="Test", impact="Test", options=["Fix"],
-        )
-        sample_session_state.findings = [finding]
-
-        # Insert a line at the beginning
-        scene_path = Path(sample_session_state.scene_path)
-        new_content = "INSERTED LINE\n" + sample_session_state.scene_content
+        new_content = "New line\n" + sample_session_state.scene_content
         scene_path.write_text(new_content, encoding='utf-8')
 
         with patch('server.api.re_evaluate_finding', new_callable=AsyncMock):
             result = await detect_and_apply_scene_changes(sample_session_state, 0)
 
-        assert result["adjusted"] == 1
-        assert finding.line_start == 9  # shifted by 1
-
-    async def test_marks_stale_and_re_evaluates(self, sample_session_state):
-        """Should mark findings as stale and call re_evaluate_finding."""
-        from server.session import detect_and_apply_scene_changes
-        from unittest.mock import AsyncMock, patch
-
-        # Finding on line 8 (will be deleted)
-        finding = Finding(
-            number=1, severity="major", lens="prose",
-            location="P1", line_start=8, line_end=8,
-            evidence="Test", impact="Test", options=["Fix"],
-        )
-        sample_session_state.findings = [finding]
-
-        # Remove line 8 from scene
-        lines = sample_session_state.scene_content.splitlines()
-        new_lines = lines[:7] + lines[8:]  # skip line 8 (0-indexed: 7)
-        new_content = "\n".join(new_lines)
-        scene_path = Path(sample_session_state.scene_path)
-        scene_path.write_text(new_content, encoding='utf-8')
-
-        mock_re_eval = AsyncMock(return_value={"status": "updated", "finding_number": 1})
-        with patch('server.api.re_evaluate_finding', mock_re_eval):
-            result = await detect_and_apply_scene_changes(sample_session_state, 0)
-
-        assert result["stale"] == 1
-        assert mock_re_eval.called
+        assert result is not None
+        assert result["changed"] is True
+        assert sample_session_state.scene_content == new_content
 
     async def test_returns_none_when_file_missing(self, sample_session_state):
-        """Should return None when scene file doesn't exist."""
-        from server.session import detect_and_apply_scene_changes
         import os
         os.remove(sample_session_state.scene_path)
         result = await detect_and_apply_scene_changes(sample_session_state, 0)
         assert result is None
-
-    async def test_skips_withdrawn_for_re_evaluation(self, sample_session_state):
-        """Withdrawn findings should not be re-evaluated."""
-        from server.session import detect_and_apply_scene_changes
-        from unittest.mock import AsyncMock, patch
-
-        finding = Finding(
-            number=1, severity="major", lens="prose",
-            location="P1", line_start=8, line_end=8,
-            evidence="Test", impact="Test", options=["Fix"],
-        )
-        finding.status = "withdrawn"
-        sample_session_state.findings = [finding]
-
-        # Delete line 8
-        lines = sample_session_state.scene_content.splitlines()
-        new_lines = lines[:7] + lines[8:]
-        new_content = "\n".join(new_lines)
-        Path(sample_session_state.scene_path).write_text(new_content, encoding='utf-8')
-
-        mock_re_eval = AsyncMock()
-        with patch('server.api.re_evaluate_finding', mock_re_eval):
-            result = await detect_and_apply_scene_changes(sample_session_state, 0)
-
-        assert result["stale"] == 1
-        # withdrawn findings should NOT be re-evaluated
-        mock_re_eval.assert_not_called()

@@ -2,6 +2,7 @@
 Data structures and exceptions for the lit-critic system.
 """
 
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
@@ -121,7 +122,17 @@ class LensResult:
 
 @dataclass 
 class SessionState:
-    """Full state for a review session."""
+    """Full state for a review session.
+
+    The ``db_conn`` and ``session_id`` fields tie the in-memory state to the
+    SQLite database so that every mutation can be auto-saved.  When
+    ``db_conn`` is ``None`` (e.g. in tests), auto-save is silently skipped.
+    
+    Dual-LLM support: The ``discussion_model`` and ``discussion_client`` fields
+    allow using a different (typically cheaper/faster) model for discussion
+    than for analysis. When ``discussion_model`` is ``None``, the analysis
+    model/client is used for both.
+    """
     client: "LLMClient"
     scene_content: str
     scene_path: str
@@ -132,6 +143,10 @@ class SessionState:
     learning: LearningData = field(default_factory=LearningData)
     discussion_history: list[dict] = field(default_factory=list)
     model: str = field(default_factory=lambda: DEFAULT_MODEL)
+    discussion_model: Optional[str] = None  # None = use analysis model
+    discussion_client: Optional["LLMClient"] = None  # None = use analysis client
+    db_conn: Optional[sqlite3.Connection] = field(default=None, repr=False)
+    session_id: Optional[int] = None
 
     @property
     def model_id(self) -> str:
@@ -152,3 +167,26 @@ class SessionState:
     def model_label(self) -> str:
         """Human-readable label for the selected model."""
         return AVAILABLE_MODELS[self.model]["label"]
+
+    @property
+    def discussion_model_id(self) -> str:
+        """Full API model identifier for discussion (falls back to analysis model if not set)."""
+        model = self.discussion_model or self.model
+        return AVAILABLE_MODELS[model]["id"]
+
+    @property
+    def discussion_model_provider(self) -> str:
+        """Provider name for discussion model (falls back to analysis model if not set)."""
+        model = self.discussion_model or self.model
+        return AVAILABLE_MODELS[model]["provider"]
+
+    @property
+    def discussion_model_label(self) -> str:
+        """Human-readable label for discussion model (falls back to analysis model if not set)."""
+        model = self.discussion_model or self.model
+        return AVAILABLE_MODELS[model]["label"]
+
+    @property
+    def effective_discussion_client(self) -> "LLMClient":
+        """The LLM client to use for discussion (falls back to analysis client if not set)."""
+        return self.discussion_client or self.client

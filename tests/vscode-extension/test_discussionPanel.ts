@@ -45,6 +45,23 @@ describe('DiscussionPanel', () => {
     });
 
     describe('message formatting', () => {
+        it('should map persisted discussion turns to display roles', () => {
+            const turns = [
+                { role: 'user', content: 'I intended this ambiguity.' },
+                { role: 'assistant', content: 'Understood — keeping as intentional.' },
+                { role: 'system', content: 'Scene change detected.' },
+            ];
+
+            const roleLabels = turns.map((t) => {
+                const role = (t.role || '').toLowerCase();
+                if (role === 'user') return 'You';
+                if (role === 'assistant') return 'Critic';
+                return 'System';
+            });
+
+            assert.deepEqual(roleLabels, ['You', 'Critic', 'System']);
+        });
+
         it('should format scene change notification', () => {
             const report = {
                 adjusted: 2,

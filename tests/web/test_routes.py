@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from web.app import app
 from web.routes import session_mgr
+from web.session_manager import ResumeScenePathError
 from server.models import Finding, SessionState, LearningData
 
 
@@ -26,13 +27,11 @@ def reset_session():
     session_mgr.state = None
     session_mgr.results = None
     session_mgr.current_index = 0
-    session_mgr.skip_minor = False
     session_mgr.analysis_progress = None
     yield
     session_mgr.state = None
     session_mgr.results = None
     session_mgr.current_index = 0
-    session_mgr.skip_minor = False
     session_mgr.analysis_progress = None
 
 
@@ -75,16 +74,12 @@ class TestSessionEndpoints:
         response = client.post("/api/finding/discuss", json={"message": "test"})
         assert response.status_code == 404
 
-    def test_save_session_no_active(self, client, reset_session):
-        response = client.post("/api/session/save")
-        assert response.status_code == 404
-
     def test_save_learning_no_active(self, client, reset_session):
         response = client.post("/api/learning/save")
         assert response.status_code == 404
 
-    def test_skip_minor_no_session(self, client, reset_session):
-        response = client.post("/api/finding/skip-minor")
+    def test_review_no_session(self, client, reset_session):
+        response = client.post("/api/finding/review")
         assert response.status_code == 404
 
     def test_skip_to_invalid_lens(self, client, reset_session):
@@ -115,15 +110,14 @@ class TestCheckSession:
         data = response.json()
         assert data["exists"] is False
 
-    @patch("web.session_manager.session_exists")
-    @patch("web.session_manager.load_session")
-    def test_check_existing_session(self, mock_load, mock_exists, client, reset_session, tmp_path):
-        mock_exists.return_value = True
-        mock_load.return_value = {
+    @patch("web.session_manager.check_active_session")
+    def test_check_existing_session(self, mock_check, client, reset_session, tmp_path):
+        mock_check.return_value = {
+            "exists": True,
             "scene_path": str(tmp_path / "scene.txt"),
             "saved_at": "2025-01-01T12:00:00",
             "current_index": 3,
-            "findings": [1, 2, 3, 4, 5],
+            "total_findings": 5,
         }
 
         response = client.post("/api/check-session", json={
@@ -177,7 +171,6 @@ class TestWithActiveSession:
             findings=findings,
         )
         session_mgr.current_index = 0
-        session_mgr.skip_minor = False
 
     def test_get_session_active(self, client, active_session):
         response = client.get("/api/session")
@@ -239,13 +232,30 @@ class TestWithActiveSession:
         data = response.json()
         assert data["action"]["status"] == "rejected"
 
-    def test_skip_minor(self, client, active_session):
-        response = client.post("/api/finding/skip-minor")
+    def test_review_finding(self, client, active_session):
+        response = client.post("/api/finding/review")
         assert response.status_code == 200
         data = response.json()
-        # Should skip finding #3 (minor) and show #2 (major) next
         assert data["complete"] is False
-        assert data["finding"]["number"] == 2
+        assert data["finding"]["number"] == 1
+        assert "review" in data
+
+    def test_review_does_not_report_complete_when_pending_findings_remain(self, client, active_session):
+        """Review should recover to unresolved findings instead of false completion."""
+        # Simulate being on a withdrawn tail finding while earlier findings are pending.
+        session_mgr.current_index = 2
+        session_mgr.state.findings[2].status = 'withdrawn'
+
+        response = client.post("/api/finding/review")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["complete"] is False
+        assert data["message"] == "There are still pending findings to review."
+        assert data["finding"]["number"] == 1
+        assert data["current"] == 1
+        assert session_mgr.current_index == 0
+        assert "review" in data
 
     def test_skip_to_structure(self, client, active_session):
         response = client.post("/api/finding/skip-to/structure")
@@ -358,7 +368,9 @@ class TestWithActiveSession:
         response = client.post("/api/finding/continue")
         assert response.status_code == 200
         data = response.json()
-        assert data["complete"] is True
+        assert data["complete"] is False
+        assert data["message"] == "There are still pending findings to review."
+        assert data["finding"]["number"] == 1
 
     @patch("web.session_manager.handle_discussion")
     def test_discuss_finding(self, mock_discuss, client, active_session):
@@ -369,7 +381,28 @@ class TestWithActiveSession:
         data = response.json()
         assert data["response"] == "Good point, I concede."
         assert data["status"] == "conceded"
-        assert data["finding_status"] == "rejected"
+        assert data["finding_status"] == "withdrawn"
+
+    @patch("web.session_manager.handle_discussion_stream")
+    def test_discuss_stream_conceded_maps_to_withdrawn(self, mock_stream, client, active_session):
+        """Streaming endpoint should canonicalize conceded to withdrawn finding status."""
+        async def _mock_gen(state, finding, msg):
+            yield ("token", "Fair point.")
+            yield ("done", {"response": "Fair point.", "status": "conceded"})
+        mock_stream.side_effect = lambda state, finding, msg, **kw: _mock_gen(state, finding, msg)
+
+        response = client.post("/api/finding/discuss/stream", json={"message": "This is intentional"})
+        assert response.status_code == 200
+
+        body = response.text
+        events = []
+        for line in body.strip().split("\n"):
+            if line.startswith("data: "):
+                events.append(json.loads(line[6:]))
+
+        done = [e for e in events if e["type"] == "done"][0]
+        assert done["status"] == "conceded"
+        assert done["finding_status"] == "withdrawn"
 
     @patch("web.session_manager.handle_discussion")
     def test_discuss_finding_accepted(self, mock_discuss, client, active_session):
@@ -506,16 +539,19 @@ class TestConfigEndpoint:
     """Test the /api/config endpoint."""
 
     def test_config_no_api_key(self, client):
-        """Config reports no key when env var is unset."""
+        """Config reports no key when env vars are unset."""
         import os
-        env_backup = os.environ.pop("ANTHROPIC_API_KEY", None)
+        anthropic_backup = os.environ.pop("ANTHROPIC_API_KEY", None)
+        openai_backup = os.environ.pop("OPENAI_API_KEY", None)
         try:
             response = client.get("/api/config")
             assert response.status_code == 200
             assert response.json()["api_key_configured"] is False
         finally:
-            if env_backup:
-                os.environ["ANTHROPIC_API_KEY"] = env_backup
+            if anthropic_backup:
+                os.environ["ANTHROPIC_API_KEY"] = anthropic_backup
+            if openai_backup:
+                os.environ["OPENAI_API_KEY"] = openai_backup
 
     def test_config_with_api_key(self, client):
         """Config reports key present when env var is set."""
@@ -605,12 +641,261 @@ class TestAnalyzeEndpoint:
         })
         assert response.status_code == 404
 
+    @patch.object(session_mgr, "start_analysis", new_callable=AsyncMock)
+    def test_analyze_cross_provider_uses_separate_keys(self, mock_start, client, reset_session):
+        """Cross-provider analyze should resolve and pass separate provider keys."""
+        mock_start.return_value = {"ok": True}
+
+        response = client.post("/api/analyze", json={
+            "scene_path": "/any/scene.txt",
+            "project_path": "/any/project",
+            "model": "sonnet",            # anthropic
+            "discussion_model": "gpt-4o",  # openai
+            "api_key": "sk-ant-explicit",
+            "discussion_api_key": "sk-openai-explicit",
+        })
+
+        assert response.status_code == 200
+        mock_start.assert_awaited_once()
+        _, kwargs = mock_start.await_args
+        assert kwargs["model"] == "sonnet"
+        assert kwargs["discussion_model"] == "gpt-4o"
+        assert kwargs["discussion_api_key"] == "sk-openai-explicit"
+
+    def test_analyze_cross_provider_missing_second_key_returns_400(self, client, reset_session):
+        """Cross-provider analyze should fail early if discussion provider key is missing."""
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-env"}, clear=True):
+            response = client.post("/api/analyze", json={
+                "scene_path": "/any/scene.txt",
+                "project_path": "/any/project",
+                "model": "sonnet",            # anthropic
+                "discussion_model": "gpt-4o",  # openai
+            })
+
+        assert response.status_code == 400
+        assert "No API key for provider 'openai'" in response.json()["detail"]
+
+    def test_analyze_provider_key_mismatch_returns_400(self, client, reset_session):
+        """OpenAI model with Anthropic key should fail with a clear validation error."""
+        response = client.post("/api/analyze", json={
+            "scene_path": "/any/scene.txt",
+            "project_path": "/any/project",
+            "model": "gpt-4o",
+            "api_key": "sk-ant-mismatch",
+        })
+
+        assert response.status_code == 400
+        assert "appears to be an Anthropic key" in response.json()["detail"]
+
     def test_resume_no_session(self, client, reset_session, tmp_path):
         response = client.post("/api/resume", json={
             "project_path": str(tmp_path),
             "api_key": "test-key",
         })
         assert response.status_code == 404
+
+    @patch("web.routes.check_active_session")
+    @patch.object(session_mgr, "resume_session", new_callable=AsyncMock)
+    def test_resume_cross_provider_missing_second_key_returns_400(
+        self,
+        mock_resume,
+        mock_check_active,
+        client,
+        reset_session,
+        tmp_path,
+    ):
+        """Cross-provider resume should fail early when discussion provider key is missing."""
+        mock_check_active.return_value = {
+            "exists": True,
+            "model": "sonnet",             # anthropic
+            "discussion_model": "gpt-4o",  # openai
+        }
+
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-env"}, clear=True):
+            response = client.post("/api/resume", json={
+                "project_path": str(tmp_path),
+            })
+
+        assert response.status_code == 400
+        assert "No API key for provider 'openai'" in response.json()["detail"]
+        mock_resume.assert_not_awaited()
+
+    @patch("web.routes.check_active_session")
+    @patch.object(session_mgr, "resume_session", new_callable=AsyncMock)
+    def test_resume_cross_provider_uses_separate_keys(
+        self,
+        mock_resume,
+        mock_check_active,
+        client,
+        reset_session,
+        tmp_path,
+    ):
+        """Cross-provider resume should resolve and pass both provider keys."""
+        mock_check_active.return_value = {
+            "exists": True,
+            "model": "sonnet",             # anthropic
+            "discussion_model": "gpt-4o",  # openai
+        }
+        mock_resume.return_value = {"active": True}
+
+        with patch.dict("os.environ", {
+            "ANTHROPIC_API_KEY": "sk-ant-env",
+            "OPENAI_API_KEY": "sk-openai-env",
+        }, clear=True):
+            response = client.post("/api/resume", json={
+                "project_path": str(tmp_path),
+            })
+
+        assert response.status_code == 200
+        mock_resume.assert_awaited_once_with(
+            str(tmp_path),
+            "sk-ant-env",
+            discussion_api_key="sk-openai-env",
+            scene_path_override=None,
+        )
+
+    @patch("web.routes.check_active_session")
+    @patch.object(session_mgr, "resume_session", new_callable=AsyncMock)
+    def test_resume_passes_scene_path_override(
+        self,
+        mock_resume,
+        mock_check_active,
+        client,
+        reset_session,
+        tmp_path,
+    ):
+        """Resume route should pass scene_path_override through to session manager."""
+        mock_check_active.return_value = {"exists": False}
+        mock_resume.return_value = {"active": True}
+
+        response = client.post("/api/resume", json={
+            "project_path": str(tmp_path),
+            "api_key": "sk-ant-explicit",
+            "scene_path_override": str(tmp_path / "renamed_scene.md"),
+        })
+
+        assert response.status_code == 200
+        mock_resume.assert_awaited_once_with(
+            str(tmp_path),
+            "sk-ant-explicit",
+            discussion_api_key=None,
+            scene_path_override=str(tmp_path / "renamed_scene.md"),
+        )
+
+    @patch("web.routes.check_active_session")
+    @patch.object(session_mgr, "resume_session", new_callable=AsyncMock)
+    def test_resume_returns_409_with_structured_detail_for_missing_scene_path(
+        self,
+        mock_resume,
+        mock_check_active,
+        client,
+        reset_session,
+        tmp_path,
+    ):
+        """Missing saved scene path should return a structured 409 error for recovery UI."""
+        mock_check_active.return_value = {"exists": False}
+        mock_resume.side_effect = ResumeScenePathError(
+            "Saved scene file was not found.",
+            saved_scene_path="D:/old-machine/project/ch01.md",
+            attempted_scene_path="D:/old-machine/project/ch01.md",
+            project_path=str(tmp_path),
+            override_provided=False,
+        )
+
+        response = client.post("/api/resume", json={
+            "project_path": str(tmp_path),
+            "api_key": "sk-ant-explicit",
+        })
+
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert detail["code"] == "scene_path_not_found"
+        assert detail["saved_scene_path"] == "D:/old-machine/project/ch01.md"
+        assert detail["attempted_scene_path"] == "D:/old-machine/project/ch01.md"
+        assert detail["project_path"] == str(tmp_path)
+        assert detail["override_provided"] is False
+
+    @patch("web.routes._resolve_analysis_and_discussion_keys")
+    @patch("web.routes.get_session_detail")
+    @patch.object(session_mgr, "resume_session_by_id", new_callable=AsyncMock)
+    def test_resume_session_by_id_uses_selected_session_and_returns_summary(
+        self,
+        mock_resume_by_id,
+        mock_get_session_detail,
+        mock_resolve_keys,
+        client,
+        reset_session,
+        tmp_path,
+    ):
+        """POST /api/resume-session should resume the specific selected session id."""
+        mock_get_session_detail.return_value = {
+            "id": 42,
+            "status": "active",
+            "model": "sonnet",
+            "discussion_model": None,
+        }
+        mock_resolve_keys.return_value = ("sk-ant-env", None)
+        mock_resume_by_id.return_value = {"scene_name": "chapter-01.txt", "total_findings": 5}
+
+        response = client.post("/api/resume-session", json={
+            "project_path": str(tmp_path),
+            "session_id": 42,
+        })
+
+        assert response.status_code == 200
+        mock_get_session_detail.assert_called_once_with(Path(str(tmp_path)), 42)
+        mock_resume_by_id.assert_awaited_once_with(
+            str(tmp_path),
+            42,
+            "sk-ant-env",
+            discussion_api_key=None,
+            scene_path_override=None,
+        )
+
+    def test_resume_session_by_id_nonexistent_project_404(self, client, reset_session):
+        response = client.post("/api/resume-session", json={
+            "project_path": "/nonexistent/path/that/does/not/exist",
+            "session_id": 1,
+        })
+        assert response.status_code == 404
+
+    @patch("web.routes.get_session_detail")
+    def test_resume_session_by_id_not_found_404(
+        self,
+        mock_get_session_detail,
+        client,
+        reset_session,
+        tmp_path,
+    ):
+        mock_get_session_detail.return_value = None
+
+        response = client.post("/api/resume-session", json={
+            "project_path": str(tmp_path),
+            "session_id": 999,
+        })
+        assert response.status_code == 404
+
+    @patch("web.routes.get_session_detail")
+    def test_resume_session_by_id_completed_session_returns_400(
+        self,
+        mock_get_session_detail,
+        client,
+        reset_session,
+        tmp_path,
+    ):
+        mock_get_session_detail.return_value = {
+            "id": 9,
+            "status": "completed",
+            "model": "sonnet",
+            "discussion_model": None,
+        }
+
+        response = client.post("/api/resume-session", json={
+            "project_path": str(tmp_path),
+            "session_id": 9,
+        })
+        assert response.status_code == 400
+        assert "cannot be resumed" in response.json()["detail"]
 
 
 class TestStaticFiles:
@@ -675,3 +960,232 @@ class TestSessionManager:
     def test_goto_finding_out_of_range(self, reset_session):
         result = session_mgr.goto_finding(99)
         assert result is None
+
+
+class TestManagementEndpoints:
+    """Test session and learning management routes (Phase 2)."""
+
+    # --- Session Management Tests ---
+
+    def test_list_sessions_returns_all_sessions(self, client, temp_project_dir, sample_session_state_with_db):
+        """GET /api/sessions should return all sessions for a project."""
+        from server.session import create_session, complete_session
+        from server.models import Finding
+
+        # Create a couple sessions
+        state = sample_session_state_with_db
+        state.findings = [
+            Finding(number=1, severity="major", lens="prose", location="P1",
+                   evidence="E1", impact="I1", options=["O1"], flagged_by=["prose"])
+        ]
+        create_session(state)
+        complete_session(state)
+
+        state.scene_path = str(temp_project_dir / "scene02.txt")
+        create_session(state)
+
+        response = client.get(f"/api/sessions?project_path={temp_project_dir}")
+        assert response.status_code == 200
+        data = response.json()
+        assert 'sessions' in data
+        assert len(data['sessions']) == 2
+
+    def test_list_sessions_empty_project(self, client, temp_project_dir):
+        """Should return empty list for new project."""
+        response = client.get(f"/api/sessions?project_path={temp_project_dir}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data['sessions'] == []
+
+    def test_list_sessions_nonexistent_project_404(self, client):
+        """Should return 404 for nonexistent project."""
+        response = client.get("/api/sessions?project_path=/nonexistent/path")
+        assert response.status_code == 404
+
+    def test_get_session_detail_returns_full_data(self, client, temp_project_dir, sample_session_state_with_db):
+        """GET /api/sessions/{id} should return complete session details."""
+        from server.session import create_session, complete_session, list_sessions
+        from server.models import Finding
+
+        state = sample_session_state_with_db
+        state.findings = [
+            Finding(number=1, severity="critical", lens="prose", location="P1",
+                   evidence="E1", impact="I1", options=["O1"], flagged_by=["prose"], status="accepted",
+                   discussion_turns=[
+                       {"role": "user", "content": "This is intentional."},
+                       {"role": "assistant", "content": "Understood, adjusting severity."},
+                   ]),
+            Finding(number=2, severity="major", lens="structure", location="P2",
+                   evidence="E2", impact="I2", options=["O2"], flagged_by=["structure"], status="rejected"),
+        ]
+        create_session(state)
+        complete_session(state)
+
+        sessions = list_sessions(temp_project_dir)
+        session_id = sessions[0]['id']
+
+        response = client.get(f"/api/sessions/{session_id}?project_path={temp_project_dir}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data['id'] == session_id
+        assert data['status'] == 'completed'
+        assert 'findings' in data
+        assert len(data['findings']) == 2
+        assert data['findings'][0]['discussion_turns'][0]['role'] == 'user'
+        assert data['findings'][0]['discussion_turns'][1]['role'] == 'assistant'
+
+    def test_get_session_detail_not_found_404(self, client, temp_project_dir):
+        """Should return 404 for nonexistent session."""
+        response = client.get(f"/api/sessions/9999?project_path={temp_project_dir}")
+        assert response.status_code == 404
+
+    def test_delete_session_returns_deleted_true(self, client, temp_project_dir, sample_session_state_with_db):
+        """DELETE /api/sessions/{id} should delete session and return True."""
+        from server.session import create_session, complete_session, list_sessions
+        from server.models import Finding
+
+        state = sample_session_state_with_db
+        state.findings = [
+            Finding(number=1, severity="major", lens="prose", location="P1",
+                   evidence="E1", impact="I1", options=["O1"], flagged_by=["prose"])
+        ]
+        create_session(state)
+        complete_session(state)
+
+        sessions = list_sessions(temp_project_dir)
+        session_id = sessions[0]['id']
+
+        response = client.delete(f"/api/sessions/{session_id}?project_path={temp_project_dir}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data['deleted'] is True
+        assert data['session_id'] == session_id
+
+        # Verify it's gone
+        sessions_after = list_sessions(temp_project_dir)
+        assert len(sessions_after) == 0
+
+    def test_delete_session_not_found_404(self, client, temp_project_dir):
+        """Should return 404 when deleting nonexistent session."""
+        response = client.delete(f"/api/sessions/9999?project_path={temp_project_dir}")
+        assert response.status_code == 404
+
+    # --- Learning Management Tests ---
+
+    def test_get_learning_returns_all_categories(self, client, temp_project_dir):
+        """GET /api/learning should return all learning categories."""
+        from server.db import get_connection, LearningStore
+
+        conn = get_connection(temp_project_dir)
+        try:
+            LearningStore.add_preference(conn, "Test preference")
+            LearningStore.add_blind_spot(conn, "Test blind spot")
+            LearningStore.increment_review_count(conn)
+        finally:
+            conn.close()
+
+        response = client.get(f"/api/learning?project_path={temp_project_dir}")
+        assert response.status_code == 200
+        data = response.json()
+        assert 'preferences' in data
+        assert 'blind_spots' in data
+        assert 'resolutions' in data
+        assert 'ambiguity_intentional' in data
+        assert 'ambiguity_accidental' in data
+        assert 'review_count' in data
+        assert len(data['preferences']) == 1
+        assert len(data['blind_spots']) == 1
+
+    def test_get_learning_nonexistent_project_404(self, client):
+        """Should return 404 for nonexistent project."""
+        response = client.get("/api/learning?project_path=/nonexistent/path")
+        assert response.status_code == 404
+
+    def test_export_learning_creates_file(self, client, temp_project_dir):
+        """POST /api/learning/export should create LEARNING.md."""
+        from server.db import get_connection, LearningStore
+
+        conn = get_connection(temp_project_dir)
+        try:
+            LearningStore.add_preference(conn, "Test preference")
+        finally:
+            conn.close()
+
+        response = client.post("/api/learning/export", json={
+            "project_path": str(temp_project_dir)
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data['exported'] is True
+        assert 'path' in data
+
+        # Verify file exists
+        learning_file = temp_project_dir / "LEARNING.md"
+        assert learning_file.exists()
+
+    def test_export_learning_returns_path(self, client, temp_project_dir):
+        """Export should return the file path."""
+        response = client.post("/api/learning/export", json={
+            "project_path": str(temp_project_dir)
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert str(temp_project_dir / "LEARNING.md") in data['path']
+
+    def test_reset_learning_clears_all_data(self, client, temp_project_dir):
+        """DELETE /api/learning should reset all learning data."""
+        from server.db import get_connection, LearningStore
+        from server.learning import load_learning
+
+        conn = get_connection(temp_project_dir)
+        try:
+            LearningStore.add_preference(conn, "Pref 1")
+            LearningStore.add_preference(conn, "Pref 2")
+            LearningStore.add_blind_spot(conn, "Blind spot")
+        finally:
+            conn.close()
+
+        response = client.delete(f"/api/learning?project_path={temp_project_dir}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data['reset'] is True
+
+        # Verify all data is gone
+        learning = load_learning(temp_project_dir)
+        assert learning.preferences == []
+        assert learning.blind_spots == []
+
+    def test_reset_learning_nonexistent_project_404(self, client):
+        """Should return 404 for nonexistent project."""
+        response = client.delete("/api/learning?project_path=/nonexistent/path")
+        assert response.status_code == 404
+
+    def test_delete_learning_entry_returns_deleted_true(self, client, temp_project_dir):
+        """DELETE /api/learning/entries/{id} should delete entry and return True."""
+        from server.db import get_connection, LearningStore
+        from server.learning import load_learning
+
+        conn = get_connection(temp_project_dir)
+        try:
+            LearningStore.add_preference(conn, "Preference 1")
+            LearningStore.add_preference(conn, "Preference 2")
+        finally:
+            conn.close()
+
+        learning = load_learning(temp_project_dir)
+        entry_id = learning.preferences[0]['id']
+
+        response = client.delete(f"/api/learning/entries/{entry_id}?project_path={temp_project_dir}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data['deleted'] is True
+        assert data['entry_id'] == entry_id
+
+        # Verify one remains
+        learning_after = load_learning(temp_project_dir)
+        assert len(learning_after.preferences) == 1
+
+    def test_delete_learning_entry_not_found_404(self, client, temp_project_dir):
+        """Should return 404 when deleting nonexistent entry."""
+        response = client.delete(f"/api/learning/entries/9999?project_path={temp_project_dir}")
+        assert response.status_code == 404

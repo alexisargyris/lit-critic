@@ -9,9 +9,9 @@ lit-critic is a **multi-lens editorial review system** for fiction manuscripts. 
 ### Key Design Principles
 
 1. **Shared Backend** All interfaces (CLI, Web UI, VS Code) use the same FastAPI REST API
-2. **Interoperable Sessions** Session files work across all interfaces
+2. **Interoperable Sessions** Per-project SQLite database shared across all interfaces
 3. **Line-Number Precision** Findings include exact line ranges for editor integration
-4. **Learning Over Time** The system adapts to author preferences via LEARNING.md
+4. **Learning Over Time** The system adapts to author preferences (database is source of truth; `LEARNING.md` is a human-readable export)
 5. **Scene Change Detection** Authors can edit scenes mid-review without breaking the analysis
 6. **Editorial Assistant, Not Ghostwriter** Findings provide conceptual guidance, never prose rewrites. Maximum suggestion: 2-3 example words. Tool validates against author-defined rules, never imposes external standards or generates content
 7. **Multilingual Scene Analysis** Modern LLM providers support 100+ languages for scene text. Interface language is English because these models' comprehension of many languages exceeds their production capability. Scene text and index files can be in any language supported by your chosen provider (Greek, Japanese, Spanish, Arabic, Chinese, etc.)
@@ -21,27 +21,27 @@ lit-critic is a **multi-lens editorial review system** for fiction manuscripts. 
 ## Architecture Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        User Interfaces                          │
-│                                                                 │
+┌───────────────────────────────────────────────────────────────┐
+│                        User Interfaces                        │
+│                                                               │
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐   │
 │  │     CLI      │  │   Web UI     │  │  VS Code Extension │   │
 │  │              │  │              │  │                    │   │
 │  │ interface.py │  │ app.py       │  │  extension.ts      │   │
 │  │              │  │ routes.py    │  │  (TypeScript)      │   │
 │  └──────┬───────┘  └──────┬───────┘  └─────────┬──────────┘   │
-│         │                 │                     │              │
-│         │ Direct          │ HTTP                │ HTTP         │
-│         │ Import          │ (FastAPI)           │ (REST API)   │
-└─────────┼─────────────────┼─────────────────────┼──────────────┘
-          │                 │                     │
-          │                 │                     │
-          │        ┌────────▼─────────────────────▼────────┐
-          │        │      FastAPI Backend (web/)           │
-          │        │                                        │
-          │        │  routes.py - REST endpoints            │
-          │        │  session_manager.py - Web state        │
-          │        └────────────────┬───────────────────────┘
+│         │                 │                    │              │
+│         │ Direct          │ HTTP               │ HTTP         │
+│         │ Import          │ (FastAPI)          │ (REST API)   │
+└─────────┼─────────────────┼────────────────────┼──────────────┘
+          │                 │                    │
+          │                 │                    │
+          │        ┌────────▼────────────────────▼────────┐
+          │        │      FastAPI Backend (web/)          │
+          │        │                                      │
+          │        │  routes.py - REST endpoints          │
+          │        │  session_manager.py - Web state      │
+          │        └────────────────┬─────────────────────┘
           │                         │
           │                         │ Imports
           └─────────────────────────┤
@@ -82,6 +82,13 @@ lit-critic is a **multi-lens editorial review system** for fiction manuscripts. 
                           │  └──────────────┘  │
                           │                    │
                           │  ┌──────────────┐  │
+                          │  │  db.py       │  │ ◄─── SQLite storage
+                          │  │              │  │      (sessions,
+                          │  │              │  │      findings,
+                          │  │              │  │      learning)
+                          │  └──────────────┘  │
+                          │                    │
+                          │  ┌──────────────┐  │
                           │  │ utils.py     │  │ ◄─── Line mapping,
                           │  │              │  │      difflib
                           │  └──────────────┘  │
@@ -91,7 +98,18 @@ lit-critic is a **multi-lens editorial review system** for fiction manuscripts. 
                                     │
                           ┌─────────▼──────────┐
                           │   Data Layer       │
-                          │   (Filesystem)     │
+                          │                    │
+                          │  ┌──────────────┐  │
+                          │  │ SQLite DB    │  │
+                          │  │ .lit-critic  │  │
+                          │  │ .db          │  │
+                          │  │              │  │
+                          │  │ - session    │  │
+                          │  │ - finding    │  │
+                          │  │ - learning   │  │
+                          │  │ - learning_  │  │
+                          │  │   entry      │  │
+                          │  └──────────────┘  │
                           │                    │
                           │  ┌──────────────┐  │
                           │  │ Project Dir  │  │
@@ -103,11 +121,8 @@ lit-critic is a **multi-lens editorial review system** for fiction manuscripts. 
                           │  │ - THREADS    │  │
                           │  │ - TIMELINE   │  │
                           │  │ - LEARNING   │  │
-                          │  │              │  │
-                          │  │ - .literary_ │  │
-                          │  │   critic_    │  │
-                          │  │   session.   │  │
-                          │  │   json       │  │
+                          │  │   .md        │  │
+                          │  │   (export)   │  │
                           │  │              │  │
                           │  │ - text/      │  │
                           │  │   (scenes)   │  │
@@ -124,13 +139,17 @@ lit-critic is a **multi-lens editorial review system** for fiction manuscripts. 
 #### 1. CLI (`cli/`)
 **Purpose:** Terminal-based interface for keyboard-driven workflow.
 
-**Key File:** `interface.py`
+**Key Files:**
+- `commands.py` - Subcommand entry points (`analyze`, `resume`, `sessions`, `learning`)
+- `session_loop.py` - Interactive review loop (finding navigation, discussion)
+- `interface.py` - Display helpers (print findings, summaries, scene change reports)
 
 **Features:**
 - Direct import of `server/` modules
+- Subcommand architecture (`lit-critic analyze`, `lit-critic sessions list`, `lit-critic learning view`, etc.)
 - Interactive session with command parsing
 - Streaming discussion responses to terminal
-- Session save/resume
+- Session and learning management commands
 
 **Entry Point:** `python lit-critic.py`
 
@@ -166,6 +185,8 @@ lit-critic is a **multi-lens editorial review system** for fiction manuscripts. 
 - `src/diagnosticsProvider.ts` - Maps findings → VS Code diagnostics
 - `src/findingsTreeProvider.ts` - Sidebar tree view
 - `src/discussionPanel.ts` - Webview for interactive discussion
+- `src/sessionsTreeProvider.ts` - Session history sidebar tree
+- `src/learningTreeProvider.ts` - Learning data sidebar tree
 - `src/statusBar.ts` - Progress indicator
 
 **Features:**
@@ -173,7 +194,10 @@ lit-critic is a **multi-lens editorial review system** for fiction manuscripts. 
 - Auto-starts backend server as child process
 - Real-time diagnostics (squiggly underlines)
 - Click findings in sidebar to jump to location
-- Interoperable with CLI/Web UI (same session files)
+- Sequential next-step navigation is still available via `literaryCritic.nextFinding` (command/keybinding), but this is a candidate for future deprecation in favor of direct finding selection from the sidebar tree
+- Session management tree view (list, view, delete sessions)
+- Learning management tree view (view, export, delete entries)
+- Interoperable with CLI/Web UI (same SQLite database)
 
 **Entry Point:** VS Code extension system (F5 in development)
 
@@ -264,11 +288,35 @@ The **shared backend** used by all interfaces.
 
 ---
 
+#### `db.py` SQLite Storage Layer
+
+**Purpose:** Per-project SQLite database (`.lit-critic.db`) providing persistent storage for sessions, findings, and learning data. All mutations are written immediately — no explicit save step.
+
+**Connection setup:**
+- `get_connection()` Opens database with WAL mode, foreign keys, and auto-creates schema
+- `init_db()` Creates tables and applies migrations via `schema_version` table
+
+**Classes:**
+- `SessionStore` — CRUD for review sessions (create, load_active, list_all, complete, abandon, delete, validate)
+- `FindingStore` — CRUD for findings within a session (save_all, load_all, get, update)
+- `LearningStore` — CRUD for cross-session learning data (load, save_from_learning_data, add_entry, remove_entry, export_markdown, reset)
+
+**Schema (4 tables):**
+- `session` — id, scene_path, scene_hash, model, status (active/completed/abandoned), finding counts, timestamps
+- `finding` — id, session_id (FK), number, severity, lens, line ranges, evidence, impact, status, discussion_turns
+- `learning` — id, project_name, review_count
+- `learning_entry` — id, learning_id (FK), category (preference/blind_spot/resolution/ambiguity_intentional/ambiguity_accidental), description
+
+---
+
 #### `learning.py` Preference Tracking
 
 **Functions:**
-- `load_learning()` Read LEARNING.md from project
-- `save_learning_to_file()` Write LEARNING.md
+- `load_learning()` Load learning data (database is source of truth; auto-imports legacy LEARNING.md on first use)
+- `load_learning_from_db()` Read learning from SQLite via `LearningStore`
+- `persist_learning()` Write learning data to database
+- `export_learning_markdown()` Generate LEARNING.md from database (human-readable export)
+- `save_learning_to_file()` Write LEARNING.md to disk
 - `generate_learning_markdown()` Format as clean markdown
 - `update_learning_from_session()` Extract patterns from session
 
@@ -287,18 +335,25 @@ The **shared backend** used by all interfaces.
 #### `session.py` Session Persistence
 
 **Functions:**
-- `save_session()` Serialize state to `.lit-critic-session.json`
-- `load_session()` Deserialize from file
+- `create_session()` Create a new session in the database via `SessionStore`
+- `check_active_session()` Check if an active session exists
+- `load_active_session()` Load the active session and its findings from the database
+- `complete_session()` / `abandon_session()` Mark session as completed or abandoned
+- `list_sessions()` List all sessions (active, completed, abandoned)
+- `get_session_detail()` Get full session detail with findings
+- `delete_session_by_id()` Delete a session and its findings
+- `persist_finding()` Save a single finding update to the database
+- `persist_session_index()` Update current finding index (auto-save on navigate)
+- `persist_skip_minor()` Update skip-minor flag
+- `persist_discussion_history()` / `persist_session_learning()` Save discussion/learning state
 - `validate_session()` Check scene hash, file path
 - `detect_and_apply_scene_changes()` Scene change detection & re-evaluation
 - `compute_scene_hash()` SHA-256 of scene content
 
-**Session File Contents:**
-- Scene path, project path, content hash
-- All findings with full state
-- Current index, skip_minor flag
-- Learning data (session-level)
-- Model selection
+**Auto-Save Architecture:**
+- Every mutation (accept, reject, discuss, navigate) is immediately written to SQLite
+- No explicit "save session" step required — close the tool anytime, resume later
+- Session status transitions: `active` → `completed` or `abandoned`
 
 **Scene Change Detection:**
 1. Re-hash scene content before each finding
@@ -429,19 +484,20 @@ The **shared backend** used by all interfaces.
 ### Session Resume Flow
 
 ```
-1. Load .lit-critic-session.json
+1. Query SQLite for active session (SessionStore.load_active)
    ↓
-2. Validate:
+2. Load findings from database (FindingStore.load_all)
+   ↓
+3. Validate:
    - Scene path matches
-   - Scene content hash matches
+   - Scene content hash matches (SHA-256)
    ↓
-3. If valid:
+4. If valid:
    - Restore findings, current index, learning data
    - Continue from where user left off
    ↓
-4. If invalid:
-   - Error: scene modified or moved
-   - User must start fresh review
+5. If invalid (scene modified):
+   - Option to abandon old session and start fresh
 ```
 
 ---
@@ -541,19 +597,20 @@ All three interfaces (CLI, Web UI, VS Code) use the same `server/` modules:
 
 ---
 
-### 2. Session State Pattern
+### 2. Auto-Save Pattern
 
-`SessionState` dataclass holds all review state:
+Every user action (accept, reject, discuss, navigate) is immediately persisted to SQLite via the `persist_*` functions in `session.py`. There is no explicit "save" step.
+
+`SessionState` dataclass holds all in-memory review state:
 - Scene content, path, project path
+- Database connection and session ID
 - LLM client (provider-agnostic `LLMClient` instance)
 - Index files (CANON, CAST, etc.)
 - Findings list
 - Learning data
 - Model selection (includes provider info)
 
-Passed between functions, serialized for save/resume.
-
-**Benefit:** Clear state boundaries, easy serialization.
+**Benefit:** Users can close the tool at any time and resume exactly where they left off. No data loss.
 
 ---
 
@@ -659,9 +716,9 @@ The model **must** respond with `report_findings` tool call containing JSON.
 - Stored in environment variable or passed via CLI flag
 - Web UI receives API key from frontend (user's responsibility to secure)
 
-### Session Files
-- Contain full scene text + findings
-- Recommend `.gitignore` for `.lit-critic-session.json`
+### Database Files
+- `.lit-critic.db` contains session state, findings, and learning data
+- Recommend `.gitignore` for `.lit-critic.db`
 - No encryption (filesystem security)
 
 ### Input Validation
@@ -682,7 +739,6 @@ The model **must** respond with `report_findings` tool call containing JSON.
 - **MCP server** Expose as tool for Claude Code
 
 ### Under Consideration
-- **Database backend** Replace JSON session files with SQLite
 - **Distributed coordinator** Split work across multiple Claude calls
 - **Lens caching** Cache lens results for unchanged scenes
 - **Real-time collaboration** Multiple users reviewing same scene
@@ -693,5 +749,4 @@ The model **must** respond with `report_findings` tool call containing JSON.
 
 - **[API Reference](api-reference.md)** REST endpoint documentation
 - **[Testing Guide](testing.md)** Running and writing tests
-- **[Installation Guide](installation.md)** Developer setup
 - **[Installation Guide](installation.md)** Developer setup

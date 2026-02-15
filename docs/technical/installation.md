@@ -232,17 +232,20 @@ lit-critic/
 ├── cli/                    # CLI interface
 │   ├── __init__.py
 │   ├── __main__.py
-│   └── interface.py
+│   ├── commands.py        # Subcommand entry points
+│   ├── interface.py       # Display helpers
+│   └── session_loop.py    # Interactive review loop
 │
 ├── server/                 # Shared backend
 │   ├── __init__.py
 │   ├── api.py             # LLM API calls
 │   ├── config.py          # Configuration
+│   ├── db.py              # SQLite storage layer
 │   ├── discussion.py      # Multi-turn dialogue
 │   ├── learning.py        # Preference tracking
 │   ├── models.py          # Data structures
 │   ├── prompts.py         # Prompt templates
-│   ├── session.py         # Save/resume
+│   ├── session.py         # Session management
 │   ├── utils.py           # Line mapping
 │   └── llm/               # Multi-provider LLM abstraction
 │       ├── __init__.py
@@ -258,7 +261,9 @@ lit-critic/
 │   ├── routes.py          # REST endpoints
 │   ├── session_manager.py
 │   ├── templates/
-│   │   └── index.html
+│   │   ├── index.html
+│   │   ├── sessions.html
+│   │   └── learning.html
 │   └── static/
 │       ├── css/
 │       └── js/
@@ -270,6 +275,8 @@ lit-critic/
 │   │   ├── apiClient.ts
 │   │   ├── diagnosticsProvider.ts
 │   │   ├── findingsTreeProvider.ts
+│   │   ├── sessionsTreeProvider.ts
+│   │   ├── learningTreeProvider.ts
 │   │   ├── discussionPanel.ts
 │   │   ├── statusBar.ts
 │   │   └── types.ts
@@ -531,15 +538,19 @@ Recommended extensions:
 
 ## Database / Storage
 
-lit-critic uses **filesystem storage** (no database):
+lit-critic uses a **per-project SQLite database** (`.lit-critic.db`) for all persistent state:
 
-- **Session files:** `.lit-critic-session.json` in project directory
-- **Learning files:** `LEARNING.md` in project directory
-- **Index files:** CANON.md, CAST.md, etc. in project directory
+- **Sessions:** Stored in the `session` table (status: active/completed/abandoned)
+- **Findings:** Stored in the `finding` table (linked to sessions via foreign key)
+- **Learning data:** Stored in `learning` and `learning_entry` tables
+- **LEARNING.md:** Human-readable export from the database (not the source of truth)
+- **Index files:** CANON.md, CAST.md, etc. in project directory (read-only by the tool)
+
+The database is auto-created on first use with WAL mode, foreign keys, and schema versioning.
 
 **Add to .gitignore:**
 ```
-.lit-critic-session.json
+.lit-critic.db
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -565,4 +576,3 @@ The system automatically resolves which key to use based on the selected model's
 - **[Architecture Guide](architecture.md)** Understand the system design
 - **[API Reference](api-reference.md)** REST endpoint documentation
 - **[Testing Guide](testing.md)** Run and write tests
-- **[Contributing Guide](contributing.md)** Contribution workflow

@@ -202,14 +202,6 @@ docs/user-guide/
 
 ---
 
-## Non-Technical Guarantee
-
-This guide assumes **no programming knowledge**. Everything is explained in plain language with fiction-writing examples.
-
-If you encounter jargon or unclear instructions, please report it (use `/reportbug` in the tool or file a GitHub issue).
-
----
-
 ## Ready to Start?
 
 → **[Getting Started Guide](getting-started.md)**

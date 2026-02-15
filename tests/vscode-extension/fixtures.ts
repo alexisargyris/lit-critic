@@ -72,7 +72,6 @@ export const sampleAnalysisSummary = {
     project_path: '/test/project',
     total_findings: 3,
     current_index: 0,
-    skip_minor: false,
     glossary_issues: [],
     counts: { critical: 1, major: 1, minor: 1 },
     lens_counts: {
@@ -81,6 +80,16 @@ export const sampleAnalysisSummary = {
     },
     model: { name: 'sonnet', id: 'claude-sonnet-4-20250514', label: 'Sonnet 4.5' },
     learning: { review_count: 0, preferences: 0, blind_spots: 0 },
+    findings_status: sampleFindings.map(f => ({
+        number: f.number,
+        severity: f.severity,
+        lens: f.lens,
+        status: f.status,
+        location: f.location,
+        evidence: f.evidence,
+        line_start: f.line_start,
+        line_end: f.line_end,
+    })),
 };
 
 export const sampleFindingResponse = {
@@ -220,10 +229,86 @@ export class MockEventEmitter<T> {
     }
 }
 
-export const mockVscode = {
-    languages: {
-        createDiagnosticCollection: (name: string) => new MockDiagnosticCollection(),
-    },
+export class MockWebviewPanel {
+    webview: {
+        html: string;
+        onDidReceiveMessage: (handler: any) => { dispose: () => void };
+        postMessage: (msg: any) => void;
+        _messageHandlers: Array<(msg: any) => void>;
+    };
+    visible: boolean = true;
+    viewColumn: number;
+    private _disposeHandlers: Array<() => void> = [];
+
+    constructor(
+        public readonly viewType: string,
+        public readonly title: string,
+        showOptions: any,
+        options: any
+    ) {
+        const messageHandlers: Array<(msg: any) => void> = [];
+        
+        this.webview = {
+            html: '',
+            onDidReceiveMessage: (handler: any) => {
+                messageHandlers.push(handler);
+                return {
+                    dispose: () => {
+                        const idx = messageHandlers.indexOf(handler);
+                        if (idx >= 0) messageHandlers.splice(idx, 1);
+                    },
+                };
+            },
+            postMessage: (msg: any) => {
+                // No-op in tests, but can be tracked
+            },
+            _messageHandlers: messageHandlers,
+        };
+        
+        this.viewColumn = typeof showOptions === 'number' ? showOptions : showOptions?.viewColumn || 2;
+    }
+
+    onDidDispose(handler: () => void): { dispose: () => void } {
+        this._disposeHandlers.push(handler);
+        return {
+            dispose: () => {
+                const idx = this._disposeHandlers.indexOf(handler);
+                if (idx >= 0) this._disposeHandlers.splice(idx, 1);
+            },
+        };
+    }
+
+    reveal(viewColumn?: number, preserveFocus?: boolean): void {
+        this.visible = true;
+        if (viewColumn !== undefined) {
+            this.viewColumn = viewColumn;
+        }
+    }
+
+    dispose(): void {
+        this.visible = false;
+        for (const handler of this._disposeHandlers) {
+            handler();
+        }
+        this._disposeHandlers = [];
+    }
+
+    // Test helper to simulate receiving a message from the webview
+    _simulateMessage(msg: any): void {
+        for (const handler of this.webview._messageHandlers) {
+            handler(msg);
+        }
+    }
+}
+
+/**
+ * Create a fresh mock vscode instance (to avoid state leaking between tests).
+ */
+export function createFreshMockVscode() {
+    return {
+        languages: {
+            createDiagnosticCollection: (name: string) => new MockDiagnosticCollection(),
+        },
     window: {
         createStatusBarItem: (alignment: number, priority: number) => new MockStatusBarItem(),
         createTreeView: (viewId: string, options: any) => ({
@@ -240,18 +325,7 @@ export const mockVscode = {
             show: (preserveFocus?: boolean) => {},
             dispose: () => {},
         }),
-        createWebviewPanel: (viewType: string, title: string, showOptions: any, options: any) => ({
-            webview: {
-                html: '',
-                onDidReceiveMessage: (handler: any) => ({ dispose: () => {} }),
-                postMessage: (msg: any) => {},
-            },
-            onDidDispose: (handler: any) => ({ dispose: () => {} }),
-            reveal: (viewColumn?: number, preserveFocus?: boolean) => {},
-            dispose: () => {},
-            visible: true,
-            viewColumn: 2,
-        }),
+        createWebviewPanel: (viewType: string, title: string, showOptions: any, options: any) => new MockWebviewPanel(viewType, title, showOptions, options),
         activeTextEditor: undefined,
         visibleTextEditors: [],
         showTextDocument: async (uri: any, options?: any) => ({}),
@@ -311,6 +385,20 @@ export const mockVscode = {
         Unnecessary: 1,
         Deprecated: 2,
     },
+    TreeItem: class {
+        label: string;
+        collapsibleState: number;
+        description?: string;
+        tooltip?: any;
+        iconPath?: any;
+        command?: any;
+        contextValue?: string;
+        
+        constructor(label: string, collapsibleState?: number) {
+            this.label = label;
+            this.collapsibleState = collapsibleState || 0;
+        }
+    },
     TreeItemCollapsibleState: {
         None: 0,
         Collapsed: 1,
@@ -350,8 +438,12 @@ export const mockVscode = {
         Workspace: 2,
         WorkspaceFolder: 3,
     },
-    EventEmitter: MockEventEmitter,
-};
+        EventEmitter: MockEventEmitter,
+    };
+}
+
+/** Singleton mock for backward compatibility */
+export const mockVscode = createFreshMockVscode();
 
 // ---------------------------------------------------------------------------
 // Mock HTTP Responses
@@ -442,6 +534,9 @@ export class MockChildProcess extends EventEmitter {
     stdout: EventEmitter = new EventEmitter();
     stderr: EventEmitter = new EventEmitter();
 
+    // Explicitly expose emit for TypeScript
+    declare emit: (event: string | symbol, ...args: any[]) => boolean;
+
     kill(signal?: string): void {
         this.exitCode = 0;
         this.emit('exit', 0, signal);
@@ -467,3 +562,135 @@ export function createMockSpawn(process: MockChildProcess) {
         return process;
     };
 }
+
+/**
+ * Create a smart spawn mock that handles Python detection calls separately.
+ * Returns different mock processes for:
+ * - py -0 (Python Launcher query) → returns version list
+ * - any --version (Python version check) → returns "Python 3.13.0"
+ * - actual server spawn → returns the provided serverProcess
+ */
+export function createSmartSpawn(serverProcess: MockChildProcess) {
+    return (command: string, args: string[], options?: any) => {
+        // Python Launcher query: py -0
+        if (command === 'py' && args.includes('-0')) {
+            const proc = new MockChildProcess();
+            setImmediate(() => {
+                proc.stdout.emit('data', Buffer.from('-3.13-64\n'));
+                proc.emit('close', 0);
+            });
+            return proc;
+        }
+        
+        // Python version check: any --version
+        if (args.some((a: string) => a === '--version')) {
+            const proc = new MockChildProcess();
+            setImmediate(() => {
+                proc.stdout.emit('data', Buffer.from('Python 3.13.0\n'));
+                proc.emit('close', 0);
+            });
+            return proc;
+        }
+        
+        // Actual server launch
+        return serverProcess;
+    };
+}
+
+/**
+ * Create an HTTP mock that fails N times before succeeding.
+ * Useful for testing health check retry logic.
+ */
+export function createStagedHealthCheck(failCount: number = 1) {
+    let callCount = 0;
+    return {
+        get: (url: string, options: any, callback: any) => {
+            if (typeof options === 'function') {
+                callback = options;
+            }
+            callCount++;
+            const res = { statusCode: callCount > failCount ? 200 : 500 };
+            setTimeout(() => callback(res), 5);
+            return { on: () => {}, destroy: () => {} };
+        },
+        request: () => ({ on: () => {}, destroy: () => {} }),
+        _getCallCount: () => callCount,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: Management test fixtures
+// ---------------------------------------------------------------------------
+
+export const sampleSessionSummary = {
+    id: 1,
+    scene_path: '/test/scene01.txt',
+    status: 'completed',
+    model: 'sonnet',
+    created_at: '2026-02-10T10:00:00',
+    completed_at: '2026-02-10T10:30:00',
+    total_findings: 5,
+    accepted_count: 3,
+    rejected_count: 2,
+    withdrawn_count: 0,
+};
+
+export const sampleSessionDetail = {
+    id: 1,
+    scene_path: '/test/scene01.txt',
+    status: 'completed',
+    model: 'sonnet',
+    created_at: '2026-02-10T10:00:00',
+    completed_at: '2026-02-10T10:30:00',
+    total_findings: 2,
+    accepted_count: 1,
+    rejected_count: 1,
+    withdrawn_count: 0,
+    findings: [
+        {
+            number: 1,
+            severity: 'critical',
+            lens: 'prose',
+            location: 'Paragraph 1',
+            evidence: 'Test evidence',
+            impact: 'Test impact',
+            options: ['Fix it'],
+            status: 'accepted',
+            line_start: 5,
+            line_end: 10,
+        },
+        {
+            number: 2,
+            severity: 'major',
+            lens: 'structure',
+            location: 'Scene opening',
+            evidence: 'Missing goal',
+            impact: 'Reader confusion',
+            options: ['Add goal'],
+            status: 'rejected',
+            line_start: 1,
+            line_end: 3,
+        },
+    ],
+};
+
+export const sampleLearningData = {
+    project_name: 'Test Novel',
+    review_count: 3,
+    preferences: [
+        { id: 1, description: '[prose] Sentence fragments OK for voice' },
+        { id: 2, description: '[structure] Prefer shorter scenes' },
+    ],
+    blind_spots: [
+        { id: 3, description: '[clarity] Pronoun ambiguity in dialogue' },
+    ],
+    resolutions: [
+        { id: 4, description: 'Finding #5 — addressed by splitting paragraph' },
+    ],
+    ambiguity_intentional: [
+        { id: 5, description: 'Chapter 3: dream sequence imagery' },
+    ],
+    ambiguity_accidental: [
+        { id: 6, description: 'Chapter 5: unclear referent (fixed)' },
+    ],
+};

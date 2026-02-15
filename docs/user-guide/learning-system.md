@@ -13,7 +13,7 @@ The learning system tracks your editorial preferences through:
 3. **Ambiguity choices** When you mark ambiguity as intentional vs. accidental
 4. **Cross-finding context** Arguments you use that apply to similar findings
 
-All learned preferences are saved to **LEARNING.md** in your project root.
+All learned preferences are stored in the **project database** (`.lit-critic.db`). You can export them to **LEARNING.md** as a human-readable file. The database is the source of truth; `LEARNING.md` is a convenient export for reading and sharing. On first use, any existing `LEARNING.md` is automatically imported into the database.
 
 ---
 
@@ -114,76 +114,83 @@ Is this usage intentional?"
 
 ---
 
-## Saving Learning
+## Saving and Exporting Learning
 
-Preferences accumulate during a review session. You must explicitly save them to write **LEARNING.md**.
+Learning data is **automatically saved** to the project database as you accept, reject, and discuss findings. There is no manual save step for the learning data itself.
+
+To **export** a human-readable `LEARNING.md` file:
 
 ### CLI
 
-```
-Type: save learning
+```bash
+python lit-critic.py learning export --project ~/novel/
 ```
 
 ### Web UI
 
-```
-Click: Save Learning button
-```
+Navigate to http://localhost:8000/learning and click **Export to LEARNING.md**.
 
 ### VS Code
 
-```
-Command Palette → lit-critic: Save Learning
-```
+Command Palette → `lit-critic: Export Learning`
 
 ### What Happens
 
-- **If LEARNING.md exists:** New preferences are merged with existing ones
-- **If LEARNING.md is new:** A fresh file is created
+- **LEARNING.md is generated** from the database as a human-readable export
 - **Format:** Clean, readable markdown organized by category
+- Future reviews load learning data from the database (not from LEARNING.md)
 
 ---
 
-## LEARNING.md Structure
+## Learning Data Structure
 
-The file is organized by lens and preference type:
+Learning data is organized by category in the database. When exported to LEARNING.md, it looks like:
 
 ```markdown
-# Learning Profile
+# Learning
 
-Last updated: 2026-02-09
+PROJECT: My Novel
+LAST_UPDATED: 2026-02-09
+REVIEW_COUNT: 12
 
-## Prose Preferences
+## Preferences
 
 - Author uses sentence fragments for pacing in action scenes
 - Author prefers "said" as default dialogue tag (avoids fancy tags)
 - Author accepts findings about filter words and actively removes them
 
-## Structure Preferences
+## Blind Spots
 
-- Author intentionally writes scenes without explicit objectives 
-  when focusing on atmosphere
-- Author prefers ambiguous scene endings (open questions)
+- Author consistently misses filter words in deep POV
+- Author tends to repeat location descriptions
 
-## Logic Preferences
+## Resolutions
 
-- Author accepts findings about character motivation gaps
-- Author trusts reader inference for minor logical connections
+- Author resolved tense-rule findings by documenting convention in STYLE.md
 
-## Clarity Preferences
+## Ambiguity Patterns
+
+### Intentional
 
 - Author uses deliberate pronoun ambiguity for mystery effect
-- Author prefers explicit grounding in new locations
+- Author leaves chapter endings ambiguous by design
 
-## Continuity Preferences
+### Accidental
 
-- Author is strict about term consistency (always follows GLOSSARY.md)
-- Author tracks numeric values carefully in ContAnchors
+- Author sometimes forgets to ground character positions after scene transitions
+```
 
-## General Preferences
+### Managing Learning Data
 
-- Author prefers concise feedback over detailed explanations
-- Author values continuity checks over style suggestions
+You can also manage individual entries:
+
+**Web UI:** http://localhost:8000/learning — delete individual entries or reset all learning data.
+
+**VS Code:** The **Learning** sidebar tree view shows entries by category. Right-click to delete entries.
+
+**CLI:**
+```bash
+python lit-critic.py learning view --project ~/novel/
 ```
 
 ---

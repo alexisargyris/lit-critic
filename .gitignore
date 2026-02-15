@@ -1,6 +1,14 @@
 # Virtual environment
 venv/
 
+# Node dependencies
+node_modules/
+
+# NPM logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
 # Python bytecode
 __pycache__/
 *.py[cod]
@@ -19,5 +27,13 @@ build/
 # Environment variables (may contain API keys)
 .env
 
-# Session file (user-specific, not to be committed)
+# Session file (legacy, user-specific)
 .lit-critic-session.json
+
+# SQLite database (user-specific, not to be committed)
+.lit-critic.db
+.lit-critic.db-wal
+.lit-critic.db-shm
+
+# Sync scripts (local-only, not tracked)
+scripts/

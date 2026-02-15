@@ -99,7 +99,8 @@ Open a conversation with the AI about the finding.
 - You type a message
 - The AI responds, considering your argument
 - The AI can revise, withdraw, or escalate the finding based on discussion
-- Full conversation history maintained per finding
+- Full conversation history is maintained per finding and persisted with the session
+- Re-opening the finding (or viewing session history later) restores the same thread
 
 **When to discuss:**
 - You're unsure if the finding applies
@@ -379,6 +380,22 @@ Each finding has a status:
 - **Escalated** Severity increased during discussion
 
 Status is tracked in session files and affects learning.
+
+---
+
+## Discussion History Persistence
+
+Discussion is stored per finding as an ordered turn history (`You` / `Critic`, plus
+system notes when relevant). This history is visible across interfaces:
+
+- **Web active review**: switching findings rehydrates each finding's saved thread
+- **Web sessions history**: session detail view shows each finding's discussion thread
+- **VS Code discussion panel**: reopening a finding preloads the persisted thread
+- **CLI session detail** (`lit-critic sessions view <id> --project <path>`): shows
+  per-finding turn counts and the latest turn summary
+
+This means discussion context is no longer ephemeral; it is part of the finding's
+long-term review record.
 
 ---
 

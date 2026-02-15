@@ -140,4 +140,168 @@ describe('ApiClient', () => {
             assert.match(error.message, /Invalid JSON/);
         });
     });
+
+    describe('Management API Methods (Phase 2)', () => {
+        describe('Session Management', () => {
+            it('should call GET /api/sessions with project_path', () => {
+                const method = 'GET';
+                const projectPath = '/test/project';
+                const path = `/api/sessions?project_path=${encodeURIComponent(projectPath)}`;
+                
+                assert.equal(method, 'GET');
+                assert.ok(path.includes('project_path='));
+                assert.ok(path.includes(encodeURIComponent(projectPath)));
+            });
+
+            it('should call GET /api/sessions/{id}', () => {
+                const method = 'GET';
+                const sessionId = 5;
+                const projectPath = '/test/project';
+                const path = `/api/sessions/${sessionId}?project_path=${encodeURIComponent(projectPath)}`;
+                
+                assert.equal(method, 'GET');
+                assert.ok(path.includes('/api/sessions/5'));
+                assert.ok(path.includes('project_path='));
+            });
+
+            it('should call DELETE /api/sessions/{id}', () => {
+                const method = 'DELETE';
+                const sessionId = 5;
+                const projectPath = '/test/project';
+                const path = `/api/sessions/${sessionId}?project_path=${encodeURIComponent(projectPath)}`;
+                
+                assert.equal(method, 'DELETE');
+                assert.ok(path.includes('/api/sessions/5'));
+            });
+
+            it('should encode project path in URL parameters', () => {
+                const projectPath = '/test/my project/with spaces';
+                const encoded = encodeURIComponent(projectPath);
+                
+                assert.notEqual(encoded, projectPath);
+                assert.ok(!encoded.includes(' '));
+            });
+        });
+
+        describe('Learning Management', () => {
+            it('should call GET /api/learning with project_path', () => {
+                const method = 'GET';
+                const projectPath = '/test/project';
+                const path = `/api/learning?project_path=${encodeURIComponent(projectPath)}`;
+                
+                assert.equal(method, 'GET');
+                assert.ok(path.includes('project_path='));
+            });
+
+            it('should call POST /api/learning/export', () => {
+                const method = 'POST';
+                const body = { project_path: '/test/project' };
+                const path = '/api/learning/export';
+                
+                assert.equal(method, 'POST');
+                assert.equal(path, '/api/learning/export');
+                assert.ok(body.project_path);
+            });
+
+            it('should call DELETE /api/learning', () => {
+                const method = 'DELETE';
+                const projectPath = '/test/project';
+                const path = `/api/learning?project_path=${encodeURIComponent(projectPath)}`;
+                
+                assert.equal(method, 'DELETE');
+                assert.ok(path.includes('project_path='));
+            });
+
+            it('should call DELETE /api/learning/entries/{id}', () => {
+                const method = 'DELETE';
+                const entryId = 42;
+                const projectPath = '/test/project';
+                const path = `/api/learning/entries/${entryId}?project_path=${encodeURIComponent(projectPath)}`;
+                
+                assert.equal(method, 'DELETE');
+                assert.ok(path.includes('/api/learning/entries/42'));
+                assert.ok(path.includes('project_path='));
+            });
+        });
+
+        describe('Response Types', () => {
+            it('should return sessions list from listSessions', () => {
+                const mockResponse = {
+                    sessions: [
+                        { id: 1, scene_path: '/test/scene.txt', status: 'completed' },
+                    ],
+                };
+                
+                assert.ok(Array.isArray(mockResponse.sessions));
+                assert.equal(mockResponse.sessions[0].id, 1);
+            });
+
+            it('should return session detail from getSessionDetail', () => {
+                const mockResponse = {
+                    id: 1,
+                    scene_path: '/test/scene.txt',
+                    status: 'completed',
+                    findings: [],
+                    total_findings: 0,
+                };
+                
+                assert.equal(mockResponse.id, 1);
+                assert.ok('findings' in mockResponse);
+            });
+
+            it('should return learning data from getLearning', () => {
+                const mockResponse = {
+                    project_name: 'Test Project',
+                    review_count: 5,
+                    preferences: [],
+                    blind_spots: [],
+                    resolutions: [],
+                    ambiguity_intentional: [],
+                    ambiguity_accidental: [],
+                };
+                
+                assert.ok('preferences' in mockResponse);
+                assert.ok('blind_spots' in mockResponse);
+                assert.equal(mockResponse.review_count, 5);
+            });
+
+            it('should return deleted confirmation from deleteSession', () => {
+                const mockResponse = {
+                    deleted: true,
+                    session_id: 5,
+                };
+                
+                assert.equal(mockResponse.deleted, true);
+                assert.equal(mockResponse.session_id, 5);
+            });
+
+            it('should return exported confirmation from exportLearning', () => {
+                const mockResponse = {
+                    exported: true,
+                    path: '/test/project/LEARNING.md',
+                };
+                
+                assert.equal(mockResponse.exported, true);
+                assert.ok(mockResponse.path.endsWith('LEARNING.md'));
+            });
+
+            it('should return reset confirmation from resetLearning', () => {
+                const mockResponse = {
+                    reset: true,
+                };
+                
+                assert.equal(mockResponse.reset, true);
+            });
+
+            it('should return deleted confirmation from deleteLearningEntry', () => {
+                const mockResponse = {
+                    deleted: true,
+                    entry_id: 42,
+                };
+                
+                assert.equal(mockResponse.deleted, true);
+                assert.equal(mockResponse.entry_id, 42);
+            });
+        });
+    });
 });

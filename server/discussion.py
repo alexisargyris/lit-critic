@@ -274,8 +274,8 @@ async def handle_discussion(state: SessionState, finding: Finding, user_message:
     messages = build_discussion_messages(finding, user_message, api_user_message=api_message)
     
     try:
-        response = await state.client.create_message(
-            model=state.model_id,
+        response = await state.effective_discussion_client.create_message(
+            model=state.discussion_model_id,
             max_tokens=1024,
             messages=messages,
             system=system_prompt,
@@ -328,8 +328,8 @@ async def handle_discussion_stream(state: SessionState, finding: Finding, user_m
     
     try:
         raw_response = ""
-        async for item in state.client.stream_message(
-            model=state.model_id,
+        async for item in state.effective_discussion_client.stream_message(
+            model=state.discussion_model_id,
             max_tokens=1024,
             messages=messages,
             system=system_prompt,

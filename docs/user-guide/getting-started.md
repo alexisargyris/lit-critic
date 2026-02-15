@@ -400,7 +400,7 @@ Check the **[Templates folder](templates/)** for annotated starter files for all
 
 ## Cost Estimate
 
-Each review costs approximately:
+Each review costs approximately (examples using Anthropic models):
 
 - **Sonnet** (default): $0.10–0.15 per scene (3–4 pages)
 - **Opus**: $0.50–0.75 per scene (deepest analysis)

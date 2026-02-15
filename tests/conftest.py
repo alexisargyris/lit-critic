@@ -2,11 +2,13 @@
 Shared fixtures for lit-critic tests.
 """
 
+import sqlite3
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from server.models import Finding, LearningData, SessionState, LensResult, CoordinatorError
 from server.llm.base import LLMResponse, LLMToolResponse
+from server.db import init_db, get_connection
 
 
 @pytest.fixture
@@ -246,8 +248,27 @@ def sample_lens_results():
 
 
 @pytest.fixture
+def db_conn(tmp_path):
+    """Create an in-memory SQLite connection with the lit-critic schema."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    init_db(conn)
+    yield conn
+    conn.close()
+
+
+@pytest.fixture
+def project_db_conn(temp_project_dir):
+    """Create a real DB in the temp project directory."""
+    conn = get_connection(temp_project_dir)
+    yield conn
+    conn.close()
+
+
+@pytest.fixture
 def sample_session_state(mock_anthropic_client, sample_scene, temp_project_dir, sample_indexes, sample_learning_data):
-    """Create a sample SessionState for testing."""
+    """Create a sample SessionState for testing (no DB connection)."""
     scene_path = temp_project_dir / "chapter01.md"
     return SessionState(
         client=mock_anthropic_client,
@@ -257,3 +278,106 @@ def sample_session_state(mock_anthropic_client, sample_scene, temp_project_dir, 
         indexes=sample_indexes,
         learning=sample_learning_data,
     )
+
+
+@pytest.fixture
+def sample_session_state_with_db(mock_anthropic_client, sample_scene, temp_project_dir, sample_indexes, sample_learning_data, project_db_conn):
+    """Create a sample SessionState backed by a real SQLite database."""
+    scene_path = temp_project_dir / "chapter01.md"
+    state = SessionState(
+        client=mock_anthropic_client,
+        scene_content=sample_scene,
+        scene_path=str(scene_path),
+        project_path=temp_project_dir,
+        indexes=sample_indexes,
+        learning=sample_learning_data,
+        db_conn=project_db_conn,
+    )
+    return state
+
+
+# --- Phase 2: Management test fixtures ---
+
+@pytest.fixture
+def sample_session_summary():
+    """Mock SessionSummary data for testing."""
+    return {
+        'id': 1,
+        'scene_path': '/test/scene01.txt',
+        'status': 'completed',
+        'model': 'sonnet',
+        'created_at': '2026-02-10T10:00:00',
+        'completed_at': '2026-02-10T10:30:00',
+        'total_findings': 5,
+        'accepted_count': 3,
+        'rejected_count': 2,
+        'withdrawn_count': 0,
+    }
+
+
+@pytest.fixture
+def sample_session_detail():
+    """Mock SessionDetail with findings."""
+    return {
+        'id': 1,
+        'scene_path': '/test/scene01.txt',
+        'status': 'completed',
+        'model': 'sonnet',
+        'created_at': '2026-02-10T10:00:00',
+        'completed_at': '2026-02-10T10:30:00',
+        'total_findings': 2,
+        'accepted_count': 1,
+        'rejected_count': 1,
+        'withdrawn_count': 0,
+        'findings': [
+            {
+                'number': 1,
+                'severity': 'critical',
+                'lens': 'prose',
+                'location': 'Paragraph 1',
+                'evidence': 'Test evidence',
+                'impact': 'Test impact',
+                'options': ['Fix it'],
+                'status': 'accepted',
+                'line_start': 5,
+                'line_end': 10,
+            },
+            {
+                'number': 2,
+                'severity': 'major',
+                'lens': 'structure',
+                'location': 'Scene opening',
+                'evidence': 'Missing goal',
+                'impact': 'Reader confusion',
+                'options': ['Add goal'],
+                'status': 'rejected',
+                'line_start': 1,
+                'line_end': 3,
+            },
+        ],
+    }
+
+
+@pytest.fixture
+def sample_learning_with_ids():
+    """Learning data with entry IDs for deletion tests."""
+    return {
+        'project_name': 'Test Novel',
+        'review_count': 3,
+        'preferences': [
+            {'id': 1, 'description': '[prose] Sentence fragments OK'},
+            {'id': 2, 'description': '[structure] Prefer shorter scenes'},
+        ],
+        'blind_spots': [
+            {'id': 3, 'description': '[clarity] Pronoun ambiguity'},
+        ],
+        'resolutions': [
+            {'id': 4, 'description': 'Finding #5 — fixed'},
+        ],
+        'ambiguity_intentional': [
+            {'id': 5, 'description': 'Dream sequence'},
+        ],
+        'ambiguity_accidental': [
+            {'id': 6, 'description': 'Unclear referent (fixed)'},
+        ],
+    }

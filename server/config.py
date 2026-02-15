@@ -19,6 +19,10 @@ AVAILABLE_MODELS = {
 
 DEFAULT_MODEL = "sonnet"
 
+# Discussion model — None means "use the analysis model"
+# Can be set to any key from AVAILABLE_MODELS for a separate discussion model
+DEFAULT_DISCUSSION_MODEL = None
+
 # Backward-compatible constants (resolve from default)
 MODEL = AVAILABLE_MODELS[DEFAULT_MODEL]["id"]
 MAX_TOKENS = AVAILABLE_MODELS[DEFAULT_MODEL]["max_tokens"]
@@ -85,4 +89,5 @@ OPTIONAL_FILES = [
     "LEARNING.md",
 ]
 
-SESSION_FILE = ".lit-critic-session.json"
+SESSION_FILE = ".lit-critic-session.json"  # Legacy — kept for reference only
+DB_FILE = ".lit-critic.db"
