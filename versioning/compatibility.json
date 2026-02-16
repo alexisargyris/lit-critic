@@ -1,0 +1,25 @@
+{
+  "components": {
+    "contracts_v1": "1.0.1",
+    "core": "2.0.1",
+    "platform": "2.0.1",
+    "cli": "2.0.1",
+    "web": "2.0.0",
+    "vscode_extension": "2.0.1"
+  },
+  "compatibility": {
+    "platform": {
+      "core_major": 2,
+      "contracts_v1_major": 1
+    },
+    "cli": {
+      "platform_major": 2
+    },
+    "web": {
+      "platform_major": 2
+    },
+    "vscode_extension": {
+      "platform_major": 2
+    }
+  }
+}

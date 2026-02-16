@@ -1,0 +1,25 @@
+{
+  "response": "Fair point—given your intent, this should be softened.",
+  "status": "revised",
+  "finding_status": "revised",
+  "finding": {
+    "number": 1,
+    "severity": "minor",
+    "lens": "prose",
+    "location": "Paragraph 1",
+    "line_start": 3,
+    "line_end": 5,
+    "evidence": "Repetitive openings remain, but effect appears intentional.",
+    "impact": "May still slightly flatten rhythm for some readers.",
+    "options": [
+      "Keep current phrasing",
+      "Optionally vary one opening"
+    ],
+    "flagged_by": [
+      "prose"
+    ],
+    "ambiguity_type": null,
+    "stale": false,
+    "status": "revised"
+  }
+}

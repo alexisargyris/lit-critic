@@ -5,9 +5,16 @@ Handles the finding-by-finding review loop with auto-save to SQLite.
 Every action (accept, reject, discuss, navigate) is persisted immediately.
 """
 
-from server.models import SessionState, Finding
-from server.learning import save_learning_to_file
-from server.session import (
+from lit_platform.session_state_machine import (
+    apply_acceptance,
+    apply_discussion_status,
+    apply_rejection,
+    first_unresolved_index,
+    next_available_index,
+    next_index_for_lens,
+    record_ambiguity_answer,
+)
+from lit_platform.services import (
     detect_and_apply_scene_changes,
     review_current_finding_against_scene_edits,
     persist_finding,
@@ -15,10 +22,11 @@ from server.session import (
     persist_session_learning,
     persist_discussion_history,
     complete_session,
-    first_unresolved_finding_index,
     create_session,
+    discuss_finding_stream,
+    save_learning_to_file,
 )
-from server.discussion import handle_discussion_stream
+from lit_platform.models import SessionState, Finding
 
 from .interface import (
     print_finding,
@@ -80,33 +88,17 @@ async def run_interactive_session(
         )
         print(f"\n[Resuming: {processed} findings processed, starting at #{start_index + 1}]")
 
-    skip_to_lens = None
-
     while current < len(state.findings):
+        current = next_available_index(state.findings, current)
+        if current >= len(state.findings):
+            break
+
         # --- Scene change detection ---
         change_report = await detect_and_apply_scene_changes(state, current)
         if change_report:
             print_scene_change_report(change_report)
 
         finding = state.findings[current]
-
-        # Skip withdrawn findings
-        if finding.status == 'withdrawn':
-            current += 1
-            persist_session_index(state, current)
-            continue
-
-        if skip_to_lens:
-            lens = finding.lens.lower()
-            if skip_to_lens == 'structure' and lens == 'prose':
-                current += 1
-                persist_session_index(state, current)
-                continue
-            elif skip_to_lens == 'coherence' and lens in ('prose', 'structure'):
-                current += 1
-                persist_session_index(state, current)
-                continue
-            skip_to_lens = None
 
         total_findings = len(state.findings)
         print_finding(finding.to_dict(), current + 1, total_findings)
@@ -137,14 +129,12 @@ async def run_interactive_session(
                 print_finding(state.findings[current].to_dict(), current + 1, total_findings)
 
             elif user_lower == 'skip to structure':
-                skip_to_lens = 'structure'
-                current += 1
+                current = next_index_for_lens(state.findings, current, 'structure')
                 persist_session_index(state, current)
                 break
 
             elif user_lower == 'skip to coherence':
-                skip_to_lens = 'coherence'
-                current += 1
+                current = next_index_for_lens(state.findings, current, 'coherence')
                 persist_session_index(state, current)
                 break
 
@@ -155,11 +145,7 @@ async def run_interactive_session(
 
             # Accept
             elif user_lower == 'accept':
-                finding.status = 'accepted'
-                state.learning.session_acceptances.append({
-                    "lens": finding.lens,
-                    "pattern": finding.evidence[:100],
-                })
+                apply_acceptance(finding, state.learning)
                 persist_finding(state, finding)
                 persist_session_learning(state)
                 print("\n[Finding accepted. Moving to next.]")
@@ -170,13 +156,7 @@ async def run_interactive_session(
             # Reject
             elif user_lower == 'reject':
                 reason = input("Reason (brief): ").strip()
-                finding.status = 'rejected'
-                finding.author_response = reason
-                state.learning.session_rejections.append({
-                    "lens": finding.lens,
-                    "pattern": finding.evidence[:100],
-                    "reason": reason,
-                })
+                apply_rejection(finding, state.learning, reason)
                 persist_finding(state, finding)
                 persist_session_learning(state)
                 print("\n[Finding rejected. Moving to next.]")
@@ -186,11 +166,11 @@ async def run_interactive_session(
 
             # Ambiguity
             elif user_lower == 'intentional' and finding.ambiguity_type:
-                state.learning.session_ambiguity_answers.append({
-                    "location": finding.location,
-                    "description": finding.evidence[:100],
-                    "intentional": True,
-                })
+                record_ambiguity_answer(
+                    finding,
+                    state.learning,
+                    intentional=True,
+                )
                 persist_session_learning(state)
                 print("\n[Marked as intentional ambiguity. Moving to next.]")
                 current += 1
@@ -198,11 +178,11 @@ async def run_interactive_session(
                 break
 
             elif user_lower == 'accidental' and finding.ambiguity_type:
-                state.learning.session_ambiguity_answers.append({
-                    "location": finding.location,
-                    "description": finding.evidence[:100],
-                    "intentional": False,
-                })
+                record_ambiguity_answer(
+                    finding,
+                    state.learning,
+                    intentional=False,
+                )
                 persist_session_learning(state)
                 print("\n[Marked as accidental confusion. Moving to next.]")
                 current += 1
@@ -230,7 +210,7 @@ async def run_interactive_session(
     # Reached the end of the current traversal.
     # Only complete when every finding has a terminal outcome.
     if not complete_session(state):
-        unresolved = first_unresolved_finding_index(state.findings)
+        unresolved = first_unresolved_index(state.findings)
         if unresolved is None:
             print("\nSession paused: unresolved findings remain.")
             return
@@ -271,7 +251,7 @@ async def _handle_discussion(state: SessionState, finding: Finding,
     response = ""
     status = "continue"
 
-    async for chunk_type, data in handle_discussion_stream(state, finding, user_input):
+    async for chunk_type, data in discuss_finding_stream(state, finding, user_input):
         if chunk_type == "token":
             print(data, end="", flush=True)
         elif chunk_type == "done":
@@ -279,23 +259,22 @@ async def _handle_discussion(state: SessionState, finding: Finding,
             status = data["status"]
     print()  # newline after streaming
 
-    # Apply status and auto-save
-    if status == 'accepted':
-        finding.status = 'accepted'
+    # Apply canonical discussion status mapping and print UX message.
+    apply_discussion_status(finding, status)
+    if finding.status == 'accepted':
         print("\n[Finding accepted. Type 'continue' to proceed.]")
-    elif status in ('rejected', 'conceded'):
-        finding.status = 'rejected'
+    elif finding.status == 'rejected':
         print("\n[Finding dismissed. Type 'continue' to proceed.]")
-    elif status == 'revised':
-        finding.status = 'revised'
+    elif finding.status == 'withdrawn':
+        if status == 'conceded':
+            print("\n[Finding conceded by critic. Moving to next.]")
+        else:
+            print("\n[Finding withdrawn by critic. Moving to next.]")
+    elif finding.status == 'revised':
         print("\n[Finding revised by critic:]")
         print_finding_revision(finding)
         print("\n[Type 'continue' to proceed, or keep discussing.]")
-    elif status == 'withdrawn':
-        finding.status = 'withdrawn'
-        print("\n[Finding withdrawn by critic. Moving to next.]")
-    elif status == 'escalated':
-        finding.status = 'escalated'
+    elif finding.status == 'escalated':
         print("\n[Finding escalated by critic:]")
         print_finding_revision(finding)
         print("\n[Type 'continue' to proceed, or keep discussing.]")

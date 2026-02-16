@@ -7,26 +7,26 @@ and the subcommand implementations.
 
 from pathlib import Path
 
-from server.config import INDEX_FILES, OPTIONAL_FILES
+from lit_platform.facade import PlatformFacade
+from lit_platform.services.analysis_service import INDEX_FILES, OPTIONAL_FILES
 
 
 def load_project_files(project_path: Path) -> dict[str, str]:
     """Load all index files from the project directory."""
-    indexes = {}
+    indexes = PlatformFacade.load_legacy_indexes_from_project(
+        project_path,
+        optional_filenames=tuple(OPTIONAL_FILES),
+    )
 
     for filename in INDEX_FILES:
-        filepath = project_path / filename
-        if filepath.exists():
-            indexes[filename] = filepath.read_text(encoding='utf-8')
+        if indexes.get(filename):
             print(f"  ✓ Loaded {filename}")
         else:
             print(f"  ✗ Missing {filename}")
             indexes[filename] = ""
 
     for filename in OPTIONAL_FILES:
-        filepath = project_path / filename
-        if filepath.exists():
-            indexes[filename] = filepath.read_text(encoding='utf-8')
+        if indexes.get(filename):
             print(f"  ✓ Loaded {filename} (optional)")
 
     return indexes
@@ -36,7 +36,7 @@ def load_scene(scene_path: Path) -> str:
     """Load the scene file."""
     if not scene_path.exists():
         raise FileNotFoundError(f"Scene file not found: {scene_path}")
-    return scene_path.read_text(encoding='utf-8')
+    return PlatformFacade.load_scene_text(scene_path)
 
 
 def print_summary(results: dict):

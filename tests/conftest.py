@@ -6,9 +6,9 @@ import sqlite3
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
-from server.models import Finding, LearningData, SessionState, LensResult, CoordinatorError
-from server.llm.base import LLMResponse, LLMToolResponse
-from server.db import init_db, get_connection
+from lit_platform.runtime.models import Finding, LearningData, SessionState, LensResult, CoordinatorError
+from lit_platform.runtime.llm.base import LLMResponse, LLMToolResponse
+from lit_platform.runtime.db import init_db, get_connection
 
 
 @pytest.fixture

@@ -4,7 +4,7 @@ Tests for the server.learning module (SQLite-backed).
 
 import pytest
 from pathlib import Path
-from server.learning import (
+from lit_platform.runtime.learning import (
     load_learning,
     load_learning_from_db,
     persist_learning,
@@ -13,8 +13,8 @@ from server.learning import (
     save_learning_to_file,
     update_learning_from_session,
 )
-from server.db import get_connection, LearningStore
-from server.models import LearningData
+from lit_platform.runtime.db import get_connection, LearningStore
+from lit_platform.runtime.models import LearningData
 
 
 class TestLoadLearning:

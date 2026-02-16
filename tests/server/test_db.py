@@ -3,8 +3,8 @@ Tests for the server.db SQLite storage layer.
 """
 
 import pytest
-from server.db import SessionStore, FindingStore, LearningStore, CATEGORY_PREFERENCE, CATEGORY_BLIND_SPOT
-from server.models import LearningData
+from lit_platform.runtime.db import SessionStore, FindingStore, LearningStore, CATEGORY_PREFERENCE, CATEGORY_BLIND_SPOT
+from lit_platform.runtime.models import LearningData
 
 
 class TestSessionStore:

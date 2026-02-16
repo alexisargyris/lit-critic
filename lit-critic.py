@@ -18,7 +18,7 @@ The project directory should contain:
     - LEARNING.md (optional)
 
 This file is a thin wrapper around the lit-critic package.
-For the modular implementation, see the server/, cli/, and web/ directories.
+For the modular implementation, see the core/, lit_platform/, cli/, and web/ directories.
 """
 
 import asyncio

@@ -128,6 +128,12 @@ main {
     font-size: 0.8rem;
 }
 
+.form-group .required {
+    font-weight: 600;
+    color: var(--accent);
+    font-size: 0.8rem;
+}
+
 .form-group input[type="text"],
 .form-group input[type="password"],
 .form-group select {
@@ -756,6 +762,146 @@ main {
 
 @keyframes spin {
     to { transform: rotate(360deg); }
+}
+
+/* --- Breadcrumb Navigation --- */
+
+.breadcrumb {
+    display: flex;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.breadcrumb a {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.breadcrumb a:hover {
+    text-decoration: underline;
+}
+
+/* --- Header Navigation --- */
+
+.header-nav {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.75rem;
+}
+
+.header-nav a {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 500;
+    padding: 0.35rem 0.75rem;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg-input);
+}
+
+.header-nav a:hover {
+    border-color: var(--accent);
+}
+
+/* --- Sessions Table --- */
+
+.sessions-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.75rem;
+}
+
+.sessions-table th {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 2px solid var(--border);
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.sessions-table td {
+    padding: 0.65rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.85rem;
+}
+
+.sessions-table tr:hover {
+    background: rgba(74, 158, 255, 0.05);
+}
+
+.sessions-table .scene-name {
+    font-weight: 600;
+    color: var(--text-heading);
+}
+
+.sessions-table .session-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+/* --- Learning Components --- */
+
+.learning-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 0.5rem;
+}
+
+.learning-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.learning-list {
+    list-style: none;
+    padding: 0;
+    margin: 0.75rem 0 0 0;
+}
+
+.learning-list li {
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.35rem;
+    background: var(--bg-input);
+    border-radius: 4px;
+    font-size: 0.85rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.learning-list li:hover {
+    background: rgba(74, 158, 255, 0.08);
+}
+
+.learning-list .entry-text {
+    flex: 1;
+}
+
+.count-badge {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 0.15rem 0.45rem;
+    border-radius: 10px;
+    margin-left: 0.5rem;
+}
+
+/* --- Modal Variants --- */
+
+.modal-large {
+    max-width: 700px;
 }
 
 /* --- Utilities --- */

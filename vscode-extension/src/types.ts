@@ -43,13 +43,32 @@ export interface AnalysisSummary {
     project_path: string;
     total_findings: number;
     current_index: number;
-    skip_minor: boolean;
     glossary_issues: string[];
     counts: { critical: number; major: number; minor: number };
     lens_counts: Record<string, { critical: number; major: number; minor: number }>;
     model: { name: string; id: string; label: string };
+    discussion_model?: { name: string; id: string; label: string } | null;
     learning: { review_count: number; preferences: number; blind_spots: number };
     error?: string;
+    findings_status?: Array<{
+        number: number;
+        severity: string;
+        lens: string;
+        status: string;
+        location: string;
+        evidence: string;
+        line_start: number | null;
+        line_end: number | null;
+    }>;
+}
+
+export interface ResumeErrorDetail {
+    code?: string;
+    message?: string;
+    saved_scene_path?: string;
+    attempted_scene_path?: string;
+    project_path?: string;
+    override_provided?: boolean;
 }
 
 /** Response from GET /api/session */
@@ -142,4 +161,54 @@ export interface CheckSessionResponse {
     saved_at?: string;
     current_index?: number;
     total_findings?: number;
+}
+
+/** Session summary from GET /api/sessions */
+export interface SessionSummary {
+    id: number;
+    status: 'active' | 'completed' | 'abandoned';
+    scene_path: string;
+    model: string;
+    created_at: string;
+    completed_at?: string;
+    total_findings: number;
+    accepted_count: number;
+    rejected_count: number;
+    withdrawn_count: number;
+}
+
+/** Session detail from GET /api/sessions/{id} */
+export interface SessionDetail extends SessionSummary {
+    scene_hash: string;
+    current_index: number;
+    glossary_issues: string[];
+    findings: Array<{
+        id: number;
+        number: number;
+        severity: string;
+        lens: string;
+        status: string;
+        location: string;
+        evidence: string;
+        impact?: string;
+        options?: string[];
+        flagged_by?: string[];
+        author_response?: string;
+        discussion_turns?: Array<{ role: string; content: string }>;
+        revision_history?: Array<Record<string, unknown>>;
+        outcome_reason?: string;
+        line_start: number | null;
+        line_end: number | null;
+    }>;
+}
+
+/** Learning data from GET /api/learning */
+export interface LearningData {
+    project_name: string;
+    review_count: number;
+    preferences: Array<{ id?: number; description: string; created_at?: string }>;
+    blind_spots: Array<{ id?: number; description: string; created_at?: string }>;
+    resolutions: Array<{ id?: number; description: string; created_at?: string }>;
+    ambiguity_intentional: Array<{ id?: number; description: string; created_at?: string }>;
+    ambiguity_accidental: Array<{ id?: number; description: string; created_at?: string }>;
 }

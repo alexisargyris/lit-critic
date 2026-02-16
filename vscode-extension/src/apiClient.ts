@@ -15,6 +15,10 @@ import {
     AdvanceResponse,
     ServerConfig,
     SessionInfo,
+    SessionSummary,
+    SessionDetail,
+    LearningData,
+    ResumeErrorDetail,
 } from './types';
 
 export class ApiClient {
@@ -59,7 +63,20 @@ export class ApiClient {
                         let detail = data;
                         try {
                             const parsed = JSON.parse(data);
-                            detail = parsed.detail || data;
+                            // Handle FastAPI validation errors (422)
+                            if (res.statusCode === 422 && parsed.detail && Array.isArray(parsed.detail)) {
+                                // Format validation errors nicely
+                                const errors = parsed.detail.map((err: any) => 
+                                    `${err.loc?.join('.') || 'unknown'}: ${err.msg}`
+                                ).join(', ');
+                                detail = `Validation error: ${errors}`;
+                            } else if (typeof parsed.detail === 'string') {
+                                detail = parsed.detail;
+                            } else if (typeof parsed.detail === 'object') {
+                                detail = JSON.stringify(parsed.detail);
+                            } else {
+                                detail = data;
+                            }
                         } catch {
                             // keep raw data
                         }
@@ -79,6 +96,24 @@ export class ApiClient {
             }
             req.end();
         });
+    }
+
+    private extractResumeErrorDetail(message: string): ResumeErrorDetail | null {
+        const match = message.match(/^HTTP\s+\d+:\s+(\{.*\})$/);
+        if (!match) {
+            return null;
+        }
+
+        try {
+            const detail = JSON.parse(match[1]) as ResumeErrorDetail;
+            if (detail && detail.code === 'scene_path_not_found') {
+                return detail;
+            }
+        } catch {
+            // ignore parse failures
+        }
+
+        return null;
     }
 
     /**
@@ -172,11 +207,12 @@ export class ApiClient {
     }
 
     /** POST /api/analyze — start a new analysis. */
-    async analyze(scenePath: string, projectPath: string, model?: string, apiKey?: string): Promise<AnalysisSummary> {
+    async analyze(scenePath: string, projectPath: string, model?: string, discussionModel?: string, apiKey?: string): Promise<AnalysisSummary> {
         return this.request<AnalysisSummary>('POST', '/api/analyze', {
             scene_path: scenePath,
             project_path: projectPath,
             ...(model ? { model } : {}),
+            ...(discussionModel ? { discussion_model: discussionModel } : {}),
             ...(apiKey ? { api_key: apiKey } : {}),
         });
     }
@@ -193,11 +229,74 @@ export class ApiClient {
     }
 
     /** POST /api/resume — resume a saved session. */
-    async resume(projectPath: string, apiKey?: string): Promise<AnalysisSummary> {
+    async resume(projectPath: string, apiKey?: string, scenePathOverride?: string): Promise<AnalysisSummary> {
         return this.request<AnalysisSummary>('POST', '/api/resume', {
             project_path: projectPath,
             ...(apiKey ? { api_key: apiKey } : {}),
+            ...(scenePathOverride ? { scene_path_override: scenePathOverride } : {}),
         });
+    }
+
+    /** POST /api/resume-session — resume a specific active session by id. */
+    async resumeSessionById(
+        projectPath: string,
+        sessionId: number,
+        apiKey?: string,
+        scenePathOverride?: string,
+    ): Promise<AnalysisSummary> {
+        return this.request<AnalysisSummary>('POST', '/api/resume-session', {
+            project_path: projectPath,
+            session_id: sessionId,
+            ...(apiKey ? { api_key: apiKey } : {}),
+            ...(scenePathOverride ? { scene_path_override: scenePathOverride } : {}),
+        });
+    }
+
+    async resumeWithRecovery(
+        projectPath: string,
+        apiKey: string | undefined,
+        getScenePathOverride: (detail: ResumeErrorDetail) => Promise<string | undefined>,
+    ): Promise<AnalysisSummary> {
+        try {
+            return await this.resume(projectPath, apiKey);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            const detail = this.extractResumeErrorDetail(message);
+            if (!detail) {
+                throw err;
+            }
+
+            const override = await getScenePathOverride(detail);
+            if (!override || !override.trim()) {
+                throw new Error('Resume cancelled by user.');
+            }
+
+            return this.resume(projectPath, apiKey, override.trim());
+        }
+    }
+
+    async resumeSessionByIdWithRecovery(
+        projectPath: string,
+        sessionId: number,
+        apiKey: string | undefined,
+        getScenePathOverride: (detail: ResumeErrorDetail) => Promise<string | undefined>,
+    ): Promise<AnalysisSummary> {
+        try {
+            return await this.resumeSessionById(projectPath, sessionId, apiKey);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            const detail = this.extractResumeErrorDetail(message);
+            if (!detail) {
+                throw err;
+            }
+
+            const override = await getScenePathOverride(detail);
+            if (!override || !override.trim()) {
+                throw new Error('Resume cancelled by user.');
+            }
+
+            return this.resumeSessionById(projectPath, sessionId, apiKey, override.trim());
+        }
     }
 
     /** POST /api/check-session — check if a saved session exists. */
@@ -287,9 +386,9 @@ export class ApiClient {
         return this.request<AdvanceResponse>('POST', '/api/finding/goto', { index });
     }
 
-    /** POST /api/finding/skip-minor — skip minor findings. */
-    async skipMinor(): Promise<FindingResponse> {
-        return this.request<FindingResponse>('POST', '/api/finding/skip-minor');
+    /** POST /api/finding/review — re-check current finding against scene edits. */
+    async reviewFinding(): Promise<FindingResponse> {
+        return this.request<FindingResponse>('POST', '/api/finding/review');
     }
 
     /** POST /api/finding/skip-to/{lens} — skip to a specific lens group. */
@@ -297,18 +396,49 @@ export class ApiClient {
         return this.request<FindingResponse>('POST', `/api/finding/skip-to/${lens}`);
     }
 
-    /** POST /api/session/save — save the current session. */
-    async saveSession(): Promise<{ saved: boolean; path: string }> {
-        return this.request<{ saved: boolean; path: string }>('POST', '/api/session/save');
-    }
-
     /** DELETE /api/session — clear the session. */
     async clearSession(): Promise<{ deleted: boolean }> {
         return this.request<{ deleted: boolean }>('DELETE', '/api/session');
     }
 
-    /** POST /api/learning/save — save LEARNING.md. */
-    async saveLearning(): Promise<{ saved: boolean; path: string }> {
-        return this.request<{ saved: boolean; path: string }>('POST', '/api/learning/save');
+    // ------------------------------------------------------------------
+    // Management API endpoints (Phase 2)
+    // ------------------------------------------------------------------
+
+    /** GET /api/sessions — list all sessions for a project. */
+    async listSessions(projectPath: string): Promise<{ sessions: SessionSummary[] }> {
+        return this.request<{ sessions: SessionSummary[] }>('GET', `/api/sessions?project_path=${encodeURIComponent(projectPath)}`);
+    }
+
+    /** GET /api/sessions/{id} — get detailed info for a session. */
+    async getSessionDetail(sessionId: number, projectPath: string): Promise<SessionDetail> {
+        return this.request<SessionDetail>('GET', `/api/sessions/${sessionId}?project_path=${encodeURIComponent(projectPath)}`);
+    }
+
+    /** DELETE /api/sessions/{id} — delete a session. */
+    async deleteSession(sessionId: number, projectPath: string): Promise<{ deleted: boolean; session_id: number }> {
+        return this.request<{ deleted: boolean; session_id: number }>('DELETE', `/api/sessions/${sessionId}?project_path=${encodeURIComponent(projectPath)}`);
+    }
+
+    /** GET /api/learning — get learning data for a project. */
+    async getLearning(projectPath: string): Promise<LearningData> {
+        return this.request<LearningData>('GET', `/api/learning?project_path=${encodeURIComponent(projectPath)}`);
+    }
+
+    /** POST /api/learning/export — export LEARNING.md. */
+    async exportLearning(projectPath: string): Promise<{ exported: boolean; path: string }> {
+        return this.request<{ exported: boolean; path: string }>('POST', '/api/learning/export', {
+            project_path: projectPath,
+        });
+    }
+
+    /** DELETE /api/learning — reset all learning data. */
+    async resetLearning(projectPath: string): Promise<{ reset: boolean }> {
+        return this.request<{ reset: boolean }>('DELETE', `/api/learning?project_path=${encodeURIComponent(projectPath)}`);
+    }
+
+    /** DELETE /api/learning/entries/{id} — delete a learning entry. */
+    async deleteLearningEntry(entryId: number, projectPath: string): Promise<{ deleted: boolean; entry_id: number }> {
+        return this.request<{ deleted: boolean; entry_id: number }>('DELETE', `/api/learning/entries/${entryId}?project_path=${encodeURIComponent(projectPath)}`);
     }
 }

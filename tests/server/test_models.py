@@ -3,7 +3,7 @@ Tests for lit-critic.models module.
 """
 
 import pytest
-from server.models import Finding, LearningData, LensResult, SessionState
+from lit_platform.runtime.models import Finding, LearningData, LensResult, SessionState
 
 
 class TestLearningData:

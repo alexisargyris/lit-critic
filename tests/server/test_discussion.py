@@ -10,7 +10,7 @@ Covers all 4 phases:
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from server.discussion import (
+from lit_platform.runtime.discussion import (
     handle_discussion,
     handle_discussion_stream,
     parse_discussion_response,
@@ -19,7 +19,7 @@ from server.discussion import (
     _apply_discussion_side_effects,
     _describe_changes,
 )
-from server.models import Finding
+from lit_platform.runtime.models import Finding
 
 
 class TestParseDiscussionResponse:

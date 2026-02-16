@@ -1,0 +1,62 @@
+{
+  "glossary_issues": [
+    "Term 'Lumina' appears before glossary definition"
+  ],
+  "summary": {
+    "prose": {
+      "critical": 0,
+      "major": 1,
+      "minor": 0
+    },
+    "structure": {
+      "critical": 0,
+      "major": 0,
+      "minor": 0
+    },
+    "coherence": {
+      "critical": 0,
+      "major": 0,
+      "minor": 1
+    }
+  },
+  "conflicts": [],
+  "ambiguities": [],
+  "findings": [
+    {
+      "number": 1,
+      "severity": "major",
+      "lens": "prose",
+      "location": "Paragraph 1",
+      "line_start": 3,
+      "line_end": 5,
+      "evidence": "Repetitive sentence starts",
+      "impact": "Monotonous rhythm",
+      "options": [
+        "Vary openings"
+      ],
+      "flagged_by": [
+        "prose"
+      ],
+      "ambiguity_type": null,
+      "stale": false
+    },
+    {
+      "number": 2,
+      "severity": "minor",
+      "lens": "clarity",
+      "location": "Paragraph 2",
+      "line_start": 8,
+      "line_end": 10,
+      "evidence": "Unclear referent for she",
+      "impact": "Reader confusion",
+      "options": [
+        "Name the character"
+      ],
+      "flagged_by": [
+        "clarity"
+      ],
+      "ambiguity_type": "unclear",
+      "stale": false
+    }
+  ]
+}

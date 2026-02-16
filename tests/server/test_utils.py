@@ -9,13 +9,13 @@ Covers:
 """
 
 import pytest
-from server.utils import (
+from lit_platform.runtime.utils import (
     number_lines,
     compute_line_mapping,
     adjust_finding_lines,
     apply_scene_change,
 )
-from server.models import Finding
+from lit_platform.runtime.models import Finding
 
 
 class TestNumberLines:

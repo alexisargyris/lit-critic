@@ -7,6 +7,8 @@ import asyncio
 import json
 import logging
 
+from lit_platform.session_state_machine import apply_re_evaluation_result
+
 from .llm import LLMClient
 from .config import MODEL, MAX_TOKENS, COORDINATOR_MAX_TOKENS
 from .models import Finding, LensResult, CoordinatorError
@@ -428,30 +430,10 @@ async def re_evaluate_finding(client: LLMClient, finding: Finding, scene_content
 
         result = json.loads(raw)
 
-        if result.get("status") == "updated":
-            # Apply updates to the finding
-            finding.line_start = result.get("line_start", finding.line_start)
-            finding.line_end = result.get("line_end", finding.line_end)
-            finding.location = result.get("location", finding.location)
-            if result.get("evidence"):
-                finding.evidence = result["evidence"]
-            if result.get("severity") and result["severity"] in {"critical", "major", "minor"}:
-                finding.severity = result["severity"]
-            finding.stale = False
-            return {"status": "updated", "finding_number": finding.number}
-
-        elif result.get("status") == "withdrawn":
-            finding.status = "withdrawn"
-            finding.stale = False
-            finding.outcome_reason = f"Withdrawn after re-evaluation: {result.get('reason', 'edit resolved the issue')}"
-            return {"status": "withdrawn", "finding_number": finding.number,
-                    "reason": result.get("reason", "")}
-
-        else:
+        outcome = apply_re_evaluation_result(finding, result)
+        if outcome.get("status") == "error":
             logger.warning("Re-evaluation returned unexpected status: %s", result.get("status"))
-            finding.stale = False
-            return {"status": "error", "finding_number": finding.number,
-                    "error": f"Unexpected status: {result.get('status')}"}
+        return outcome
 
     except (json.JSONDecodeError, Exception) as e:
         logger.warning("Re-evaluation failed for finding #%d: %s", finding.number, e)

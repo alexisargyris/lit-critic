@@ -3,8 +3,10 @@ Tests for the server.session module (SQLite-backed).
 """
 
 import pytest
+import sqlite3
 from pathlib import Path
-from server.session import (
+from unittest.mock import AsyncMock, patch
+from lit_platform.runtime.session import (
     compute_scene_hash,
     create_session,
     check_active_session,
@@ -23,8 +25,8 @@ from server.session import (
     all_findings_considered,
     detect_and_apply_scene_changes,
 )
-from server.db import SessionStore, FindingStore
-from server.models import Finding
+from lit_platform.runtime.db import SessionStore, FindingStore
+from lit_platform.runtime.models import Finding
 
 
 class TestComputeSceneHash:
@@ -236,6 +238,28 @@ class TestAutoSaveHelpers:
         s = SessionStore.get(state.db_conn, state.session_id)
         assert s["status"] == "active"
 
+    def test_persist_finding_retries_on_sqlite_lock(self, sample_session_state_with_db, monkeypatch):
+        state = sample_session_state_with_db
+        finding = Finding(number=1, severity="major", lens="prose", location="P1")
+        state.findings = [finding]
+        create_session(state)
+
+        finding.status = "accepted"
+        calls = {"count": 0}
+
+        def _flaky_update(*args, **kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise sqlite3.OperationalError("database is locked")
+            return None
+
+        monkeypatch.setattr("lit_platform.runtime.session.FindingStore.update", _flaky_update)
+        monkeypatch.setattr("lit_platform.runtime.session.time.sleep", lambda *_: None)
+
+        persist_finding(state, finding)
+
+        assert calls["count"] == 2
+
 
 class TestCompletionSemantics:
     def test_all_findings_considered_requires_terminal_statuses(self):
@@ -279,8 +303,6 @@ class TestDetectAndApplySceneChanges:
         assert result is None
 
     async def test_detects_change(self, sample_session_state):
-        from unittest.mock import AsyncMock, patch
-
         finding = Finding(number=1, severity="major", lens="prose",
                          location="P1", line_start=8, line_end=8)
         sample_session_state.findings = [finding]
@@ -289,12 +311,40 @@ class TestDetectAndApplySceneChanges:
         new_content = "New line\n" + sample_session_state.scene_content
         scene_path.write_text(new_content, encoding='utf-8')
 
-        with patch('server.api.re_evaluate_finding', new_callable=AsyncMock):
+        with patch('lit_platform.runtime.api.re_evaluate_finding', new_callable=AsyncMock):
             result = await detect_and_apply_scene_changes(sample_session_state, 0)
 
         assert result is not None
         assert result["changed"] is True
         assert sample_session_state.scene_content == new_content
+
+    async def test_skips_re_evaluation_for_withdrawn_and_rejected_stale_findings(self, sample_session_state):
+        findings = [
+            Finding(number=1, severity="major", lens="prose", location="P1", status="pending"),
+            Finding(number=2, severity="major", lens="prose", location="P2", status="withdrawn"),
+            Finding(number=3, severity="major", lens="prose", location="P3", status="rejected"),
+        ]
+        sample_session_state.findings = findings
+
+        scene_path = Path(sample_session_state.scene_path)
+        scene_path.write_text("Changed\n" + sample_session_state.scene_content, encoding="utf-8")
+
+        def _mark_all_stale(passed_findings, old_content, new_content, start_index=0):
+            for finding in passed_findings[start_index:]:
+                finding.stale = True
+            return {"adjusted": 0, "stale": len(passed_findings), "no_lines": 0}
+
+        re_eval = AsyncMock(return_value={"status": "updated", "finding_number": 1})
+        with patch("lit_platform.runtime.session.apply_scene_change", side_effect=_mark_all_stale), patch(
+            "lit_platform.runtime.api.re_evaluate_finding", new=re_eval
+        ):
+            result = await detect_and_apply_scene_changes(sample_session_state, 0)
+
+        assert result is not None
+        assert result["changed"] is True
+        assert len(result["re_evaluated"]) == 1
+        assert result["re_evaluated"][0]["finding_number"] == 1
+        assert re_eval.await_count == 1
 
     async def test_returns_none_when_file_missing(self, sample_session_state):
         import os

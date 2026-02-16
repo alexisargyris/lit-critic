@@ -17,23 +17,32 @@ import argparse
 import sys
 from pathlib import Path
 
-from server.config import (
-    AVAILABLE_MODELS, DEFAULT_MODEL,
-    resolve_model, resolve_api_key,
+from lit_platform.session_state_machine import restore_learning_session
+from lit_platform.models import SessionState, Finding, CoordinatorError
+from lit_platform.services.analysis_service import (
+    AVAILABLE_MODELS,
+    DEFAULT_MODEL,
+    create_client,
+    resolve_api_key,
+    resolve_model,
+    run_analysis,
 )
-from server.db import get_connection, SessionStore
-from server.llm import create_client
-from server.models import SessionState, Finding, CoordinatorError
-from server.learning import (
-    load_learning, load_learning_from_db,
-    save_learning_to_file, export_learning_markdown,
+from lit_platform.services import (
+    check_active_session,
+    load_active_session,
+    validate_session,
+    complete_active_session,
+    abandon_active_session,
+    delete_session_by_id,
+    list_sessions,
+    get_session_detail,
+    load_learning,
+    load_learning_from_db,
+    save_learning_to_file,
+    export_learning_markdown,
+    reset_learning,
 )
-from server.session import (
-    check_active_session, load_active_session, validate_session,
-    complete_active_session, abandon_active_session,
-    delete_session_by_id, list_sessions, get_session_detail,
-)
-from server.api import run_analysis
+from lit_platform.persistence import SessionStore
 
 from .interface import load_project_files, load_scene, print_summary
 from .session_loop import run_interactive_session
@@ -253,10 +262,7 @@ async def cmd_resume(args):
     learning = load_learning_from_db(conn)
 
     # Restore session learning state
-    ls = session_data.get("learning_session", {})
-    learning.session_rejections = ls.get("session_rejections", [])
-    learning.session_acceptances = ls.get("session_acceptances", [])
-    learning.session_ambiguity_answers = ls.get("session_ambiguity_answers", [])
+    restore_learning_session(learning, session_data.get("learning_session", {}))
 
     print(f"  ✓ Review count: {learning.review_count}")
     print(f"  ✓ Preferences: {len(learning.preferences)}")
@@ -474,12 +480,7 @@ def cmd_learning(args):
         except (EOFError, KeyboardInterrupt):
             return
         if confirm.strip().lower() in ('y', 'yes'):
-            from server.db import LearningStore
-            conn = get_connection(project_path)
-            try:
-                LearningStore.reset(conn)
-            finally:
-                conn.close()
+            reset_learning(project_path)
             print("✓ Learning data reset.")
         else:
             print("Cancelled.")

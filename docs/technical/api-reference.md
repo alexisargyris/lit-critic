@@ -1,6 +1,6 @@
 # API Reference
 
-Complete REST API documentation for the lit-critic FastAPI backend.
+Complete REST API documentation for the lit-critic Platform API surface.
 
 **Base URL:** `http://localhost:8000/api` (default)
 
@@ -8,11 +8,22 @@ Complete REST API documentation for the lit-critic FastAPI backend.
 
 ## Overview
 
-The lit-critic backend exposes a REST API that all interfaces (Web UI, VS Code Extension) use for communication. The CLI uses direct Python imports but could also use this API.
+The lit-critic Web/API surface exposes `/api/*` endpoints used by all interfaces (CLI, Web UI, VS Code Extension) for workflow operations.
+
+### Architectural Boundary
+
+- `/api/*` endpoints are the **Platform-facing** surface for clients.
+- Platform orchestrates workflow/persistence and delegates stateless reasoning to Core (`/v1/*` contract endpoints).
+- Clients should not call Core directly in normal operation.
 
 ### Authentication
 
 Currently, the API key is passed in request bodies (not in headers). This is suitable for local-only deployment.
+
+For remote deployments, use a trusted gateway and transport security; see:
+
+- `docs/technical/security-remote-core.md`
+- `docs/technical/reliability-policy.md`
 
 ### Content Type
 
@@ -725,7 +736,7 @@ Discuss the current finding (non-streaming).
 **Status Codes:**
 - `200 OK` Discussion completed
 - `404 Not Found` No current finding
-- `500 Internal Server Error` Claude API error
+- `500 Internal Server Error` Provider/Core processing error
 
 ---
 
@@ -768,13 +779,13 @@ data: {
 }
 ```
 
-`discussion_turns` is canonical backend state: clients should re-render from
+`discussion_turns` is canonical Platform state: clients should re-render from
 this array after a discussion completes so active and historical views stay in sync.
 
 **3. Error**
 ```
 event: error
-data: {"error": "Claude API error: ..."}
+data: {"error": "Provider API error: ..."}
 ```
 
 **Status Codes:**
@@ -921,7 +932,7 @@ interface Summary {
 - `200 OK` Request succeeded
 - `400 Bad Request` Invalid request (missing fields, invalid values)
 - `404 Not Found` Resource not found (no session, no finding, etc.)
-- `500 Internal Server Error` Server-side error (Claude API failure, file I/O error)
+- `500 Internal Server Error` Platform/Core/provider failure
 
 ---
 
@@ -987,6 +998,8 @@ Not recommended for public deployment without:
 - Rate limiting
 - HTTPS/TLS
 
+For remote Core topologies, enforce gateway-based auth + TLS and keep Core non-publicly reachable.
+
 ---
 
 ## See Also
@@ -994,3 +1007,5 @@ Not recommended for public deployment without:
 - **[Architecture Guide](architecture.md)** System design and data flow
 - **[Testing Guide](testing.md)** API testing
 - **[Installation Guide](installation.md)** Setup for development
+- **[Remote Core Security](security-remote-core.md)** Auth/TLS guidance for remote Core deployments
+- **[Reliability Policy](reliability-policy.md)** Retry/backoff/idempotency policy

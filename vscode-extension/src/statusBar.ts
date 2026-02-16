@@ -23,8 +23,8 @@ export class StatusBar implements vscode.Disposable {
     /** No active session. */
     setReady(): void {
         this.item.text = '$(book) lit-critic';
-        this.item.tooltip = 'Click to analyze current scene';
-        this.item.command = 'literaryCritic.analyze';
+        this.item.tooltip = 'lit-critic ready';
+        this.item.command = undefined;
     }
 
     /** Analysis is running. */
@@ -38,21 +38,21 @@ export class StatusBar implements vscode.Disposable {
     setProgress(current: number, total: number): void {
         this.item.text = `$(book) ${current}/${total} findings`;
         this.item.tooltip = `lit-critic: ${current} of ${total} findings reviewed`;
-        this.item.command = 'literaryCritic.nextFinding';
+        this.item.command = undefined;
     }
 
     /** All findings processed. */
     setComplete(): void {
         this.item.text = '$(book) Review complete';
         this.item.tooltip = 'All findings have been reviewed';
-        this.item.command = 'literaryCritic.analyze';
+        this.item.command = undefined;
     }
 
     /** Server error or not running. */
     setError(message: string): void {
         this.item.text = '$(error) lit-critic';
         this.item.tooltip = message;
-        this.item.command = 'literaryCritic.analyze';
+        this.item.command = undefined;
     }
 
     dispose(): void {

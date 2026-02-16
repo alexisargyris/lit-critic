@@ -3,13 +3,13 @@ Tests for lit-critic.prompts module.
 """
 
 import pytest
-from server.prompts import (
+from lit_platform.runtime.prompts import (
     get_lens_prompt,
     get_coordinator_prompt,
     get_discussion_system_prompt,
     build_discussion_messages,
 )
-from server.models import Finding, LensResult
+from lit_platform.runtime.models import Finding, LensResult
 
 
 class TestGetLensPrompt:

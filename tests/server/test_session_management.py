@@ -7,11 +7,11 @@ Tests list_sessions(), get_session_detail(), delete_session_by_id()
 import pytest
 from datetime import datetime
 from pathlib import Path
-from server.session import (
+from lit_platform.runtime.session import (
     list_sessions, get_session_detail, delete_session_by_id,
     create_session, complete_session, abandon_session, load_active_session
 )
-from server.models import Finding, LearningData
+from lit_platform.runtime.models import Finding, LearningData
 
 
 class TestListSessions:

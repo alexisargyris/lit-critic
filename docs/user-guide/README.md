@@ -118,7 +118,7 @@ No. You can reject or discuss any finding. The tool adapts to your preferences o
 - **Web UI** Visual, mouse-friendly, browser-based
 - **VS Code** Native editor integration with squiggly underlines
 
-All three share the same backend and session files. Use whichever fits your workflow.
+All three use the same Platform-managed workflow and project data. Use whichever fits your workflow.
 
 ### "Can I use lit-critic for novels not written in English?"
 

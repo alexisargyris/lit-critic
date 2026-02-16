@@ -1,6 +1,10 @@
 # Installation Guide (Developers)
 
-This guide covers developer setup for contributing to lit-critic (short for Literary Critic).
+This guide covers developer setup for lit-critic under the current architecture:
+
+- **Core (`core/`)** stateless reasoning endpoints
+- **Platform (`lit_platform/`)** workflow and persistence ownership
+- **Clients (`cli/`, `web/`, `vscode-extension/`)** thin interaction layers
 
 ---
 
@@ -8,55 +12,54 @@ This guide covers developer setup for contributing to lit-critic (short for Lite
 
 ### Required
 
-- **Python 3.10+**
-- **Node.js 16+** (for VS Code extension)
-- **Git**
-- **At least one LLM API key:** Anthropic (`ANTHROPIC_API_KEY`) or OpenAI (`OPENAI_API_KEY`)
+- Python 3.10+
+- Node.js 16+ (VS Code extension)
+- Git
+- At least one provider API key:
+  - `ANTHROPIC_API_KEY`
+  - `OPENAI_API_KEY`
 
 ### Optional
 
-- **VS Code** (for extension development)
-- **virtual environment tool** (venv, conda, pyenv)
+- VS Code (extension development)
+- virtualenv/conda/pyenv
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Clone the repository
+# 1) Clone
 git clone https://github.com/alexisargyris/lit-critic.git
 cd lit-critic
 
-# 2. Create virtual environment
+# 2) Virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# 3. Install Python dependencies
+# 3) Install dependencies
 pip install -r requirements.txt
 
-# 4. Set API key
+# 4) Configure provider key(s)
 export ANTHROPIC_API_KEY="sk-ant-..."  # macOS/Linux
-# OR
-setx ANTHROPIC_API_KEY "sk-ant-..."    # Windows
+# or on Windows Command Prompt:
+setx ANTHROPIC_API_KEY "sk-ant-..."
 
-# 5. Run CLI
+# 5) Run CLI help
 python lit-critic.py --help
 
-# 6. Run Web UI
+# 6) Run Web/API surface
 python lit-critic-web.py
 
-# 7. Install TypeScript dependencies (for VS Code extension)
-cd vscode-extension
-npm install
+# 7) Install extension dependencies
+cd vscode-extension && npm install
 ```
 
 ---
 
-## Detailed Setup
+## Python Environment Options
 
-### 1. Python Environment
-
-#### Option A: venv (Recommended)
+### venv (recommended)
 
 ```bash
 python -m venv venv
@@ -64,14 +67,14 @@ source venv/bin/activate  # macOS/Linux
 venv\Scripts\activate     # Windows
 ```
 
-#### Option B: conda
+### conda
 
 ```bash
 conda create -n lit-critic python=3.10
 conda activate lit-critic
 ```
 
-#### Option C: pyenv
+### pyenv
 
 ```bash
 pyenv install 3.10.0
@@ -81,14 +84,15 @@ pyenv activate lit-critic
 
 ---
 
-### 2. Install Dependencies
+## Dependency Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**Contents of requirements.txt:**
-```
+Common dependencies include:
+
+```text
 anthropic>=0.34.0
 openai>=1.0.0
 fastapi>=0.115.0
@@ -97,459 +101,174 @@ pydantic>=2.0.0
 python-multipart
 ```
 
-**Development dependencies** (optional):
+Dev/test extras:
+
 ```bash
 pip install pytest pytest-cov pytest-asyncio
 ```
 
 ---
 
-### 3. API Key Configuration
+## API Key Configuration
 
-You need at least one API key. Set the environment variable for whichever provider you want to use:
+Set key(s) for providers you use.
 
-#### Option A: Environment Variable (Recommended)
-
-**Anthropic (Claude models):**
+### Anthropic
 
 ```bash
 # macOS/Linux
-export ANTHROPIC_API_KEY="sk-ant-your-key-here"
-# Windows (Command Prompt)
-setx ANTHROPIC_API_KEY "sk-ant-your-key-here"
-# Windows (PowerShell)
-$env:ANTHROPIC_API_KEY = "sk-ant-your-key-here"
+export ANTHROPIC_API_KEY="sk-ant-your-key"
+
+# Windows Command Prompt
+setx ANTHROPIC_API_KEY "sk-ant-your-key"
+
+# Windows PowerShell
+$env:ANTHROPIC_API_KEY = "sk-ant-your-key"
 ```
 
-**OpenAI (GPT/o-series models):**
+### OpenAI
 
 ```bash
 # macOS/Linux
-export OPENAI_API_KEY="sk-your-key-here"
-# Windows (Command Prompt)
-setx OPENAI_API_KEY "sk-your-key-here"
-# Windows (PowerShell)
-$env:OPENAI_API_KEY = "sk-your-key-here"
+export OPENAI_API_KEY="sk-your-key"
+
+# Windows Command Prompt
+setx OPENAI_API_KEY "sk-your-key"
+
+# Windows PowerShell
+$env:OPENAI_API_KEY = "sk-your-key"
 ```
-
-Add to your shell profile (`~/.bashrc`, `~/.zshrc`, PowerShell profile) to make it permanent.
-
-#### Option B: CLI Flag
-
-```bash
-python lit-critic.py --api-key sk-ant-your-key-here ...
-```
-
-#### Option C: .env File (Not Implemented)
-
-Currently not supported, but you could add python-dotenv if needed.
 
 ---
 
-### 4. VS Code Extension Setup
-
-The VS Code extension requires Node.js and TypeScript:
-
-```bash
-cd vscode-extension
-npm install
-```
-
-**Development dependencies installed:**
-- TypeScript
-- @types/vscode
-- @types/node
-- esbuild
-- mocha (for tests)
-
----
-
-## Running the Components
+## Running Components
 
 ### CLI
 
 ```bash
 python lit-critic.py --scene path/to/scene.txt --project path/to/project/
-```
-
-**With specific model:**
-```bash
-python lit-critic.py --scene scene.txt --project ~/novel/ --model opus
-```
-
-**Resume session:**
-```bash
+python lit-critic.py --scene scene.txt --project ~/novel/ --model sonnet
 python lit-critic.py --resume --project ~/novel/
 ```
 
----
+### Web/API surface
 
-### Web UI
-
-**Development mode (with auto-reload):**
 ```bash
 python lit-critic-web.py --reload
-```
-
-**Custom port:**
-```bash
 python lit-critic-web.py --port 3000
 ```
 
-**Production mode:**
-```bash
-python lit-critic-web.py
-```
+Open `http://localhost:8000`.
 
-Then open http://localhost:8000 in your browser.
-
----
-
-### VS Code Extension
-
-#### Development Mode (F5 Launch)
-
-1. Open `vscode-extension/` folder in VS Code
-2. Press **F5** to launch Extension Development Host
-3. In the new window, open a novel project (with CANON.md)
-4. Extension activates automatically
-5. Press `Ctrl+Shift+L` to analyze a scene
-
-#### Install as VSIX (For Testing)
+### VS Code extension
 
 ```bash
 cd vscode-extension
-npm run package
-code --install-extension lit-critic-0.2.0.vsix --force
+npm install
+npm run compile
 ```
+
+Press **F5** in VS Code for extension development host.
 
 ---
 
-## Project Structure
+## Project Structure (Current)
 
-```
+```text
 lit-critic/
-├── cli/                    # CLI interface
-│   ├── __init__.py
-│   ├── __main__.py
-│   ├── commands.py        # Subcommand entry points
-│   ├── interface.py       # Display helpers
-│   └── session_loop.py    # Interactive review loop
-│
-├── server/                 # Shared backend
-│   ├── __init__.py
-│   ├── api.py             # LLM API calls
-│   ├── config.py          # Configuration
-│   ├── db.py              # SQLite storage layer
-│   ├── discussion.py      # Multi-turn dialogue
-│   ├── learning.py        # Preference tracking
-│   ├── models.py          # Data structures
-│   ├── prompts.py         # Prompt templates
-│   ├── session.py         # Session management
-│   ├── utils.py           # Line mapping
-│   └── llm/               # Multi-provider LLM abstraction
-│       ├── __init__.py
-│       ├── base.py        # LLMClient ABC + response types
-│       ├── anthropic_client.py  # Anthropic/Claude
-│       ├── openai_client.py     # OpenAI/GPT
-│       └── factory.py    # create_client()
-│
-├── web/                    # Web UI
-│   ├── __init__.py
-│   ├── __main__.py
-│   ├── app.py             # FastAPI app
-│   ├── routes.py          # REST endpoints
-│   ├── session_manager.py
-│   ├── templates/
-│   │   ├── index.html
-│   │   ├── sessions.html
-│   │   └── learning.html
-│   └── static/
-│       ├── css/
-│       └── js/
-│
-├── vscode-extension/       # VS Code extension
-│   ├── src/
-│   │   ├── extension.ts
-│   │   ├── serverManager.ts
-│   │   ├── apiClient.ts
-│   │   ├── diagnosticsProvider.ts
-│   │   ├── findingsTreeProvider.ts
-│   │   ├── sessionsTreeProvider.ts
-│   │   ├── learningTreeProvider.ts
-│   │   ├── discussionPanel.ts
-│   │   ├── statusBar.ts
-│   │   └── types.ts
-│   ├── package.json
-│   └── tsconfig.json
-│
-├── tests/                  # Test suites
-│   ├── server/
-│   ├── cli/
-│   ├── web/
-│   └── vscode-extension/
-│
-├── docs/                   # Documentation
-│   ├── user-guide/
-│   └── technical/
-│
-├── lit-critic.py      # CLI entry point
-├── lit-critic-web.py  # Web UI entry point
-├── requirements.txt
-├── package.json
-└── README.md
+├── core/                   # Stateless reasoning service
+├── lit_platform/           # Workflow + persistence owner
+├── contracts/              # Versioned contracts
+├── cli/                    # CLI UX layer
+├── web/                    # HTTP API + web UI layer
+├── vscode-extension/       # VS Code UX layer
+├── tests/                  # Python + TypeScript tests
+└── docs/                   # User and technical docs
 ```
 
 ---
 
 ## Development Workflow
 
-### 1. Create a Branch
-
 ```bash
-git checkout -b feature/my-new-feature
-```
+# create branch
+git checkout -b feature/my-change
 
-### 2. Make Changes
-
-Edit files in your preferred editor. VS Code recommended for TypeScript work.
-
-### 3. Run Tests
-
-```bash
-# Python tests
+# run python tests
 pytest
 
-# TypeScript tests
+# run extension tests
 cd vscode-extension && npm test
+
+# run coverage
+pytest --cov=core --cov=lit_platform --cov=cli --cov=web --cov=contracts
 ```
-
-### 4. Test Manually
-
-```bash
-# CLI
-python lit-critic.py --scene test-scene.txt --project test-project/
-
-# Web UI
-python lit-critic-web.py --reload
-
-# VS Code
-# Press F5 in vscode-extension/ folder
-```
-
-### 5. Commit
-
-```bash
-git add .
-git commit -m "feat: add new feature"
-```
-
-### 6. Push and Create PR
-
-```bash
-git push origin feature/my-new-feature
-```
-
-Then create a pull request on GitHub.
 
 ---
 
-## Common Development Tasks
+## Common Tasks
 
-### Running Tests
-
-See **[Testing Guide](testing.md)** for comprehensive coverage.
-
-**Quick test run:**
-```bash
-pytest
-```
-
-**With coverage:**
-```bash
-pytest --cov=server --cov=cli --cov=web
-```
-
-### Linting Python Code
+### Lint/type-check/format
 
 ```bash
-# Install linters
-pip install flake8 mypy
+pip install flake8 mypy black
 
-# Run flake8
-flake8 server/ cli/ web/
-
-# Run mypy (type checking)
-mypy server/ cli/ web/
+flake8 core/ lit_platform/ cli/ web/ contracts/
+mypy core/ lit_platform/ cli/ web/ contracts/
+black core/ lit_platform/ cli/ web/ contracts/
 ```
 
-### Formatting Python Code
-
-```bash
-# Install formatter
-pip install black
-
-# Format code
-black server/ cli/ web/
-```
-
-### Building VS Code Extension
+### Build extension
 
 ```bash
 cd vscode-extension
-npm run compile    # TypeScript → JavaScript
-npm run package    # Create .vsix file
-```
-
-### Watching for Changes
-
-**Python (Web UI):**
-```bash
-python lit-critic-web.py --reload
-```
-
-**TypeScript:**
-```bash
-cd vscode-extension
-npm run watch
+npm run compile
+npm run package
 ```
 
 ---
 
 ## Troubleshooting
 
-### "Module not found" errors
+### Module import errors
 
-**Problem:** Python can't find `server`, `cli`, or `web` modules.
-
-**Solution:** Install in development mode:
 ```bash
 pip install -e .
 ```
 
-Or ensure you're running from the project root.
-
----
-
 ### API key not found
 
-**Problem:** `No API key provided` error.
-
-**Solution:**
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-# Verify:
-echo $ANTHROPIC_API_KEY
-```
-
-On Windows, use `setx` and restart your terminal.
-
----
+Check environment variables and restart terminal session.
 
 ### Port already in use
 
-**Problem:** `Address already in use` when starting Web UI.
+Run on another port:
 
-**Solution:** Use a different port:
 ```bash
 python lit-critic-web.py --port 3000
 ```
 
-Or kill the process using port 8000:
-```bash
-# Find process
-lsof -i :8000  # macOS/Linux
-netstat -ano | findstr :8000  # Windows
+### VS Code extension not activating
 
-# Kill it
-kill <PID>     # macOS/Linux
-taskkill /PID <PID> /F  # Windows
-```
-
----
-
-### VS Code extension won't activate
-
-**Problem:** Extension doesn't activate when opening a project.
-
-**Solution:**
-1. Ensure project has a `CANON.md` file (activation trigger)
-2. Check Output panel (View → Output → "lit-critic")
-3. Verify `literaryCritic.repoPath` setting if project is outside repo
-
----
-
-### TypeScript compilation errors
-
-**Problem:** `npm run compile` fails.
-
-**Solution:**
-```bash
-cd vscode-extension
-rm -rf node_modules package-lock.json
-npm install
-npm run compile
-```
-
----
-
-### Test failures
-
-**Problem:** Tests fail with `ModuleNotFoundError`.
-
-**Solution:** Install dev dependencies:
-```bash
-pip install pytest pytest-asyncio pytest-cov
-```
-
----
-
-## IDE Configuration
-
-### VS Code
-
-Recommended extensions:
-- Python
-- Pylance
-- ESLint
-- Prettier
-- TypeScript and JavaScript Language Features
-
-**Settings (.vscode/settings.json):**
-```json
-{
-  "python.linting.enabled": true,
-  "python.linting.flake8Enabled": true,
-  "python.formatting.provider": "black",
-  "editor.formatOnSave": true,
-  "typescript.tsdk": "vscode-extension/node_modules/typescript/lib"
-}
-```
-
----
-
-### PyCharm / IntelliJ
-
-1. Mark `server/`, `cli/`, `web/` as source roots
-2. Configure Python interpreter to use your virtual environment
-3. Enable type checking (Preferences → Editor → Inspections → Python)
+- Ensure workspace contains `CANON.md`
+- Check output channel (`lit-critic`)
+- Confirm `literaryCritic.repoPath` when workspace is outside repo
 
 ---
 
 ## Database / Storage
 
-lit-critic uses a **per-project SQLite database** (`.lit-critic.db`) for all persistent state:
+Platform persists state in `.lit-critic.db`:
 
-- **Sessions:** Stored in the `session` table (status: active/completed/abandoned)
-- **Findings:** Stored in the `finding` table (linked to sessions via foreign key)
-- **Learning data:** Stored in `learning` and `learning_entry` tables
-- **LEARNING.md:** Human-readable export from the database (not the source of truth)
-- **Index files:** CANON.md, CAST.md, etc. in project directory (read-only by the tool)
+- sessions
+- findings
+- learning
 
-The database is auto-created on first use with WAL mode, foreign keys, and schema versioning.
+`LEARNING.md` is export output, not canonical source of truth.
 
-**Add to .gitignore:**
-```
+Recommended `.gitignore` entries:
+
+```text
 .lit-critic.db
 __pycache__/
 *.pyc
@@ -563,16 +282,16 @@ node_modules/
 ## Environment Variables
 
 | Variable | Purpose | Required |
-|----------|---------|----------|
-| `ANTHROPIC_API_KEY` | API key for Anthropic Claude models | At least one provider key required |
-| `OPENAI_API_KEY` | API key for OpenAI GPT/o-series models | At least one provider key required |
-
-The system automatically resolves which key to use based on the selected model's provider. You only need to set the key(s) for the provider(s) you plan to use.
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Anthropic model access | At least one provider key |
+| `OPENAI_API_KEY` | OpenAI model access | At least one provider key |
 
 ---
 
 ## Next Steps
 
-- **[Architecture Guide](architecture.md)** Understand the system design
-- **[API Reference](api-reference.md)** REST endpoint documentation
-- **[Testing Guide](testing.md)** Run and write tests
+- [Architecture Guide](architecture.md)
+- [API Reference](api-reference.md)
+- [Testing Guide](testing.md)
+- [Reliability Policy](reliability-policy.md)
+- [Remote Core Security](security-remote-core.md)

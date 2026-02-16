@@ -17,9 +17,11 @@ import { ServerManager } from './serverManager';
 import { ApiClient } from './apiClient';
 import { DiagnosticsProvider } from './diagnosticsProvider';
 import { FindingsTreeProvider } from './findingsTreeProvider';
+import { SessionsTreeProvider } from './sessionsTreeProvider';
+import { LearningTreeProvider } from './learningTreeProvider';
 import { DiscussionPanel } from './discussionPanel';
 import { StatusBar } from './statusBar';
-import { Finding, AnalysisSummary, FindingResponse, AdvanceResponse } from './types';
+import { Finding, AnalysisSummary, FindingResponse, AdvanceResponse, DiscussResponse, ResumeErrorDetail } from './types';
 
 // ---------------------------------------------------------------------------
 // State
@@ -29,6 +31,8 @@ let serverManager: ServerManager | undefined;
 let apiClient: ApiClient;
 let diagnosticsProvider: DiagnosticsProvider;
 let findingsTreeProvider: FindingsTreeProvider;
+let sessionsTreeProvider: SessionsTreeProvider;
+let learningTreeProvider: LearningTreeProvider;
 let discussionPanel: DiscussionPanel;
 let statusBar: StatusBar;
 
@@ -48,10 +52,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusBar = new StatusBar();
     diagnosticsProvider = new DiagnosticsProvider();
     findingsTreeProvider = new FindingsTreeProvider();
+    sessionsTreeProvider = new SessionsTreeProvider();
+    learningTreeProvider = new LearningTreeProvider();
 
-    // Register tree view — must always happen so VS Code can populate the sidebar
-    const treeView = vscode.window.createTreeView('literaryCritic.findings', {
+    // Register tree views — must always happen so VS Code can populate the sidebar
+    const findingsTreeView = vscode.window.createTreeView('literaryCritic.findings', {
         treeDataProvider: findingsTreeProvider,
+        showCollapseAll: true,
+    });
+
+    const sessionsTreeView = vscode.window.createTreeView('literaryCritic.sessions', {
+        treeDataProvider: sessionsTreeProvider,
+        showCollapseAll: true,
+    });
+
+    const learningTreeView = vscode.window.createTreeView('literaryCritic.learning', {
+        treeDataProvider: learningTreeProvider,
         showCollapseAll: true,
     });
 
@@ -59,7 +75,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(
         statusBar,
         diagnosticsProvider,
-        treeView,
+        findingsTreeView,
+        sessionsTreeView,
+        learningTreeView,
     );
 
     // Register commands — must always happen so Command Palette entries work
@@ -71,12 +89,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand('literaryCritic.rejectFinding', cmdRejectFinding),
         vscode.commands.registerCommand('literaryCritic.discuss', cmdDiscuss),
         vscode.commands.registerCommand('literaryCritic.selectFinding', cmdSelectFinding),
-        vscode.commands.registerCommand('literaryCritic.skipMinor', cmdSkipMinor),
-        vscode.commands.registerCommand('literaryCritic.saveSession', cmdSaveSession),
+        vscode.commands.registerCommand('literaryCritic.reviewFinding', cmdReviewFinding),
         vscode.commands.registerCommand('literaryCritic.clearSession', cmdClearSession),
-        vscode.commands.registerCommand('literaryCritic.saveLearning', cmdSaveLearning),
         vscode.commands.registerCommand('literaryCritic.selectModel', cmdSelectModel),
         vscode.commands.registerCommand('literaryCritic.stopServer', cmdStopServer),
+        // Phase 2: Management commands
+        vscode.commands.registerCommand('literaryCritic.refreshSessions', cmdRefreshSessions),
+        vscode.commands.registerCommand('literaryCritic.viewSession', cmdViewSession),
+        vscode.commands.registerCommand('literaryCritic.deleteSession', cmdDeleteSession),
+        vscode.commands.registerCommand('literaryCritic.refreshLearning', cmdRefreshLearning),
+        vscode.commands.registerCommand('literaryCritic.exportLearning', cmdExportLearning),
+        vscode.commands.registerCommand('literaryCritic.resetLearning', cmdResetLearning),
+        vscode.commands.registerCommand('literaryCritic.deleteLearningEntry', cmdDeleteLearningEntry),
     );
 
     // Try to locate the repo root now.  If found, create the server manager
@@ -92,6 +116,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (config.get<boolean>('autoStartServer', true)) {
             try {
                 await serverManager.start();
+                // Auto-load sidebar after server is running
+                await autoLoadSidebar();
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 statusBar.setError(msg);
@@ -183,6 +209,118 @@ function detectProjectPath(): string | undefined {
 }
 
 /**
+ * Resolve which editor/document should be analyzed.
+ *
+ * Priority:
+ *   1. Active text editor, if it is a file-backed document.
+ *   2. Any visible file-backed editor (auto-activate it for clarity).
+ */
+async function resolveSceneEditorForAnalyze(): Promise<vscode.TextEditor | undefined> {
+    const active = vscode.window.activeTextEditor;
+    if (active?.document?.uri?.scheme === 'file') {
+        return active;
+    }
+
+    const fallback = vscode.window.visibleTextEditors.find(
+        (editor) => editor?.document?.uri?.scheme === 'file'
+    );
+    if (!fallback) {
+        return undefined;
+    }
+
+    try {
+        return await vscode.window.showTextDocument(fallback.document, {
+            viewColumn: fallback.viewColumn,
+            preserveFocus: false,
+            preview: false,
+        });
+    } catch {
+        // If activation fails for any reason, still use the discovered editor.
+        return fallback;
+    }
+}
+
+/**
+ * Resolve configured analysis model with backward compatibility.
+ *
+ * Preferred key: literaryCritic.analysisModel
+ * Legacy fallback: literaryCritic.model
+ */
+function getConfiguredAnalysisModel(config: vscode.WorkspaceConfiguration): string {
+    const analysisInspect = config.inspect<string>('analysisModel');
+    const analysisIsExplicitlySet = Boolean(
+        analysisInspect && (
+            analysisInspect.globalValue !== undefined ||
+            analysisInspect.workspaceValue !== undefined ||
+            analysisInspect.workspaceFolderValue !== undefined
+        )
+    );
+
+    if (analysisIsExplicitlySet) {
+        return config.get<string>('analysisModel', 'sonnet');
+    }
+
+    // Backward-compatible fallback for older workspaces using literaryCritic.model
+    return config.get<string>('model', config.get<string>('analysisModel', 'sonnet'));
+}
+
+/**
+ * Auto-load sidebar views after server starts.
+ * 
+ * Loads sessions and learning data, and if there's an active session,
+ * automatically resumes it with its findings displayed.
+ */
+async function autoLoadSidebar(): Promise<void> {
+    const projectPath = detectProjectPath();
+    if (!projectPath) {
+        // No CANON.md found — can't auto-load
+        return;
+    }
+
+    // Initialize API client
+    const client = ensureApiClient();
+
+    // Set up and refresh sessions tree
+    sessionsTreeProvider.setApiClient(client);
+    sessionsTreeProvider.setProjectPath(projectPath);
+    await sessionsTreeProvider.refresh().catch(() => {
+        // Silently ignore — non-critical
+    });
+
+    // Set up and refresh learning tree
+    learningTreeProvider.setApiClient(client);
+    learningTreeProvider.setProjectPath(projectPath);
+    await learningTreeProvider.refresh().catch(() => {
+        // Silently ignore — non-critical
+    });
+
+    // Check if there's an active session and auto-resume it
+    try {
+        const sessionInfo = await client.getSession();
+        sessionsTreeProvider.setCurrentSessionByScenePath(
+            sessionInfo.active ? sessionInfo.scene_path : undefined,
+        );
+        if (sessionInfo.active && sessionInfo.scene_path) {
+            // There's an active session — resume it silently
+            const summary = await resumeWithScenePathRecovery(client, projectPath);
+            
+            if (!summary.error) {
+                // Populate findings tree
+                await populateFindingsAfterAnalysis(summary);
+                
+                // Update status bar to show progress
+                statusBar.setProgress(summary.current_index + 1, summary.total_findings);
+                
+                // Don't auto-open the discussion panel — let the user click a finding
+                // when they're ready
+            }
+        }
+    } catch (err) {
+        // Silently ignore — user can manually resume if needed
+    }
+}
+
+/**
  * Ensure the server manager exists and the server is running.
  *
  * If the ServerManager was not created at activation time (e.g. the user
@@ -248,18 +386,102 @@ function ensureDiscussionPanel(): DiscussionPanel {
     if (!discussionPanel) {
         discussionPanel = new DiscussionPanel(ensureApiClient());
         discussionPanel.onFindingAction = handleFindingAction;
+        discussionPanel.onDiscussionResult = (result) => {
+            void handleDiscussionResult(result);
+        };
     }
     return discussionPanel;
+}
+
+function isTerminalFindingStatus(status?: string): boolean {
+    return status === 'accepted' || status === 'rejected' || status === 'withdrawn';
+}
+
+function getSafeTotalFindings(): number {
+    return totalFindings > 0 ? totalFindings : allFindings.length;
+}
+
+function resolveFallbackFinding(preferredIndex?: number): { finding: Finding; index: number } | null {
+    if (allFindings.length === 0) {
+        return null;
+    }
+
+    const candidates = [
+        preferredIndex,
+        currentFindingIndex,
+        allFindings.length - 1,
+    ];
+
+    for (const candidate of candidates) {
+        if (typeof candidate === 'number' && candidate >= 0 && candidate < allFindings.length) {
+            return { finding: allFindings[candidate], index: candidate };
+        }
+    }
+
+    return null;
+}
+
+function getLatestFindingStatus(result: DiscussResponse): string | undefined {
+    return result.finding?.status || result.finding_status;
+}
+
+async function handleDiscussionResult(result: DiscussResponse): Promise<void> {
+    if (result.error) {
+        return;
+    }
+
+    const activeFinding = allFindings[currentFindingIndex];
+    if (!activeFinding) {
+        return;
+    }
+
+    if (result.finding) {
+        updateCachedFinding(result.finding);
+    } else if (result.finding_status) {
+        activeFinding.status = result.finding_status;
+        findingsTreeProvider.updateFinding(activeFinding);
+
+        if (isTerminalFindingStatus(result.finding_status)) {
+            diagnosticsProvider.removeFinding(activeFinding.number);
+        } else {
+            diagnosticsProvider.updateSingleFinding(activeFinding);
+        }
+    }
+
+    const latestStatus = getLatestFindingStatus(result);
+    if (latestStatus && latestStatus !== 'pending') {
+        await sessionsTreeProvider.refresh().catch(() => {
+            // Non-fatal: tree can still be refreshed manually.
+        });
+    }
 }
 
 /**
  * Present a finding: update diagnostics, tree view, discussion panel, and status bar.
  */
-function presentFinding(findingResp: FindingResponse): void {
+function presentFinding(findingResp: FindingResponse, preferredIndex?: number): void {
     if (findingResp.complete) {
         statusBar.setComplete();
         vscode.window.showInformationMessage('lit-critic: All findings have been reviewed.');
-        ensureDiscussionPanel().close();
+
+        const fallback = resolveFallbackFinding(preferredIndex);
+        if (fallback) {
+            currentFindingIndex = fallback.index;
+            findingsTreeProvider.setCurrentIndex(currentFindingIndex);
+
+            const total = getSafeTotalFindings();
+            ensureDiscussionPanel().show(
+                fallback.finding,
+                Math.min(total, currentFindingIndex + 1),
+                total,
+                fallback.finding.ambiguity_type !== null,
+            );
+        }
+
+        // Keep the discussion panel open even at completion.
+        // Users may keep iterating on scene edits and press Review again,
+        // so auto-closing here disrupts that loop and makes the UI feel
+        // like it disappeared unexpectedly.
         return;
     }
 
@@ -285,7 +507,7 @@ function presentFinding(findingResp: FindingResponse): void {
 /**
  * Handle advance response (from continue/accept/reject) — check for scene changes, present next finding.
  */
-function handleAdvanceResponse(resp: AdvanceResponse): void {
+function handleAdvanceResponse(resp: AdvanceResponse, preferredIndex?: number): void {
     // Handle scene change notification
     if (resp.scene_change) {
         const sc = resp.scene_change;
@@ -299,7 +521,7 @@ function handleAdvanceResponse(resp: AdvanceResponse): void {
     }
 
     // Present the next finding
-    presentFinding(resp);
+    presentFinding(resp, preferredIndex);
 }
 
 /**
@@ -323,23 +545,32 @@ async function refreshDiagnosticsFromSession(): Promise<void> {
 async function populateFindingsAfterAnalysis(summary: AnalysisSummary): Promise<void> {
     const client = ensureApiClient();
 
-    // The backend walks findings one at a time via GET /api/finding.
-    // To populate diagnostics for ALL findings at once, we use GET /api/session
-    // which includes findings_status (but not full finding objects).
-    // For full data, we store what we got from the analysis result.
-    const session = await client.getSession();
-    if (!session.active || !session.findings_status) {
-        return;
+    // Starting with the server-side fix, the analysis/resume responses now include
+    // findings_status directly. Use that if available; fall back to GET /api/session
+    // only if needed (for backward compatibility or edge cases).
+    let findingsStatus = summary.findings_status;
+
+    if (!findingsStatus) {
+        // Fallback: fetch from session endpoint (old behavior)
+        console.warn('lit-critic: findings_status not in analysis response, falling back to GET /api/session');
+        try {
+            const session = await client.getSession();
+            if (!session.active || !session.findings_status) {
+                console.error('lit-critic: Failed to load findings from session endpoint');
+                vscode.window.showErrorMessage('lit-critic: Could not load findings. Try resuming the session.');
+                return;
+            }
+            findingsStatus = session.findings_status;
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('lit-critic: Error fetching session:', msg);
+            vscode.window.showErrorMessage(`lit-critic: Could not load findings — ${msg}`);
+            return;
+        }
     }
 
-    // We need full Finding objects. The session info has summary only.
-    // The analysis endpoint returns total_findings but not the findings array directly.
-    // We'll build partial findings from session info for the tree, and get full
-    // finding data from the current finding endpoint as we navigate.
-    // For MVP: populate the tree from session info; diagnostics update per-finding.
-
-    // Store findings from session info (partial — for tree display)
-    allFindings = session.findings_status.map((f, i) => ({
+    // Build partial Finding objects for the tree (full data comes from /api/finding as we navigate)
+    allFindings = findingsStatus.map((f) => ({
         number: f.number,
         severity: f.severity as 'critical' | 'major' | 'minor',
         lens: f.lens,
@@ -360,11 +591,16 @@ async function populateFindingsAfterAnalysis(summary: AnalysisSummary): Promise<
     diagnosticsProvider.setScenePath(summary.scene_path);
 
     // Get the first full finding to start
-    const firstFinding = await client.getCurrentFinding();
-    if (!firstFinding.complete && firstFinding.finding) {
-        // Update our cached finding with full data
-        updateCachedFinding(firstFinding.finding);
-        diagnosticsProvider.updateFromFindings(allFindings);
+    try {
+        const firstFinding = await client.getCurrentFinding();
+        if (!firstFinding.complete && firstFinding.finding) {
+            // Update our cached finding with full data
+            updateCachedFinding(firstFinding.finding);
+            diagnosticsProvider.updateFromFindings(allFindings);
+        }
+    } catch (err) {
+        // Non-fatal — tree is already populated
+        console.warn('lit-critic: Could not fetch first finding details:', err);
     }
 }
 
@@ -391,10 +627,12 @@ async function cmdAnalyze(): Promise<void> {
         await ensureServer();
         const client = ensureApiClient();
 
-        // Determine scene path (active editor)
-        const editor = vscode.window.activeTextEditor;
+        // Determine scene path (active editor, with fallback to an open file editor)
+        const editor = await resolveSceneEditorForAnalyze();
         if (!editor) {
-            vscode.window.showErrorMessage('lit-critic: Open a scene file first.');
+            vscode.window.showErrorMessage(
+                'lit-critic: No open file found to analyze. Open your scene file and try again.'
+            );
             return;
         }
         const scenePath = editor.document.uri.fsPath;
@@ -422,7 +660,8 @@ async function cmdAnalyze(): Promise<void> {
 
         // Select model
         const config = vscode.workspace.getConfiguration('literaryCritic');
-        const model = config.get<string>('model', 'sonnet');
+        const model = getConfiguredAnalysisModel(config);
+        const discussionModel = config.get<string>('discussionModel', '') || undefined;
 
         // Start analysis
         statusBar.setAnalyzing('Running 5 lenses...');
@@ -430,7 +669,7 @@ async function cmdAnalyze(): Promise<void> {
 
         // Fire off analysis first (don't await yet) — the POST creates the
         // backend's analysis_progress tracker that the SSE endpoint needs.
-        const analysisPromise = client.analyze(scenePath, projectPath, model);
+        const analysisPromise = client.analyze(scenePath, projectPath, model, discussionModel);
 
         // Give the POST a moment to reach the server and initialise the
         // progress tracker before we open the SSE stream.
@@ -478,9 +717,14 @@ async function cmdAnalyze(): Promise<void> {
             return;
         }
 
+        let modelInfo = `Model: ${summary.model.label}`;
+        if (summary.discussion_model) {
+            modelInfo += ` · Discussion: ${summary.discussion_model.label}`;
+        }
+
         vscode.window.showInformationMessage(
             `lit-critic: Found ${summary.total_findings} findings ` +
-            `(${summary.counts.critical} critical, ${summary.counts.major} major, ${summary.counts.minor} minor)`
+            `(${summary.counts.critical} critical, ${summary.counts.major} major, ${summary.counts.minor} minor) · ${modelInfo}`
         );
 
         // Populate UI
@@ -489,6 +733,9 @@ async function cmdAnalyze(): Promise<void> {
         // Present the first finding
         const firstFinding = await client.getCurrentFinding();
         presentFinding(firstFinding);
+
+        // Refresh management views
+        refreshManagementViews();
 
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -511,7 +758,7 @@ async function cmdResume(): Promise<void> {
         }
 
         statusBar.setAnalyzing('Resuming session...');
-        const summary = await client.resume(projectPath);
+        const summary = await resumeWithScenePathRecovery(client, projectPath);
 
         if (summary.error) {
             statusBar.setError(summary.error);
@@ -525,9 +772,14 @@ async function cmdResume(): Promise<void> {
         );
 
         await populateFindingsAfterAnalysis(summary);
+        await sessionsTreeProvider.refresh();
+        sessionsTreeProvider.setCurrentSessionByScenePath(summary.scene_path);
 
         const finding = await client.getCurrentFinding();
         presentFinding(finding);
+
+        // Refresh management views
+        refreshManagementViews();
 
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -574,6 +826,9 @@ async function cmdAcceptFinding(): Promise<void> {
         }
 
         handleAdvanceResponse(next);
+        
+        // Refresh sessions tree to show updated counts
+        await sessionsTreeProvider.refresh();
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         vscode.window.showErrorMessage(`lit-critic: ${msg}`);
@@ -604,6 +859,9 @@ async function cmdRejectFinding(): Promise<void> {
         }
 
         handleAdvanceResponse(next);
+        
+        // Refresh sessions tree to show updated counts
+        await sessionsTreeProvider.refresh();
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         vscode.window.showErrorMessage(`lit-critic: ${msg}`);
@@ -642,6 +900,9 @@ async function cmdDiscuss(): Promise<void> {
 async function cmdSelectFinding(index: number): Promise<void> {
     try {
         const client = ensureApiClient();
+        currentFindingIndex = index;
+        findingsTreeProvider.setCurrentIndex(currentFindingIndex);
+
         const resp = await client.gotoFinding(index);
 
         // Update cached finding with full data from the backend
@@ -680,29 +941,46 @@ async function cmdSelectFinding(index: number): Promise<void> {
             }
         }
 
-        handleAdvanceResponse(resp);
+        handleAdvanceResponse(resp, index);
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         vscode.window.showErrorMessage(`lit-critic: ${msg}`);
     }
 }
 
-async function cmdSkipMinor(): Promise<void> {
+async function cmdReviewFinding(): Promise<void> {
     try {
         const client = ensureApiClient();
-        const resp = await client.skipMinor();
+        const resp = await client.reviewFinding();
+
+        // Defensive guard: if review reports completion but unresolved findings
+        // still exist, recover by fetching the current finding instead of
+        // closing the discussion UI.
+        if (resp.complete) {
+            try {
+                const session = await client.getSession();
+                const hasPending = Boolean(
+                    session.active
+                    && session.findings_status
+                    && session.findings_status.some((f) => !isTerminalFindingStatus(f.status))
+                );
+
+                if (hasPending) {
+                    const fallback = await client.getCurrentFinding();
+                    if (!fallback.complete && fallback.finding) {
+                        vscode.window.showWarningMessage(
+                            'lit-critic: Review reported completion but pending findings remain. Restored current finding.'
+                        );
+                        presentFinding(fallback);
+                        return;
+                    }
+                }
+            } catch {
+                // Non-fatal: if consistency check fails, fall back to original response.
+            }
+        }
+
         presentFinding(resp);
-    } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        vscode.window.showErrorMessage(`lit-critic: ${msg}`);
-    }
-}
-
-async function cmdSaveSession(): Promise<void> {
-    try {
-        const client = ensureApiClient();
-        const result = await client.saveSession();
-        vscode.window.showInformationMessage(`lit-critic: Session saved to ${result.path}`);
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         vscode.window.showErrorMessage(`lit-critic: ${msg}`);
@@ -735,17 +1013,6 @@ async function cmdClearSession(): Promise<void> {
     }
 }
 
-async function cmdSaveLearning(): Promise<void> {
-    try {
-        const client = ensureApiClient();
-        const result = await client.saveLearning();
-        vscode.window.showInformationMessage(`lit-critic: LEARNING.md saved to ${result.path}`);
-    } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        vscode.window.showErrorMessage(`lit-critic: ${msg}`);
-    }
-}
-
 async function cmdSelectModel(): Promise<void> {
     try {
         await ensureServer();
@@ -764,7 +1031,7 @@ async function cmdSelectModel(): Promise<void> {
 
         if (selected) {
             const wsConfig = vscode.workspace.getConfiguration('literaryCritic');
-            await wsConfig.update('model', selected.label, vscode.ConfigurationTarget.Workspace);
+            await wsConfig.update('analysisModel', selected.label, vscode.ConfigurationTarget.Workspace);
             vscode.window.showInformationMessage(`lit-critic: Model set to ${selected.label}`);
         }
     } catch (err) {
@@ -792,20 +1059,15 @@ async function handleFindingAction(action: string, data?: unknown): Promise<void
             await cmdAcceptFinding();
             break;
         case 'reject':
-            await ensureApiClient().rejectFinding(data as string || '');
-            // Update UI
-            if (allFindings[currentFindingIndex]) {
-                allFindings[currentFindingIndex].status = 'rejected';
-                diagnosticsProvider.removeFinding(allFindings[currentFindingIndex].number);
-                findingsTreeProvider.updateFinding(allFindings[currentFindingIndex]);
-            }
-            await cmdNextFinding();
+            // Keep discussion-panel reject behavior aligned with the command path
+            // so state/cache/tree/session counters stay in sync.
+            await cmdRejectFinding();
             break;
         case 'continue':
             await cmdNextFinding();
             break;
-        case 'skipMinor':
-            await cmdSkipMinor();
+        case 'reviewFinding':
+            await cmdReviewFinding();
             break;
         case 'ambiguity':
             try {
@@ -818,11 +1080,399 @@ async function handleFindingAction(action: string, data?: unknown): Promise<void
                 vscode.window.showErrorMessage(`lit-critic: ${msg}`);
             }
             break;
-        case 'saveSession':
-            await cmdSaveSession();
-            break;
-        case 'saveLearning':
-            await cmdSaveLearning();
+        case 'exportLearning':
+            await cmdExportLearning();
             break;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: Management command handlers
+// ---------------------------------------------------------------------------
+
+async function cmdRefreshSessions(): Promise<void> {
+    try {
+        await ensureServer();
+        const projectPath = detectProjectPath();
+        if (!projectPath) {
+            vscode.window.showErrorMessage(
+                'lit-critic: Could not detect project directory (no CANON.md found in workspace).'
+            );
+            return;
+        }
+
+        ensureApiClient();
+        sessionsTreeProvider.setApiClient(apiClient);
+        sessionsTreeProvider.setProjectPath(projectPath);
+        await sessionsTreeProvider.refresh();
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`lit-critic: ${msg}`);
+    }
+}
+
+async function cmdViewSession(item: any): Promise<void> {
+    try {
+        await ensureServer();
+        const projectPath = detectProjectPath();
+        if (!projectPath) {
+            vscode.window.showErrorMessage(
+                'lit-critic: Could not detect project directory.'
+            );
+            return;
+        }
+
+        // Handle both calling patterns:
+        // 1. From context menu: receives SessionTreeItem object with session property
+        // 2. From direct call: receives number or session object
+        const sessionId = typeof item === 'number' ? item : item?.session?.id;
+        const sessionStatus = item?.session?.status;
+
+        if (!sessionId) {
+            vscode.window.showErrorMessage('lit-critic: Could not determine session ID.');
+            return;
+        }
+
+        const client = ensureApiClient();
+        const detail = await client.getSessionDetail(sessionId, projectPath);
+
+        // Open the scene file in the editor
+        const fs = require('fs');
+        if (fs.existsSync(detail.scene_path)) {
+            const uri = vscode.Uri.file(detail.scene_path);
+            await vscode.window.showTextDocument(uri, {
+                viewColumn: vscode.ViewColumn.One,
+                preview: false,
+            });
+        } else {
+            vscode.window.showWarningMessage(
+                `Scene file not found: ${detail.scene_path}`
+            );
+        }
+
+        // If this is an active session, resume it
+        if (detail.status === 'active') {
+            statusBar.setAnalyzing('Resuming session...');
+
+            // Explicit click on an active session should switch context directly
+            // without an additional confirmation modal.
+            vscode.window.setStatusBarMessage(
+                `lit-critic: Switching to ${path.basename(detail.scene_path)}...`,
+                2500,
+            );
+
+            // Resume the selected session
+            const summary = await resumeSessionByIdWithScenePathRecovery(client, projectPath, sessionId);
+            
+            if (summary.error) {
+                statusBar.setError(summary.error);
+                vscode.window.showErrorMessage(`lit-critic: Resume failed — ${summary.error}`);
+                return;
+            }
+
+            // Populate findings tree
+            await populateFindingsAfterAnalysis(summary);
+            await sessionsTreeProvider.refresh();
+            sessionsTreeProvider.setCurrentSession(sessionId);
+
+            const currentFinding = await client.getCurrentFinding();
+            if (!currentFinding.complete && currentFinding.finding) {
+                updateCachedFinding(currentFinding.finding);
+            }
+            presentFinding(currentFinding, summary.current_index);
+            
+            // Update status bar to show progress
+            statusBar.setProgress(summary.current_index + 1, summary.total_findings);
+            
+            vscode.window.showInformationMessage(
+                `lit-critic: Resumed session — ${summary.total_findings} findings, ` +
+                `continuing from #${summary.current_index + 1}`
+            );
+
+            // Refresh management views
+            refreshManagementViews();
+        } else {
+            // Completed or abandoned session — show findings in read-only mode
+            if (detail.findings && detail.findings.length > 0) {
+                // Build findings for display
+                const findings: Finding[] = detail.findings.map(f => ({
+                    number: f.number,
+                    severity: f.severity as 'critical' | 'major' | 'minor',
+                    lens: f.lens,
+                    location: f.location,
+                    line_start: f.line_start ?? null,
+                    line_end: f.line_end ?? null,
+                    evidence: f.evidence,
+                    impact: f.impact || '',
+                    options: f.options || [],
+                    flagged_by: f.flagged_by || [],
+                    ambiguity_type: null,
+                    stale: false,
+                    status: f.status,
+                    author_response: f.author_response || '',
+                    discussion_turns: f.discussion_turns || [],
+                    revision_history: f.revision_history || [],
+                    outcome_reason: f.outcome_reason || '',
+                }));
+
+                // Display in findings tree (read-only)
+                allFindings = findings;
+                totalFindings = findings.length;
+
+                const selectedIndex = Math.min(
+                    Math.max(detail.current_index ?? 0, 0),
+                    findings.length - 1,
+                );
+                currentFindingIndex = selectedIndex;
+
+                findingsTreeProvider.setFindings(findings, detail.scene_path, selectedIndex);
+                diagnosticsProvider.setScenePath(detail.scene_path);
+                diagnosticsProvider.updateFromFindings(findings);
+
+                ensureDiscussionPanel().show(
+                    findings[selectedIndex],
+                    selectedIndex + 1,
+                    findings.length,
+                    findings[selectedIndex].ambiguity_type !== null,
+                );
+
+                vscode.window.showInformationMessage(
+                    `Viewing ${detail.status} session: ${detail.total_findings} findings ` +
+                    `(${detail.accepted_count} accepted, ${detail.rejected_count} rejected)`
+                );
+            }
+
+            // "Current" in the sessions tree tracks explicit user selection.
+            sessionsTreeProvider.setCurrentSession(sessionId);
+        }
+
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`lit-critic: ${msg}`);
+    }
+}
+
+async function promptForScenePathOverride(detail: ResumeErrorDetail): Promise<string | undefined> {
+    const fallback = detail.saved_scene_path || detail.attempted_scene_path || '';
+
+    return vscode.window.showInputBox({
+        prompt: 'Saved scene path was not found. Enter corrected scene file path to resume.',
+        value: fallback,
+        ignoreFocusOut: true,
+        validateInput: (value) => {
+            if (!value.trim()) {
+                return 'Path is required to resume this session.';
+            }
+            return null;
+        },
+    });
+}
+
+async function resumeWithScenePathRecovery(client: ApiClient, projectPath: string): Promise<AnalysisSummary> {
+    return client.resumeWithRecovery(
+        projectPath,
+        undefined,
+        promptForScenePathOverride,
+    );
+}
+
+async function resumeSessionByIdWithScenePathRecovery(
+    client: ApiClient,
+    projectPath: string,
+    sessionId: number,
+): Promise<AnalysisSummary> {
+    return client.resumeSessionByIdWithRecovery(
+        projectPath,
+        sessionId,
+        undefined,
+        promptForScenePathOverride,
+    );
+}
+
+async function cmdDeleteSession(item: any): Promise<void> {
+    try {
+        // Handle both calling patterns:
+        // 1. From context menu: receives SessionTreeItem object with session property
+        // 2. From direct call: receives number
+        const sessionId = typeof item === 'number' ? item : item?.session?.id;
+
+        if (!sessionId) {
+            vscode.window.showErrorMessage('lit-critic: Could not determine session ID.');
+            return;
+        }
+
+        const confirm = await vscode.window.showWarningMessage(
+            `Delete session #${sessionId}? This cannot be undone.`,
+            { modal: true },
+            'Delete'
+        );
+
+        if (confirm !== 'Delete') {
+            return;
+        }
+
+        await ensureServer();
+        const projectPath = detectProjectPath();
+        if (!projectPath) {
+            return;
+        }
+
+        const client = ensureApiClient();
+        
+        // Check if this is the currently active session
+        const sessionInfo = await client.getSession();
+        const isActiveSession = sessionInfo.active && 
+                                item?.session?.status === 'active';
+
+        await client.deleteSession(sessionId, projectPath);
+
+        vscode.window.showInformationMessage(`lit-critic: Session #${sessionId} deleted.`);
+
+        // If we deleted the active session, clear all UI components
+        if (isActiveSession) {
+            diagnosticsProvider.clear();
+            findingsTreeProvider.clear();
+            statusBar.setReady();
+            allFindings = [];
+            currentFindingIndex = 0;
+            totalFindings = 0;
+            discussionPanel?.close();
+            sessionsTreeProvider.setCurrentSession(null);
+        }
+
+        // Refresh sessions tree
+        await sessionsTreeProvider.refresh();
+
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`lit-critic: ${msg}`);
+    }
+}
+
+async function cmdRefreshLearning(): Promise<void> {
+    try {
+        await ensureServer();
+        const projectPath = detectProjectPath();
+        if (!projectPath) {
+            vscode.window.showErrorMessage(
+                'lit-critic: Could not detect project directory (no CANON.md found in workspace).'
+            );
+            return;
+        }
+
+        ensureApiClient();
+        learningTreeProvider.setApiClient(apiClient);
+        learningTreeProvider.setProjectPath(projectPath);
+        await learningTreeProvider.refresh();
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`lit-critic: ${msg}`);
+    }
+}
+
+async function cmdExportLearning(): Promise<void> {
+    try {
+        await ensureServer();
+        const projectPath = detectProjectPath();
+        if (!projectPath) {
+            return;
+        }
+
+        const client = ensureApiClient();
+        const result = await client.exportLearning(projectPath);
+
+        vscode.window.showInformationMessage(`lit-critic: LEARNING.md exported to ${result.path}`);
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`lit-critic: ${msg}`);
+    }
+}
+
+async function cmdResetLearning(): Promise<void> {
+    try {
+        const confirm = await vscode.window.showWarningMessage(
+            'Reset all learning data? This will delete all preferences, blind spots, and resolutions. This cannot be undone.',
+            { modal: true },
+            'Reset'
+        );
+
+        if (confirm !== 'Reset') {
+            return;
+        }
+
+        await ensureServer();
+        const projectPath = detectProjectPath();
+        if (!projectPath) {
+            return;
+        }
+
+        const client = ensureApiClient();
+        await client.resetLearning(projectPath);
+
+        vscode.window.showInformationMessage('lit-critic: Learning data reset.');
+
+        // Refresh learning tree
+        await learningTreeProvider.refresh();
+
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`lit-critic: ${msg}`);
+    }
+}
+
+async function cmdDeleteLearningEntry(item: any): Promise<void> {
+    try {
+        // Handle both calling patterns:
+        // 1. From context menu: receives tree item object with entry property
+        // 2. From direct call: receives number
+        const entryId = typeof item === 'number' ? item : item?.entry?.id;
+
+        if (!entryId) {
+            vscode.window.showErrorMessage('lit-critic: Could not determine learning entry ID.');
+            return;
+        }
+
+        await ensureServer();
+        const projectPath = detectProjectPath();
+        if (!projectPath) {
+            return;
+        }
+
+        const client = ensureApiClient();
+        await client.deleteLearningEntry(entryId, projectPath);
+
+        vscode.window.showInformationMessage('lit-critic: Learning entry deleted.');
+
+        // Refresh learning tree
+        await learningTreeProvider.refresh();
+
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`lit-critic: ${msg}`);
+    }
+}
+
+/**
+ * Refresh management views (sessions and learning).
+ */
+function refreshManagementViews(): void {
+    const projectPath = detectProjectPath();
+    if (!projectPath || !apiClient) {
+        return;
+    }
+
+    // Set up and refresh sessions tree
+    sessionsTreeProvider.setApiClient(apiClient);
+    sessionsTreeProvider.setProjectPath(projectPath);
+    sessionsTreeProvider.refresh()
+        .catch(() => {
+            // Silently ignore — non-critical
+        });
+
+    // Set up and refresh learning tree
+    learningTreeProvider.setApiClient(apiClient);
+    learningTreeProvider.setProjectPath(projectPath);
+    learningTreeProvider.refresh().catch(() => {
+        // Silently ignore — non-critical
+    });
 }

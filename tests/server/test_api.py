@@ -1,5 +1,5 @@
 """
-Tests for server.api module.
+Tests for lit_platform.runtime.api module.
 
 Updated to use the provider-agnostic LLMClient interface.
 All client mocks now use create_message() and create_message_with_tool()
@@ -9,12 +9,12 @@ instead of the old Anthropic-specific messages.create().
 import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from server.api import (
+from lit_platform.runtime.api import (
     run_lens, run_coordinator, run_analysis,
     _extract_tool_use_input, _validate_coordinator_output,
 )
-from server.models import LensResult, CoordinatorError
-from server.llm.base import LLMResponse, LLMToolResponse
+from lit_platform.runtime.models import LensResult, CoordinatorError
+from lit_platform.runtime.llm.base import LLMResponse, LLMToolResponse
 
 
 class TestRunLens:
@@ -362,7 +362,7 @@ class TestRunCoordinator:
         mock_anthropic_client.create_message_with_tool = mock_create
 
         # Use max_retries=2 and patch sleep to avoid real delays
-        with patch("server.api.asyncio.sleep", new_callable=AsyncMock):
+        with patch("lit_platform.runtime.api.asyncio.sleep", new_callable=AsyncMock):
             result = await run_coordinator(
                 mock_anthropic_client, sample_lens_results, sample_scene,
                 max_retries=2
@@ -379,7 +379,7 @@ class TestRunCoordinator:
             side_effect=ConnectionError("Persistent failure")
         )
 
-        with patch("server.api.asyncio.sleep", new_callable=AsyncMock):
+        with patch("lit_platform.runtime.api.asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(CoordinatorError, match="failed after 2 attempts"):
                 await run_coordinator(
                     mock_anthropic_client, sample_lens_results, sample_scene,
@@ -448,7 +448,7 @@ class TestRunAnalysis:
             return_value=LLMToolResponse(tool_input=sample_coordinator_output)
         )
 
-        with patch('server.api.print'):
+        with patch('lit_platform.runtime.api.print'):
             result = await run_analysis(mock_anthropic_client, sample_scene, sample_indexes)
 
         assert mock_anthropic_client.create_message.call_count == 5  # 5 lenses
@@ -468,7 +468,7 @@ class TestRunAnalysis:
             return_value=LLMToolResponse(tool_input=sample_coordinator_output)
         )
 
-        with patch('server.api.print'):
+        with patch('lit_platform.runtime.api.print'):
             result = await run_analysis(mock_anthropic_client, sample_scene, sample_indexes)
 
         assert result["glossary_issues"] == []
@@ -492,7 +492,7 @@ class TestRunAnalysis:
             return_value=LLMToolResponse(tool_input=sample_coordinator_output)
         )
 
-        with patch('server.api.print'):
+        with patch('lit_platform.runtime.api.print'):
             result = await run_analysis(mock_anthropic_client, sample_scene, sample_indexes)
 
         assert "findings" in result
@@ -509,6 +509,6 @@ class TestRunAnalysis:
             return_value=LLMToolResponse(tool_input={}, raw_text="Oops, no tool use")
         )
 
-        with patch('server.api.print'):
+        with patch('lit_platform.runtime.api.print'):
             with pytest.raises(CoordinatorError):
                 await run_analysis(mock_anthropic_client, sample_scene, sample_indexes)

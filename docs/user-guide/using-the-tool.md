@@ -155,7 +155,7 @@ Shows progress:
 | Clear Session | — | Delete saved session |
 | Export Learning | — | Export LEARNING.md |
 | Select Model | — | Choose your model |
-| Stop Server | — | Stop backend |
+| Stop Local API Process | — | Stop the local API process |
 
 ### Interoperability
 
@@ -391,7 +391,7 @@ Discussion adds extra cost per message (usually $0.01–0.05 per turn).
 | **Streaming** | ✅ | ✅ | ✅ |
 | **Portability** | Any terminal | Any browser | VS Code only |
 
-All three share the same backend and SQLite database—use whichever fits your workflow.
+All three use the same Platform-managed workflow and SQLite project database—use whichever fits your workflow.
 
 ---
 

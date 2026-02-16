@@ -64,8 +64,11 @@ const App = {
         const data = await res.json();
 
         if (!res.ok) {
-            const detail = data.detail || `HTTP ${res.status}`;
-            throw new Error(detail);
+            const detail = data.detail ?? `HTTP ${res.status}`;
+            if (typeof detail === 'string') {
+                throw new Error(`HTTP ${res.status}: ${detail}`);
+            }
+            throw new Error(`HTTP ${res.status}: ${JSON.stringify(detail)}`);
         }
         return data;
     },
@@ -85,7 +88,16 @@ const App = {
         try {
             const config = await App.api('GET', '/config');
             if (config.api_key_configured) {
-                document.getElementById('api-key-group').classList.add('hidden');
+                const configured = config.api_keys_configured || {};
+                const providers = Object.entries(configured)
+                    .filter(([, ok]) => Boolean(ok))
+                    .map(([provider]) => provider.toUpperCase());
+
+                const textEl = document.getElementById('api-key-configured-text');
+                if (textEl && providers.length > 0) {
+                    textEl.textContent = `✓ API key configured for ${providers.join(', ')} (environment / .env)`;
+                }
+
                 document.getElementById('api-key-configured').classList.remove('hidden');
             }
             // Populate model selector
@@ -111,6 +123,21 @@ const App = {
             }
             select.appendChild(option);
         }
+
+        // Also populate discussion model selector
+        const discussionSelect = document.getElementById('discussion-model-select');
+        discussionSelect.innerHTML = '<option value="">Same as analysis model</option>';
+        const savedDiscussionModel = localStorage.getItem('lc_discussion_model');
+
+        for (const [name, info] of Object.entries(models)) {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = `${name} — ${info.label}`;
+            if (savedDiscussionModel && name === savedDiscussionModel) {
+                option.selected = true;
+            }
+            discussionSelect.appendChild(option);
+        }
     },
 
     // --- Setup Actions ---
@@ -118,6 +145,7 @@ const App = {
         const projectPath = document.getElementById('project-path').value.trim();
         const scenePath = document.getElementById('scene-path').value.trim();
         const apiKey = document.getElementById('api-key').value.trim();
+        const discussionApiKey = document.getElementById('discussion-api-key').value.trim();
 
         if (!projectPath || !scenePath) {
             App.toast('Please fill in project directory and scene file.', 'error');
@@ -125,11 +153,13 @@ const App = {
         }
 
         const model = document.getElementById('model-select').value;
+        const discussionModel = document.getElementById('discussion-model-select').value;
 
         // Save to localStorage
         localStorage.setItem('lc_project_path', projectPath);
         localStorage.setItem('lc_scene_path', scenePath);
         localStorage.setItem('lc_model', model);
+        localStorage.setItem('lc_discussion_model', discussionModel);
 
         // Switch to analysis view
         App.showView('analysis-view');
@@ -143,7 +173,9 @@ const App = {
                 scene_path: scenePath,
                 project_path: projectPath,
                 api_key: apiKey || null,
+                discussion_api_key: discussionApiKey || null,
                 model: model,
+                discussion_model: discussionModel || null,
             });
 
             App.sessionSummary = result;
@@ -227,19 +259,75 @@ const App = {
     async resumeSession() {
         const projectPath = document.getElementById('project-path').value.trim();
         const apiKey = document.getElementById('api-key').value.trim();
+        const discussionApiKey = document.getElementById('discussion-api-key').value.trim();
+
+        if (!projectPath) {
+            App.toast('Enter a project directory first.', 'error');
+            return;
+        }
 
         try {
             const result = await App.api('POST', '/resume', {
                 project_path: projectPath,
                 api_key: apiKey || null,
+                discussion_api_key: discussionApiKey || null,
             });
 
             App.sessionSummary = result;
             App.enterReview(result);
             App.toast(`Resumed session — starting at finding #${result.current_index + 1}`, 'success');
         } catch (err) {
+            if (err.message.includes('scene_path_not_found')) {
+                const detail = App.tryParseResumeErrorDetail(err.message);
+                if (detail) {
+                    const suggested = detail.saved_scene_path || detail.attempted_scene_path || '';
+                    const correctedPath = window.prompt(
+                        `Saved scene path could not be found.\n` +
+                        `Old path:\n${suggested}\n\n` +
+                        `Enter corrected scene file path:`,
+                        suggested
+                    );
+
+                    if (!correctedPath || !correctedPath.trim()) {
+                        App.toast('Resume cancelled.', 'info');
+                        return;
+                    }
+
+                    try {
+                        const retry = await App.api('POST', '/resume', {
+                            project_path: projectPath,
+                            api_key: apiKey || null,
+                            discussion_api_key: discussionApiKey || null,
+                            scene_path_override: correctedPath.trim(),
+                        });
+
+                        App.sessionSummary = retry;
+                        App.enterReview(retry);
+                        App.toast(`Resumed session — starting at finding #${retry.current_index + 1}`, 'success');
+                        return;
+                    } catch (retryErr) {
+                        App.toast(retryErr.message, 'error');
+                        return;
+                    }
+                }
+            }
+
             App.toast(err.message, 'error');
         }
+    },
+
+    tryParseResumeErrorDetail(message) {
+        const match = message.match(/^HTTP\s+\d+:\s+(\{.*\})$/);
+        if (!match) return null;
+        try {
+            const detail = JSON.parse(match[1]);
+            if (detail && detail.code === 'scene_path_not_found') {
+                return detail;
+            }
+        } catch {
+            // ignore parse errors
+        }
+        return null;
     },
 
     // --- Review Mode ---
@@ -251,9 +339,13 @@ const App = {
         document.getElementById('count-major').textContent = summary.counts.major;
         document.getElementById('count-minor').textContent = summary.counts.minor;
 
-        // Show model label
+        // Show model label(s)
         if (summary.model) {
-            document.getElementById('model-label').textContent = `Model: ${summary.model.label}`;
+            let modelText = `Analysis: ${summary.model.label}`;
+            if (summary.discussion_model) {
+                modelText += ` · Discussion: ${summary.discussion_model.label}`;
+            }
+            document.getElementById('model-label').textContent = modelText;
         }
 
         // Glossary issues
@@ -357,12 +449,28 @@ const App = {
             ambiguity.classList.add('hidden');
         }
 
-        // Clear discussion thread for new finding (but not when re-rendering
-        // the same finding after an in-discussion update)
+        // Render persisted discussion thread for this finding unless we are
+        // intentionally preserving the already-rendered live thread.
         if (!data._preserveDiscussion) {
-            document.getElementById('discussion-thread').innerHTML = '';
+            App.renderDiscussionTurns(f.discussion_turns || []);
             document.getElementById('discussion-input').value = '';
         }
+    },
+
+    renderDiscussionTurns(turns) {
+        const thread = document.getElementById('discussion-thread');
+        thread.innerHTML = '';
+
+        (turns || []).forEach(turn => {
+            const role = (turn.role || '').toLowerCase();
+            if (role === 'user') {
+                App.addDiscussionMessage('You', turn.content || '', 'user');
+            } else if (role === 'assistant') {
+                App.addDiscussionMessage('Critic', turn.content || '', 'critic');
+            } else {
+                App.addDiscussionMessage('System', turn.content || '', 'system');
+            }
+        });
     },
 
     // --- Scene Change Handling ---
@@ -424,10 +532,16 @@ const App = {
         document.getElementById('reject-modal').classList.add('hidden');
     },
 
-    async skipMinor() {
+    async reviewFinding() {
         try {
-            const data = await App.api('POST', '/finding/skip-minor');
-            App.toast('Skipping minor findings', 'info');
+            const data = await App.api('POST', '/finding/review');
+            if (data.review?.changed) {
+                App.handleSceneChange(data.review);
+            } else if (data.review?.message) {
+                App.toast(data.review.message, 'info');
+            } else {
+                App.toast('Current finding reviewed against scene edits', 'info');
+            }
             App.handleFindingResponse(data);
         } catch (err) {
             App.toast(err.message, 'error');
@@ -549,6 +663,11 @@ const App = {
                     App.currentFinding._preserveDiscussion = true;
                     App.renderFinding(App.currentFinding);
                     delete App.currentFinding._preserveDiscussion;
+
+                    // Sync thread with canonical persisted turns from backend.
+                    if (doneData.finding.discussion_turns) {
+                        App.renderDiscussionTurns(doneData.finding.discussion_turns);
+                    }
                 }
             }
         } catch (err) {
@@ -571,15 +690,6 @@ const App = {
     },
 
     // --- Session Actions ---
-    async saveSession() {
-        try {
-            const data = await App.api('POST', '/session/save');
-            App.toast('Session saved', 'success');
-        } catch (err) {
-            App.toast(err.message, 'error');
-        }
-    },
-
     async saveLearning() {
         try {
             const data = await App.api('POST', '/learning/save');

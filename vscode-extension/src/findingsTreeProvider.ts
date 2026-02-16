@@ -175,7 +175,7 @@ export class FindingTreeItem extends vscode.TreeItem {
                 : `L${finding.line_start}`
             : '';
 
-        const label = `#${finding.number} ${finding.severity}${suffix}`;
+        const label = `${isCurrent ? '▶ ' : ''}#${finding.number} ${finding.severity}${suffix}`;
         super(label, vscode.TreeItemCollapsibleState.None);
 
         this.finding = finding;
@@ -187,9 +187,10 @@ export class FindingTreeItem extends vscode.TreeItem {
         this.iconPath = SEVERITY_ICONS[finding.severity] || SEVERITY_ICONS['major'];
         this.contextValue = 'finding';
 
-        // Highlight current finding
+        // Highlight current finding with a stronger icon cue.
         if (isCurrent) {
             this.description = `▶ ${this.description}`;
+            this.iconPath = new vscode.ThemeIcon('target');
         }
 
         // Click opens the discussion panel for this finding (and navigates to its line)

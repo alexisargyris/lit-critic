@@ -7,7 +7,11 @@
     "test": "npm run test:python && npm run test:ts",
     "test:python": "python -m pytest",
     "test:ts": "cd vscode-extension && npm test",
-    "test:python:cov": "python -m pytest --cov=server --cov=cli --cov=web",
+    "test:python:cov": "python -m pytest --cov=core --cov=contracts --cov=lit_platform --cov=cli --cov=web",
+    "check:release-intent": "python versioning/check_release_intent.py",
+    "validate:semver": "python versioning/validate_semver.py",
+    "release:check": "npm run check:release-intent && npm run validate:semver",
+    "hooks:install": "git config core.hooksPath .githooks",
     "install": "npm run install:python && npm run install:ts",
     "install:python": "python -m pip install -r requirements.txt",
     "install:ts": "cd vscode-extension && npm install"

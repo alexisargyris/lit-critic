@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from web.app import app
 from web.routes import session_mgr
 from web.session_manager import ResumeScenePathError
-from server.models import Finding, SessionState, LearningData
+from lit_platform.runtime.models import Finding, SessionState, LearningData
 
 
 @pytest.fixture
@@ -969,8 +969,8 @@ class TestManagementEndpoints:
 
     def test_list_sessions_returns_all_sessions(self, client, temp_project_dir, sample_session_state_with_db):
         """GET /api/sessions should return all sessions for a project."""
-        from server.session import create_session, complete_session
-        from server.models import Finding
+        from lit_platform.runtime.session import create_session, complete_session
+        from lit_platform.runtime.models import Finding
 
         # Create a couple sessions
         state = sample_session_state_with_db
@@ -1004,8 +1004,8 @@ class TestManagementEndpoints:
 
     def test_get_session_detail_returns_full_data(self, client, temp_project_dir, sample_session_state_with_db):
         """GET /api/sessions/{id} should return complete session details."""
-        from server.session import create_session, complete_session, list_sessions
-        from server.models import Finding
+        from lit_platform.runtime.session import create_session, complete_session, list_sessions
+        from lit_platform.runtime.models import Finding
 
         state = sample_session_state_with_db
         state.findings = [
@@ -1041,8 +1041,8 @@ class TestManagementEndpoints:
 
     def test_delete_session_returns_deleted_true(self, client, temp_project_dir, sample_session_state_with_db):
         """DELETE /api/sessions/{id} should delete session and return True."""
-        from server.session import create_session, complete_session, list_sessions
-        from server.models import Finding
+        from lit_platform.runtime.session import create_session, complete_session, list_sessions
+        from lit_platform.runtime.models import Finding
 
         state = sample_session_state_with_db
         state.findings = [
@@ -1074,7 +1074,7 @@ class TestManagementEndpoints:
 
     def test_get_learning_returns_all_categories(self, client, temp_project_dir):
         """GET /api/learning should return all learning categories."""
-        from server.db import get_connection, LearningStore
+        from lit_platform.runtime.db import get_connection, LearningStore
 
         conn = get_connection(temp_project_dir)
         try:
@@ -1103,7 +1103,7 @@ class TestManagementEndpoints:
 
     def test_export_learning_creates_file(self, client, temp_project_dir):
         """POST /api/learning/export should create LEARNING.md."""
-        from server.db import get_connection, LearningStore
+        from lit_platform.runtime.db import get_connection, LearningStore
 
         conn = get_connection(temp_project_dir)
         try:
@@ -1134,8 +1134,8 @@ class TestManagementEndpoints:
 
     def test_reset_learning_clears_all_data(self, client, temp_project_dir):
         """DELETE /api/learning should reset all learning data."""
-        from server.db import get_connection, LearningStore
-        from server.learning import load_learning
+        from lit_platform.runtime.db import get_connection, LearningStore
+        from lit_platform.runtime.learning import load_learning
 
         conn = get_connection(temp_project_dir)
         try:
@@ -1162,8 +1162,8 @@ class TestManagementEndpoints:
 
     def test_delete_learning_entry_returns_deleted_true(self, client, temp_project_dir):
         """DELETE /api/learning/entries/{id} should delete entry and return True."""
-        from server.db import get_connection, LearningStore
-        from server.learning import load_learning
+        from lit_platform.runtime.db import get_connection, LearningStore
+        from lit_platform.runtime.learning import load_learning
 
         conn = get_connection(temp_project_dir)
         try:

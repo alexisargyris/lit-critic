@@ -3,11 +3,11 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["cli*", "server*", "web*"]
+include = ["core*", "contracts*", "cli*", "web*", "lit_platform*"]
 
 [project]
 name = "lit-critic"
-version = "0.1.0"
+version = "2.0.1"
 description = "Multi-lens editorial review system for fiction manuscripts"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,7 +37,7 @@ asyncio_default_fixture_loop_scope = "function"
 addopts = "-v --tb=short"
 
 [tool.coverage.run]
-source = ["server", "cli", "web"]
+source = ["core", "contracts", "cli", "web", "lit_platform"]
 omit = ["cli/__main__.py"]
 
 [tool.coverage.report]

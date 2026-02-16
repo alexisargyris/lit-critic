@@ -4,17 +4,32 @@ REST API routes for the lit-critic Web UI.
 
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 
-from server.config import AVAILABLE_MODELS, DEFAULT_MODEL, API_KEY_ENV_VARS
-from server.session import load_session
-from .session_manager import WebSessionManager
+from lit_platform.persistence import LearningStore, get_connection
+from lit_platform.services.analysis_service import (
+    API_KEY_ENV_VARS,
+    AVAILABLE_MODELS,
+    DEFAULT_MODEL,
+)
+from lit_platform.services import (
+    check_active_session,
+    get_session_detail,
+    list_sessions,
+    delete_session_by_id,
+    load_learning,
+    export_learning_markdown,
+)
+from .session_manager import WebSessionManager, ResumeScenePathError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
@@ -28,12 +43,24 @@ class AnalyzeRequest(BaseModel):
     scene_path: str
     project_path: str
     api_key: Optional[str] = None
+    discussion_api_key: Optional[str] = None
     model: Optional[str] = None
+    discussion_model: Optional[str] = None
 
 
 class ResumeRequest(BaseModel):
     project_path: str
     api_key: Optional[str] = None
+    discussion_api_key: Optional[str] = None
+    scene_path_override: Optional[str] = None
+
+
+class ResumeSessionByIdRequest(BaseModel):
+    project_path: str
+    session_id: int
+    api_key: Optional[str] = None
+    discussion_api_key: Optional[str] = None
+    scene_path_override: Optional[str] = None
 
 
 class RejectRequest(BaseModel):
@@ -56,39 +83,126 @@ class CheckSessionRequest(BaseModel):
     project_path: str
 
 
+class ProjectPathRequest(BaseModel):
+    project_path: str
+
+
+class SessionIdRequest(BaseModel):
+    project_path: str
+    session_id: int
+
+
+class LearningEntryDeleteRequest(BaseModel):
+    project_path: str
+    entry_id: int
+
+
 # --- Helper ---
 
-def _resolve_api_key(provided: Optional[str], model: Optional[str] = None) -> str:
-    """Get API key from request or environment, based on the model's provider.
+def _normalise_model_name(name: Optional[str], default: str = DEFAULT_MODEL) -> str:
+    """Return a valid model short name, falling back to ``default``."""
+    if name and name in AVAILABLE_MODELS:
+        return name
+    return default
 
-    Tries, in order:
-    1. The explicitly provided key.
-    2. The provider-specific env var (ANTHROPIC_API_KEY or OPENAI_API_KEY).
-    3. Falls back to ANTHROPIC_API_KEY for backward compatibility.
+
+def _normalise_optional_model_name(name: Optional[str]) -> Optional[str]:
+    """Return a valid optional model short name, or ``None``."""
+    if name and name in AVAILABLE_MODELS:
+        return name
+    return None
+
+
+def _validate_api_key_matches_provider(provider: str, key: str, key_label: str) -> None:
+    """Best-effort guardrail for obvious provider/key mismatches.
+
+    - Anthropic keys are expected to start with ``sk-ant-``.
+    - OpenAI keys should *not* start with ``sk-ant-``.
     """
-    if provided:
-        return provided
+    trimmed = key.strip()
 
-    # Determine provider from model
-    provider = None
-    if model and model in AVAILABLE_MODELS:
-        provider = AVAILABLE_MODELS[model]["provider"]
+    if provider == "openai" and trimmed.startswith("sk-ant-"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{key_label} appears to be an Anthropic key, but the selected model uses OpenAI. "
+                "Provide an OpenAI key (OPENAI_API_KEY or discussion_api_key/api_key as appropriate)."
+            ),
+        )
 
-    if provider and provider in API_KEY_ENV_VARS:
-        key = os.environ.get(API_KEY_ENV_VARS[provider])
-        if key:
-            return key
+    if provider == "anthropic" and trimmed.startswith("sk-") and not trimmed.startswith("sk-ant-"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{key_label} appears to be an OpenAI key, but the selected model uses Anthropic. "
+                "Provide an Anthropic key (ANTHROPIC_API_KEY or discussion_api_key/api_key as appropriate)."
+            ),
+        )
 
-    # Backward-compatible fallback
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if key:
-        return key
 
-    env_vars = " or ".join(API_KEY_ENV_VARS.values())
+def _resolve_provider_api_key(provider: str, explicit_key: Optional[str], key_label: str) -> str:
+    """Resolve an API key for a specific provider.
+
+    Resolution order:
+    1. Explicit key from request.
+    2. Provider-specific environment variable.
+    """
+    if explicit_key:
+        _validate_api_key_matches_provider(provider, explicit_key, key_label)
+        return explicit_key
+
+    env_var = API_KEY_ENV_VARS.get(provider)
+    env_key = os.environ.get(env_var) if env_var else None
+    if env_key:
+        _validate_api_key_matches_provider(provider, env_key, env_var or key_label)
+        return env_key
+
     raise HTTPException(
         status_code=400,
-        detail=f"No API key provided. Pass api_key in request body or set {env_vars} environment variable."
+        detail=(
+            f"No API key for provider '{provider}' ({key_label}). "
+            f"Provide {key_label} in request body or set {env_var}."
+        ),
     )
+
+
+def _resolve_analysis_and_discussion_keys(
+    model: str,
+    discussion_model: Optional[str],
+    api_key: Optional[str],
+    discussion_api_key: Optional[str],
+) -> tuple[str, Optional[str]]:
+    """Resolve provider-correct keys for analysis and discussion models."""
+    analysis_provider = AVAILABLE_MODELS[model]["provider"]
+    analysis_key = _resolve_provider_api_key(
+        analysis_provider,
+        api_key,
+        "api_key",
+    )
+
+    if not discussion_model:
+        return analysis_key, None
+
+    discussion_provider = AVAILABLE_MODELS[discussion_model]["provider"]
+
+    if discussion_provider == analysis_provider:
+        # Same provider: discussion key is optional. If provided, validate and use it.
+        if discussion_api_key:
+            discussion_key = _resolve_provider_api_key(
+                discussion_provider,
+                discussion_api_key,
+                "discussion_api_key",
+            )
+            return analysis_key, discussion_key
+        return analysis_key, None
+
+    # Cross-provider: discussion provider key must be resolved independently.
+    discussion_key = _resolve_provider_api_key(
+        discussion_provider,
+        discussion_api_key,
+        "discussion_api_key",
+    )
+    return analysis_key, discussion_key
 
 
 # --- Routes ---
@@ -116,11 +230,25 @@ async def get_config():
 @router.post("/analyze")
 async def start_analysis(req: AnalyzeRequest):
     """Start a new multi-lens analysis."""
-    model = req.model or DEFAULT_MODEL
-    api_key = _resolve_api_key(req.api_key, model)
+    model = _normalise_model_name(req.model)
+    discussion_model = _normalise_optional_model_name(req.discussion_model)
+
+    analysis_key, discussion_key = _resolve_analysis_and_discussion_keys(
+        model,
+        discussion_model,
+        req.api_key,
+        req.discussion_api_key,
+    )
 
     try:
-        result = await session_mgr.start_analysis(req.scene_path, req.project_path, api_key, model=model)
+        result = await session_mgr.start_analysis(
+            req.scene_path,
+            req.project_path,
+            analysis_key,
+            model=model,
+            discussion_model=discussion_model,
+            discussion_api_key=discussion_key,
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -178,14 +306,103 @@ async def analysis_progress(request: Request):
 
 @router.post("/resume")
 async def resume_session(req: ResumeRequest):
-    """Resume a previously saved session."""
-    # Peek at the saved session to determine the model/provider for API key resolution
-    saved = load_session(Path(req.project_path))
-    saved_model = saved.get("model", DEFAULT_MODEL) if saved else None
-    api_key = _resolve_api_key(req.api_key, saved_model)
+    """Resume the active session from SQLite."""
+    # Peek at the active session to determine providers for key resolution.
+    active = check_active_session(Path(req.project_path))
+
+    analysis_key: Optional[str] = req.api_key
+    discussion_key: Optional[str] = req.discussion_api_key
+
+    if active.get("exists"):
+        saved_model = _normalise_model_name(active.get("model"), default=DEFAULT_MODEL)
+        saved_discussion_model = _normalise_optional_model_name(active.get("discussion_model"))
+
+        analysis_key, discussion_key = _resolve_analysis_and_discussion_keys(
+            saved_model,
+            saved_discussion_model,
+            req.api_key,
+            req.discussion_api_key,
+        )
 
     try:
-        result = await session_mgr.resume_session(req.project_path, api_key)
+        result = await session_mgr.resume_session(
+            req.project_path,
+            analysis_key,
+            discussion_api_key=discussion_key,
+            scene_path_override=req.scene_path_override,
+        )
+    except ResumeScenePathError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "scene_path_not_found",
+                "message": str(e),
+                "saved_scene_path": e.saved_scene_path,
+                "attempted_scene_path": e.attempted_scene_path,
+                "project_path": e.project_path,
+                "override_provided": e.override_provided,
+            },
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return result
+
+
+@router.post("/resume-session")
+async def resume_session_by_id(req: ResumeSessionByIdRequest):
+    """Resume a specific active session by id from SQLite."""
+    project = Path(req.project_path)
+    if not project.exists():
+        raise HTTPException(status_code=404, detail="Project directory not found")
+
+    detail = get_session_detail(project, req.session_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail=f"Session {req.session_id} not found")
+
+    if detail.get("status") != "active":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Session {req.session_id} is '{detail.get('status')}' and cannot be resumed. "
+                "Only active sessions can be resumed."
+            ),
+        )
+
+    saved_model = _normalise_model_name(detail.get("model"), default=DEFAULT_MODEL)
+    saved_discussion_model = _normalise_optional_model_name(detail.get("discussion_model"))
+
+    analysis_key, discussion_key = _resolve_analysis_and_discussion_keys(
+        saved_model,
+        saved_discussion_model,
+        req.api_key,
+        req.discussion_api_key,
+    )
+
+    try:
+        result = await session_mgr.resume_session_by_id(
+            req.project_path,
+            req.session_id,
+            analysis_key,
+            discussion_api_key=discussion_key,
+            scene_path_override=req.scene_path_override,
+        )
+    except ResumeScenePathError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "scene_path_not_found",
+                "message": str(e),
+                "saved_scene_path": e.saved_scene_path,
+                "attempted_scene_path": e.attempted_scene_path,
+                "project_path": e.project_path,
+                "override_provided": e.override_provided,
+            },
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
@@ -336,17 +553,13 @@ async def mark_ambiguity(req: AmbiguityRequest):
     return result
 
 
-@router.post("/finding/skip-minor")
-async def skip_minor():
-    """Enable skip minor and advance."""
+@router.post("/finding/review")
+async def review_finding():
+    """Re-check the current finding against scene edits."""
     if not session_mgr.is_active:
         raise HTTPException(status_code=404, detail="No active session")
 
-    finding = session_mgr.skip_minor_findings()
-    if finding is None:
-        return {"complete": True, "message": "All findings have been presented."}
-
-    return {"complete": False, **finding}
+    return await session_mgr.review_current_finding()
 
 
 @router.post("/finding/skip-to/{lens}")
@@ -365,31 +578,145 @@ async def skip_to_lens(lens: str):
     return {"complete": False, **finding}
 
 
-@router.post("/session/save")
-async def save_session_route():
-    """Save the current session to disk."""
-    if not session_mgr.is_active:
-        raise HTTPException(status_code=404, detail="No active session")
-
-    result = session_mgr.save_current_session()
-    return result
-
-
-@router.delete("/session")
-async def clear_session():
-    """Delete the saved session file."""
-    if not session_mgr.is_active:
-        raise HTTPException(status_code=404, detail="No active session")
-
-    result = session_mgr.clear_session()
-    return result
-
-
 @router.post("/learning/save")
 async def save_learning():
-    """Save LEARNING.md to the project directory."""
+    """Export LEARNING.md to the project directory."""
     if not session_mgr.is_active:
         raise HTTPException(status_code=404, detail="No active session")
 
     result = session_mgr.save_learning()
     return result
+
+
+# ---------------------------------------------------------------------------
+# Management endpoints (Phase 2)
+# ---------------------------------------------------------------------------
+
+@router.get("/sessions")
+async def list_sessions_route(project_path: str = Query(..., description="Path to the project directory")):
+    """List all sessions for a project."""
+    from pathlib import Path
+
+    project = Path(project_path)
+    
+    # Log for debugging path encoding issues
+    logger.info(f"GET /api/sessions: project_path={project_path!r}, exists={project.exists()}")
+    
+    if not project.exists():
+        logger.warning(f"Project directory not found: {project_path}")
+        raise HTTPException(status_code=404, detail="Project directory not found")
+
+    sessions = list_sessions(project)
+    return {"sessions": sessions}
+
+
+@router.get("/sessions/{session_id}")
+async def get_session_detail_route(session_id: int, project_path: str = Query(..., description="Path to the project directory")):
+    """Get detailed info for a specific session."""
+    from pathlib import Path
+
+    project = Path(project_path)
+    if not project.exists():
+        raise HTTPException(status_code=404, detail="Project directory not found")
+
+    detail = get_session_detail(project, session_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    return detail
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session_route(session_id: int, project_path: str = Query(..., description="Path to the project directory")):
+    """Delete a specific session."""
+    from pathlib import Path
+
+    project = Path(project_path)
+    if not project.exists():
+        raise HTTPException(status_code=404, detail="Project directory not found")
+
+    deleted = delete_session_by_id(project, session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    return {"deleted": True, "session_id": session_id}
+
+
+@router.get("/learning")
+async def get_learning_route(project_path: str = Query(..., description="Path to the project directory")):
+    """Get learning data for a project."""
+    from pathlib import Path
+
+    project = Path(project_path)
+    
+    # Log for debugging path encoding issues
+    logger.info(f"GET /api/learning: project_path={project_path!r}, exists={project.exists()}")
+    
+    if not project.exists():
+        logger.warning(f"Project directory not found: {project_path}")
+        raise HTTPException(status_code=404, detail="Project directory not found")
+
+    learning = load_learning(project)
+
+    # Convert to dict format
+    return {
+        "project_name": learning.project_name,
+        "review_count": learning.review_count,
+        "preferences": learning.preferences,
+        "blind_spots": learning.blind_spots,
+        "resolutions": learning.resolutions,
+        "ambiguity_intentional": learning.ambiguity_intentional,
+        "ambiguity_accidental": learning.ambiguity_accidental,
+    }
+
+
+@router.post("/learning/export")
+async def export_learning_route(req: ProjectPathRequest):
+    """Export LEARNING.md to the project directory."""
+    from pathlib import Path
+
+    project = Path(req.project_path)
+    if not project.exists():
+        raise HTTPException(status_code=404, detail="Project directory not found")
+
+    filepath = export_learning_markdown(project)
+    return {"exported": True, "path": str(filepath)}
+
+
+@router.delete("/learning")
+async def reset_learning_route(project_path: str = Query(..., description="Path to the project directory")):
+    """Reset all learning data for a project."""
+    from pathlib import Path
+
+    project = Path(project_path)
+    if not project.exists():
+        raise HTTPException(status_code=404, detail="Project directory not found")
+
+    conn = get_connection(project)
+    try:
+        LearningStore.reset(conn)
+    finally:
+        conn.close()
+
+    return {"reset": True}
+
+
+@router.delete("/learning/entries/{entry_id}")
+async def delete_learning_entry_route(entry_id: int, project_path: str = Query(..., description="Path to the project directory")):
+    """Delete a single learning entry."""
+    from pathlib import Path
+
+    project = Path(project_path)
+    if not project.exists():
+        raise HTTPException(status_code=404, detail="Project directory not found")
+
+    conn = get_connection(project)
+    try:
+        deleted = LearningStore.remove_entry(conn, entry_id)
+    finally:
+        conn.close()
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Learning entry {entry_id} not found")
+
+    return {"deleted": True, "entry_id": entry_id}

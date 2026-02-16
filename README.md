@@ -47,7 +47,7 @@ You're writing a novel and want AI-powered editorial feedback that respects your
 lit-critic is an **editorial assistant, not a content generator**. It will never write prose for you, rewrite your sentences, or impose external standards. It reads your scenes, checks them against rules *you* define in your index files, and presents findings for you to accept, reject, or discuss. When it suggests specific wording (rarely), it's minimal — a couple of example words to illustrate a concept, never a rewritten paragraph. Your novel, your voice.
 
 - ✅ **Five editorial lenses** — Prose, Structure, Logic, Clarity, Continuity
-- ✅ **Three interfaces** — CLI, Web UI, VS Code Extension (all share the same backend)
+- ✅ **Three interfaces** — CLI, Web UI, VS Code Extension (all use the same Platform workflow)
 - ✅ **Interactive discussion** — debate findings; the AI can revise or withdraw
 - ✅ **Learning system** — adapts to your style over time
 - ✅ **Auto-save & resume** — every decision is instantly saved; close anytime, with moved-scene recovery prompts when paths change
@@ -111,7 +111,7 @@ See the **[Getting Started Guide](docs/user-guide/getting-started.md)** for a de
 | **Web UI** | Visual interface | `python lit-critic-web.py` → http://localhost:8000 |
 | **VS Code Extension** | Native editor integration | `Ctrl+Shift+L` or Command Palette → "Analyze Current Scene" |
 
-All three share the same backend and session database — start a review in one, resume in another, even after moving projects across machines (you can relink moved scene paths at resume time).
+All three run through the same Platform-managed workflow and project database (`.lit-critic.db`) — start a review in one, resume in another, even after moving projects across machines (you can relink moved scene paths at resume time).
 
 See **[Using the Tool](docs/user-guide/using-the-tool.md)** for details on each interface.
 
@@ -147,10 +147,11 @@ You want to integrate lit-critic into your tools or understand its architecture.
 
 ```
 lit-critic/
-├── server/                 # FastAPI backend + SQLite persistence
-│   └── llm/                # LLM provider abstraction (Anthropic, OpenAI)
+├── core/                   # Stateless reasoning service + /v1 contracts
+├── lit_platform/           # Workflow, persistence, orchestration owner
+├── contracts/              # Versioned request/response contracts
 ├── cli/                    # CLI interface
-├── web/                    # Flask web UI
+├── web/                    # FastAPI web/API surface over Platform
 ├── vscode-extension/       # VS Code extension (TypeScript)
 ├── tests/                  # Test suites (Python + TypeScript)
 └── docs/
@@ -158,7 +159,13 @@ lit-critic/
     └── technical/          # Developer documentation
 ```
 
-All three interfaces (CLI, Web UI, VS Code) are thin clients over the same **FastAPI REST API**. Session state, findings, and learning data are persisted in a per-project **SQLite database** (`.lit-critic.db`) with WAL mode, foreign keys, and schema versioning.
+The system is split into:
+
+- **Core (`core/`)** — stateless reasoning endpoints (`/v1/*`)
+- **Platform (`lit_platform/`)** — session lifecycle, persistence, orchestration, retries, and state transitions
+- **Clients (CLI/Web/VS Code)** — thin interaction layers over Platform APIs/services
+
+Session state, findings, and learning data are persisted in a per-project **SQLite database** (`.lit-critic.db`) with WAL mode, foreign keys, and schema versioning.
 
 See the **[Architecture Guide](docs/technical/architecture.md)** for the full system design and data flow diagram.
 
@@ -178,8 +185,17 @@ pip install -r requirements.txt
 # Run all tests (Python + TypeScript)
 npm test
 
+# Run SemVer/component compatibility checks
+npm run release:check
+
+# (Optional) run only the release-intent guard
+npm run check:release-intent
+
+# (Optional) install local git hooks for release checks on push
+npm run hooks:install
+
 # Python tests only (with coverage)
-pytest --cov=server --cov=cli --cov=web
+pytest --cov=core --cov=lit_platform --cov=cli --cov=web --cov=contracts
 
 # TypeScript tests only
 npm run test:ts
@@ -195,13 +211,16 @@ See the **[Installation Guide](docs/technical/installation.md)** for full develo
 
 ### Key Technical Features
 
-- **FastAPI backend** — REST API shared by all interfaces
-- **SQLite persistence** — Auto-save with WAL mode, foreign keys, schema versioning; `SessionStore`, `FindingStore`, `LearningStore` with full CRUD
+- **Stateless Core** — Contract-first reasoning endpoints (`/v1/analyze`, `/v1/discuss`, `/v1/re-evaluate-finding`)
+- **Platform-owned workflow** — Session lifecycle, persistence, scene/index loading, and Core transport are centralized in `lit_platform/`
+- **SQLite persistence** — Auto-save with WAL mode, foreign keys, schema versioning; session/finding/learning stores with full CRUD
 - **Streaming responses** — Token-by-token discussion via SSE
 - **Structured output** — LLM tool use for reliable parsing
 - **Line-number tracking** — Findings include precise line ranges for editor integration
-- **Interoperable sessions** — Same database works across CLI, Web UI, and VS Code
-- **Management API** — REST endpoints for session history, learning data, and cleanup
+- **Interoperable sessions** — Same project database works across CLI, Web UI, and VS Code
+- **Management API** — Platform endpoints for session history, learning data, and cleanup
+- **SemVer governance (no-CI)** — Component versions + compatibility matrix with local validator and pre-push hook support
+- **Release-intent guard** — Detects component changes without matching `versioning/compatibility.json` update
 - **Comprehensive tests** — Python (pytest) and TypeScript (mocha)
 
 ### 📖 Full Technical Docs
@@ -210,6 +229,8 @@ See the **[Installation Guide](docs/technical/installation.md)** for full develo
 - **[API Reference](docs/technical/api-reference.md)** — Complete REST API documentation
 - **[Installation Guide](docs/technical/installation.md)** — Developer setup instructions
 - **[Testing Guide](docs/technical/testing.md)** — Running and writing tests
+- **[Versioning & Compatibility](docs/technical/versioning.md)** — SemVer policy, compatibility matrix, and local enforcement
+- **[Release Checklist](docs/technical/release-checklist.md)** — Step-by-step no-CI release workflow
 
 ---
 

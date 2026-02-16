@@ -6,7 +6,7 @@ import os
 import pytest
 from unittest.mock import patch
 
-from server.config import (
+from lit_platform.runtime.config import (
     MODEL,
     MAX_TOKENS,
     COORDINATOR_MAX_TOKENS,

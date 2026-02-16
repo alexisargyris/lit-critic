@@ -12,6 +12,16 @@ Implements:
 import json
 import re
 
+from lit_platform.session_state_machine import (
+    apply_discussion_outcome_reason,
+    apply_finding_revision,
+    prior_outcomes_summary,
+    describe_revision_changes,
+    record_ambiguity_answer,
+    record_discussion_acceptance,
+    record_discussion_rejection,
+)
+
 from .llm import LLMResponse
 from .models import SessionState, Finding
 from .prompts import get_discussion_system_prompt, build_discussion_messages
@@ -24,29 +34,7 @@ def build_prior_outcomes_summary(state: SessionState, current_finding: Finding) 
     preventing repetition of refuted arguments and providing continuity.
     (Phase 3: Cross-finding context)
     """
-    outcomes = []
-    for finding in state.findings:
-        if finding.number == current_finding.number:
-            continue
-        if finding.status == "pending":
-            continue
-        
-        status_desc = finding.status.upper()
-        reason = ""
-        if finding.outcome_reason:
-            reason = f" — {finding.outcome_reason}"
-        elif finding.author_response:
-            reason = f" — author: \"{finding.author_response[:100]}\""
-        
-        outcomes.append(
-            f"- Finding #{finding.number} ({finding.lens}, {finding.severity}): "
-            f"{status_desc}{reason}"
-        )
-    
-    if not outcomes:
-        return ""
-    
-    return "\n".join(outcomes)
+    return prior_outcomes_summary(state.findings, current_finding.number)
 
 
 def parse_discussion_response(response_text: str) -> dict:
@@ -120,40 +108,12 @@ def apply_revision(finding: Finding, revision: dict) -> dict:
     Returns the old version dict for reference.
     (Phase 2: Finding refinement)
     """
-    # Save current state to revision history
-    old_version = {
-        "severity": finding.severity,
-        "evidence": finding.evidence,
-        "impact": finding.impact,
-        "options": finding.options[:],
-    }
-    finding.revision_history.append(old_version)
-    
-    # Apply changes (only fields present in the revision)
-    if "severity" in revision:
-        finding.severity = revision["severity"]
-    if "evidence" in revision:
-        finding.evidence = revision["evidence"]
-    if "impact" in revision:
-        finding.impact = revision["impact"]
-    if "options" in revision:
-        finding.options = revision["options"]
-    
-    return old_version
+    return apply_finding_revision(finding, revision)
 
 
 def _describe_changes(old: dict, revision: dict) -> str:
     """Generate a human-readable description of what changed in a revision."""
-    changes = []
-    if "severity" in revision and revision["severity"] != old.get("severity"):
-        changes.append(f"severity {old.get('severity', '?')} → {revision['severity']}")
-    if "evidence" in revision:
-        changes.append("evidence refined")
-    if "impact" in revision:
-        changes.append("impact updated")
-    if "options" in revision:
-        changes.append("options updated")
-    return ", ".join(changes) if changes else "minor refinements"
+    return describe_revision_changes(old, revision)
 
 
 def _apply_discussion_side_effects(state: SessionState, finding: Finding,
@@ -180,53 +140,46 @@ def _apply_discussion_side_effects(state: SessionState, finding: Finding,
     })
     
     # Phase 2: Handle revision/escalation/withdrawal
+    change_desc = None
     if status in ("revised", "escalated") and parsed["revision"]:
         old_version = apply_revision(finding, parsed["revision"])
         change_desc = _describe_changes(old_version, parsed["revision"])
-        action = "Revised" if status == "revised" else "Escalated"
-        finding.outcome_reason = f"{action}: {change_desc}"
-    elif status == "withdrawn":
-        finding.outcome_reason = f"Withdrawn by critic: {response_text[:150]}"
-    elif status == "conceded":
-        finding.outcome_reason = f"Conceded by critic: {response_text[:150]}"
-    elif status == "rejected":
-        finding.outcome_reason = f"Rejected by author: {user_message[:150]}"
-    elif status == "accepted":
-        finding.outcome_reason = "Accepted by author"
+
+    apply_discussion_outcome_reason(
+        finding,
+        status,
+        response_text=response_text,
+        user_message=user_message,
+        change_desc=change_desc,
+    )
     
     # Handle ambiguity classification
     if parsed["ambiguity"]:
         intentional = parsed["ambiguity"] == "intentional"
-        state.learning.session_ambiguity_answers.append({
-            "location": finding.location,
-            "description": finding.evidence[:100],
-            "intentional": intentional
-        })
+        record_ambiguity_answer(
+            finding,
+            state.learning,
+            intentional=intentional,
+        )
     
     # Phase 4: Richer learning extraction
     if status in ("rejected", "conceded"):
-        rejection_entry = {
-            "lens": finding.lens,
-            "pattern": finding.evidence[:100],
-            "reason": user_message[:200],
-        }
-        # Include explicit preference rule if the critic provided one
-        if parsed["preference"]:
-            rejection_entry["preference_rule"] = parsed["preference"]
-        state.learning.session_rejections.append(rejection_entry)
+        record_discussion_rejection(
+            finding,
+            state.learning,
+            reason=user_message[:200],
+            preference_rule=parsed["preference"],
+        )
     elif status == "accepted":
-        state.learning.session_acceptances.append({
-            "lens": finding.lens,
-            "pattern": finding.evidence[:100]
-        })
+        record_discussion_acceptance(finding, state.learning)
     elif parsed["preference"]:
         # Preference extracted even without a terminal status (e.g., during revision)
-        state.learning.session_rejections.append({
-            "lens": finding.lens,
-            "pattern": finding.evidence[:100],
-            "reason": user_message[:200],
-            "preference_rule": parsed["preference"],
-        })
+        record_discussion_rejection(
+            finding,
+            state.learning,
+            reason=user_message[:200],
+            preference_rule=parsed["preference"],
+        )
     
     return response_text, status
 

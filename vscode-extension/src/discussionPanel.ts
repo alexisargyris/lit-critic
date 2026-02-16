@@ -5,7 +5,7 @@
  *   - Current finding details (severity, lens, location, evidence, impact, options)
  *   - Chat-style interface for discussion with the critic
  *   - Streaming responses via SSE
- *   - Action buttons: Accept, Reject, Continue, Skip Minor
+ *   - Action buttons: Accept, Reject, Review, Export Learning
  *   - Ambiguity buttons for ambiguity findings
  */
 
@@ -18,10 +18,9 @@ type PanelMessage =
     | { type: 'accept' }
     | { type: 'reject'; reason: string }
     | { type: 'continue' }
-    | { type: 'skipMinor' }
+    | { type: 'reviewFinding' }
     | { type: 'ambiguity'; intentional: boolean }
-    | { type: 'saveSession' }
-    | { type: 'saveLearning' };
+    | { type: 'exportLearning' };
 
 export class DiscussionPanel implements vscode.Disposable {
     private panel: vscode.WebviewPanel | null = null;
@@ -31,6 +30,7 @@ export class DiscussionPanel implements vscode.Disposable {
 
     // Callbacks for the extension to hook into
     onFindingAction: ((action: string, data?: unknown) => void) | null = null;
+    onDiscussionResult: ((result: DiscussResponse) => void) | null = null;
 
     constructor(apiClient: ApiClient) {
         this.apiClient = apiClient;
@@ -118,17 +118,14 @@ export class DiscussionPanel implements vscode.Disposable {
                 case 'continue':
                     this.onFindingAction?.('continue');
                     break;
-                case 'skipMinor':
-                    this.onFindingAction?.('skipMinor');
+                case 'reviewFinding':
+                    this.onFindingAction?.('reviewFinding');
                     break;
                 case 'ambiguity':
                     this.onFindingAction?.('ambiguity', msg.intentional);
                     break;
-                case 'saveSession':
-                    this.onFindingAction?.('saveSession');
-                    break;
-                case 'saveLearning':
-                    this.onFindingAction?.('saveLearning');
+                case 'exportLearning':
+                    this.onFindingAction?.('exportLearning');
                     break;
             }
         } catch (err) {
@@ -161,6 +158,7 @@ export class DiscussionPanel implements vscode.Disposable {
             },
             (result: DiscussResponse) => {
                 markFinished();
+                this.onDiscussionResult?.(result);
                 this.postMessage({ type: 'streamDone', result });
                 this.abortStream = null;
             },
@@ -227,12 +225,30 @@ export class DiscussionPanel implements vscode.Disposable {
             ? `<div class="options"><strong>Suggestions:</strong><ol>${finding.options.map(o => `<li>${escapeHtml(o)}</li>`).join('')}</ol></div>`
             : '';
 
+        const statusLabel = (finding.status || 'pending').toLowerCase();
+        const statusHtml = `<span class="status-badge status-${escapeHtml(statusLabel)}">${escapeHtml(statusLabel)}</span>`;
+
         const ambiguityButtons = isAmbiguity
             ? `<div class="ambiguity-buttons">
                 <button onclick="send({type:'ambiguity', intentional:true})" class="btn btn-info">Intentional</button>
                 <button onclick="send({type:'ambiguity', intentional:false})" class="btn btn-warning">Accidental</button>
                </div>`
             : '';
+
+        const initialTurns = (finding.discussion_turns || []).map((turn) => {
+            const role = (turn.role || '').toLowerCase();
+            if (role === 'user') {
+                return { roleClass: 'user', label: 'You', content: turn.content || '' };
+            }
+            if (role === 'assistant') {
+                return { roleClass: 'assistant', label: 'Critic', content: turn.content || '' };
+            }
+            return { roleClass: 'system', label: 'System', content: turn.content || '' };
+        });
+
+        const initialTurnsHtml = initialTurns.map((t) =>
+            `<div class="message ${t.roleClass}">${escapeHtml(t.content)}</div>`
+        ).join('');
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -279,6 +295,23 @@ export class DiscussionPanel implements vscode.Disposable {
         opacity: 0.8;
         margin-bottom: 4px;
     }
+    .finding-header .status-badge {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 1px 6px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        text-transform: uppercase;
+        font-size: 0.78em;
+        letter-spacing: 0.04em;
+        opacity: 0.95;
+    }
+    .finding-header .status-pending { opacity: 0.7; }
+    .finding-header .status-accepted { color: #4caf50; border-color: #4caf50; }
+    .finding-header .status-rejected { color: #f44336; border-color: #f44336; }
+    .finding-header .status-withdrawn { color: #9e9e9e; border-color: #9e9e9e; }
+    .finding-header .status-revised { color: #2196f3; border-color: #2196f3; }
+    .finding-header .status-escalated { color: #ff9800; border-color: #ff9800; }
     .finding-header .severity {
         color: ${color};
         font-weight: bold;
@@ -411,6 +444,7 @@ export class DiscussionPanel implements vscode.Disposable {
             <span class="severity">${escapeHtml(finding.severity)}</span> •
             ${escapeHtml(finding.lens)} •
             ${escapeHtml(lineRange)}
+            ${statusHtml}
         </div>
         <div class="evidence">${escapeHtml(finding.evidence)}</div>
         ${finding.impact ? `<div class="impact">${escapeHtml(finding.impact)}</div>` : ''}
@@ -419,7 +453,7 @@ export class DiscussionPanel implements vscode.Disposable {
 
     ${ambiguityButtons}
 
-    <div class="chat" id="chat"></div>
+    <div class="chat" id="chat">${initialTurnsHtml}</div>
 
     <div class="input-area">
         <textarea id="input" placeholder="Discuss this finding..." rows="2"
@@ -430,9 +464,8 @@ export class DiscussionPanel implements vscode.Disposable {
     <div class="action-buttons">
         <button class="btn btn-success" onclick="send({type:'accept'})">✓ Accept</button>
         <button class="btn btn-danger" onclick="rejectWithReason()">✗ Reject</button>
-        <button class="btn btn-secondary" onclick="send({type:'continue'})">Next →</button>
-        <button class="btn btn-secondary" onclick="send({type:'skipMinor'})">Skip Minor</button>
-        <button class="btn btn-secondary" onclick="send({type:'saveSession'})">Save Session</button>
+        <button class="btn btn-secondary" onclick="send({type:'reviewFinding'})">Review</button>
+        <button class="btn btn-secondary" onclick="send({type:'exportLearning'})">Export Learning</button>
     </div>
 
     <div class="progress">Finding ${current} of ${total}</div>

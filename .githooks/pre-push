@@ -1,0 +1,35 @@
+#!/bin/sh
+
+echo "[pre-push] Running release checks (release-intent + SemVer validation)..."
+
+# Keep hook portable: avoid npm wrapper scripts that may depend on bash.
+PYTHON_BIN=""
+if command -v python >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+elif command -v py >/dev/null 2>&1; then
+  PYTHON_BIN="py -3"
+else
+  echo "[pre-push] Blocked: no Python interpreter found in PATH."
+  exit 1
+fi
+
+eval "$PYTHON_BIN versioning/check_release_intent.py"
+status=$?
+
+if [ $status -ne 0 ]; then
+  echo "[pre-push] Blocked: release-intent check failed (see messages above)."
+  exit $status
+fi
+
+eval "$PYTHON_BIN versioning/validate_semver.py"
+status=$?
+
+if [ $status -ne 0 ]; then
+  echo "[pre-push] Blocked: semver validation failed (see messages above)."
+  exit $status
+fi
+
+echo "[pre-push] OK"
+exit 0

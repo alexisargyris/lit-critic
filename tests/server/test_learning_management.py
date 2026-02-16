@@ -6,9 +6,9 @@ Tests load_learning(), export_learning_markdown(), LearningStore operations.
 
 import pytest
 from pathlib import Path
-from server.learning import load_learning, export_learning_markdown
-from server.db import get_connection, LearningStore
-from server.models import LearningData
+from lit_platform.runtime.learning import load_learning, export_learning_markdown
+from lit_platform.runtime.db import get_connection, LearningStore
+from lit_platform.runtime.models import LearningData
 
 
 class TestLoadLearning:

@@ -1,92 +1,42 @@
-"""
-Session persistence for the lit-critic system.
+"""Platform-owned session workflow service."""
 
-Uses SQLite via ``server.db`` for all persistence.  Every mutation is
-auto-saved — callers do not need an explicit "save" step.
-
-Public API
-----------
-Scene hashing / validation:
-    compute_scene_hash(scene_content) → str
-    validate_session(session_data, scene_content, scene_path) → (bool, str)
-
-Session lifecycle:
-    create_session(state, glossary_issues) → int          # after analysis
-    check_active_session(project_path) → dict | None      # for "overwrite?" prompt
-    load_active_session(project_path) → dict | None       # full load for resume
-    load_session_by_id(project_path, session_id) → dict | None
-    complete_session(state)
-    abandon_session(state)
-    delete_session_by_id(project_path, session_id) → bool
-
-Auto-save helpers (called after every mutation):
-    persist_finding(state, finding)
-    persist_session_index(state, current_index)
-    persist_session_learning(state)
-    persist_discussion_history(state)
-
-Scene change detection:
-    detect_and_apply_scene_changes(state, current_index) → dict | None
-"""
-
-import asyncio
 import hashlib
-import logging
 from pathlib import Path
 from typing import Optional
 
-from .db import (
-    get_connection, SessionStore, FindingStore,
+from lit_platform.persistence import FindingStore, SessionStore, get_connection
+from lit_platform.session_state_machine import (
+    all_findings_considered as platform_all_findings_considered,
+    first_unresolved_index,
+    is_terminal_status,
+    learning_session_payload,
 )
-from .models import SessionState, Finding
-from .utils import apply_scene_change
-
-logger = logging.getLogger(__name__)
-
-TERMINAL_FINDING_STATUSES = {"accepted", "rejected", "withdrawn"}
-
-
-# ---------------------------------------------------------------------------
-# Scene hashing
-# ---------------------------------------------------------------------------
+from lit_platform.runtime.models import Finding, SessionState
+from lit_platform.runtime.utils import apply_scene_change
 
 
 def compute_scene_hash(scene_content: str) -> str:
     """Compute a hash of the scene content for change detection."""
-    return hashlib.sha256(scene_content.encode('utf-8')).hexdigest()[:16]
+    return hashlib.sha256(scene_content.encode("utf-8")).hexdigest()[:16]
 
 
 def is_terminal_finding_status(status: str) -> bool:
     """Return True when a finding status counts as fully considered."""
-    return (status or "pending") in TERMINAL_FINDING_STATUSES
+    return is_terminal_status(status)
 
 
 def all_findings_considered(findings: list[Finding]) -> bool:
     """Return True when every finding is in a terminal status."""
-    return all(is_terminal_finding_status(f.status) for f in findings)
+    return platform_all_findings_considered(findings)
 
 
 def first_unresolved_finding_index(findings: list[Finding]) -> Optional[int]:
     """Return the index of the first non-terminal finding, or None."""
-    for i, finding in enumerate(findings):
-        if not is_terminal_finding_status(finding.status):
-            return i
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Session lifecycle
-# ---------------------------------------------------------------------------
+    return first_unresolved_index(findings)
 
 
 def create_session(state: SessionState, glossary_issues: list[str] | None = None) -> int:
-    """Create a new active session in the database and persist all findings.
-
-    Called after analysis completes.  Populates ``state.session_id`` and
-    ``state.db_conn``.
-
-    Returns the new session id.
-    """
+    """Create a new active session in the database and persist all findings."""
     conn = get_connection(state.project_path)
     state.db_conn = conn
 
@@ -101,30 +51,21 @@ def create_session(state: SessionState, glossary_issues: list[str] | None = None
     )
     state.session_id = session_id
 
-    # Persist all findings
     findings_dicts = [f.to_dict(include_state=True) for f in state.findings]
     FindingStore.save_all(conn, session_id, findings_dicts)
 
-    # Update total_findings count now that findings are saved
     conn.execute(
         "UPDATE session SET total_findings = ? WHERE id = ?",
         (len(findings_dicts), session_id),
     )
     conn.commit()
 
-    # Persist initial learning session data
     _persist_learning_session(state)
-
     return session_id
 
 
 def check_active_session(project_path: Path) -> Optional[dict]:
-    """Check if an active session exists for the project.
-
-    Returns a summary dict with keys ``exists``, ``scene_path``,
-    ``created_at``, ``current_index``, ``total_findings``, or
-    ``{"exists": False}`` if no active session.
-    """
+    """Check if an active session exists for the project."""
     conn = get_connection(project_path)
     try:
         session_data = SessionStore.load_active(conn)
@@ -147,11 +88,7 @@ def check_active_session(project_path: Path) -> Optional[dict]:
 
 
 def load_active_session(project_path: Path) -> Optional[dict]:
-    """Load the full active session data including findings.
-
-    Returns a dict compatible with the old ``load_session()`` shape,
-    or ``None`` if no active session exists.
-    """
+    """Load the full active session data including findings."""
     conn = get_connection(project_path)
     session_data = SessionStore.load_active(conn)
     if session_data is None:
@@ -159,22 +96,16 @@ def load_active_session(project_path: Path) -> Optional[dict]:
         return None
 
     findings = FindingStore.load_all(conn, session_data["id"])
-    
-    # Update counts based on actual finding statuses
-    # (they may be stale if the session was saved before we added real-time count updates)
     SessionStore.update_counts(conn, session_data["id"])
-    
-    # Reload session data to get updated counts
     session_data = SessionStore.get(conn, session_data["id"])
 
-    # Return in a shape that the consumers expect
     return {
-        "_conn": conn,  # Caller takes ownership of the connection
+        "_conn": conn,
         "session_id": session_data["id"],
         "scene_path": session_data.get("scene_path", ""),
         "scene_hash": session_data.get("scene_hash", ""),
         "model": session_data.get("model", ""),
-        "discussion_model": session_data.get("discussion_model"),  # None = use analysis model
+        "discussion_model": session_data.get("discussion_model"),
         "current_index": session_data.get("current_index", 0),
         "glossary_issues": session_data.get("glossary_issues", []),
         "discussion_history": session_data.get("discussion_history", []),
@@ -188,18 +119,13 @@ def load_active_session(project_path: Path) -> Optional[dict]:
 
 
 def load_session_by_id(project_path: Path, session_id: int) -> Optional[dict]:
-    """Load a specific session by id including findings.
-
-    Returns a dict compatible with ``load_active_session()`` shape,
-    or ``None`` if the session id does not exist.
-    """
+    """Load a specific session by id including findings."""
     conn = get_connection(project_path)
     session_data = SessionStore.get(conn, session_id)
     if session_data is None:
         conn.close()
         return None
 
-    # Keep counts fresh for active sessions.
     if session_data.get("status") == "active":
         SessionStore.update_counts(conn, session_id)
         session_data = SessionStore.get(conn, session_id)
@@ -207,7 +133,7 @@ def load_session_by_id(project_path: Path, session_id: int) -> Optional[dict]:
     findings = FindingStore.load_all(conn, session_id)
 
     return {
-        "_conn": conn,  # Caller takes ownership of the connection
+        "_conn": conn,
         "session_id": session_data["id"],
         "scene_path": session_data.get("scene_path", ""),
         "scene_hash": session_data.get("scene_hash", ""),
@@ -227,10 +153,7 @@ def load_session_by_id(project_path: Path, session_id: int) -> Optional[dict]:
 
 
 def complete_session(state: SessionState) -> bool:
-    """Mark the active session as completed iff all findings are terminal.
-
-    Returns True when the session was completed, False otherwise.
-    """
+    """Mark the active session as completed iff all findings are terminal."""
     if not state.db_conn or not state.session_id:
         return False
     if not all_findings_considered(state.findings):
@@ -246,7 +169,7 @@ def abandon_session(state: SessionState) -> None:
 
 
 def abandon_active_session(project_path: Path) -> bool:
-    """Find and abandon the active session (if any). Returns True if abandoned."""
+    """Find and abandon the active session (if any)."""
     conn = get_connection(project_path)
     try:
         session_data = SessionStore.load_active(conn)
@@ -259,14 +182,14 @@ def abandon_active_session(project_path: Path) -> bool:
 
 
 def complete_active_session(project_path: Path) -> bool:
-    """Find and complete the active session (if any). Returns True if completed."""
+    """Find and complete the active session (if any)."""
     conn = get_connection(project_path)
     try:
         session_data = SessionStore.load_active(conn)
         if session_data is None:
             return False
         findings = FindingStore.load_all(conn, session_data["id"])
-        if any(not is_terminal_finding_status(f.get("status", "pending")) for f in findings):
+        if any(not is_terminal_status(f.get("status", "pending")) for f in findings):
             return False
         SessionStore.complete(conn, session_data["id"])
         return True
@@ -275,11 +198,7 @@ def complete_active_session(project_path: Path) -> bool:
 
 
 def _sync_session_completion_state(state: SessionState) -> None:
-    """Keep persisted session status aligned with finding terminality.
-
-    - Completes the session when all findings are terminal.
-    - Reopens a completed session when any finding becomes non-terminal.
-    """
+    """Keep persisted session status aligned with finding terminality."""
     if not state.db_conn or not state.session_id:
         return
 
@@ -297,7 +216,7 @@ def _sync_session_completion_state(state: SessionState) -> None:
 
 
 def delete_session_by_id(project_path: Path, session_id: int) -> bool:
-    """Delete a specific session by id. Returns True if deleted."""
+    """Delete a specific session by id."""
     conn = get_connection(project_path)
     try:
         return SessionStore.delete(conn, session_id)
@@ -321,12 +240,11 @@ def get_session_detail(project_path: Path, session_id: int) -> Optional[dict]:
         session_data = SessionStore.get(conn, session_id)
         if session_data is None:
             return None
-        
-        # Update counts for active sessions (may be stale)
+
         if session_data.get("status") == "active":
             SessionStore.update_counts(conn, session_id)
             session_data = SessionStore.get(conn, session_id)
-        
+
         findings = FindingStore.load_all(conn, session_id)
         session_data["findings"] = findings
         return session_data
@@ -334,17 +252,9 @@ def get_session_detail(project_path: Path, session_id: int) -> Optional[dict]:
         conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-
-
 def validate_session(session_data: dict, scene_content: str,
                      scene_path: str) -> tuple[bool, str]:
-    """Validate that a saved session matches the current scene.
-
-    Returns ``(is_valid, error_message)``.
-    """
+    """Validate that a saved session matches the current scene."""
     if not session_data:
         return False, "No session data"
 
@@ -360,17 +270,8 @@ def validate_session(session_data: dict, scene_content: str,
     return True, ""
 
 
-# ---------------------------------------------------------------------------
-# Auto-save helpers
-# ---------------------------------------------------------------------------
-
-
 def persist_finding(state: SessionState, finding: Finding) -> None:
-    """Auto-save a finding's current state to the database.
-
-    Call this after any mutation to a finding (accept, reject, discuss, etc.).
-    Silently skipped when ``state.db_conn`` is None (e.g. in tests).
-    """
+    """Auto-save a finding's current state to the database."""
     if not state.db_conn or not state.session_id:
         return
 
@@ -393,8 +294,7 @@ def persist_finding(state: SessionState, finding: Finding) -> None:
         revision_history=finding.revision_history,
         outcome_reason=finding.outcome_reason,
     )
-    
-    # Update session counts whenever a finding status changes
+
     SessionStore.update_counts(state.db_conn, state.session_id)
     _sync_session_completion_state(state)
 
@@ -416,14 +316,10 @@ def persist_discussion_history(state: SessionState) -> None:
 
 
 def _persist_learning_session(state: SessionState) -> None:
-    """Auto-save the in-session learning data (rejections, acceptances, etc.)."""
+    """Auto-save in-session learning data."""
     if not state.db_conn or not state.session_id:
         return
-    learning_session = {
-        "session_rejections": state.learning.session_rejections,
-        "session_acceptances": state.learning.session_acceptances,
-        "session_ambiguity_answers": state.learning.session_ambiguity_answers,
-    }
+    learning_session = learning_session_payload(state.learning)
     SessionStore.update_learning_session(
         state.db_conn, state.session_id, learning_session
     )
@@ -434,63 +330,35 @@ def persist_session_learning(state: SessionState) -> None:
     _persist_learning_session(state)
 
 
-# ---------------------------------------------------------------------------
-# Scene change detection
-# ---------------------------------------------------------------------------
-
-
 async def detect_and_apply_scene_changes(state: SessionState,
                                          current_index: int) -> Optional[dict]:
-    """Check if the scene file has been modified and handle the change.
-
-    This is the single chokepoint for scene change detection, called by both
-    CLI and Web UI before each finding transition.
-
-    If the scene file has changed:
-    1. Compute diff and adjust line numbers for remaining findings
-    2. Automatically re-evaluate any stale findings via the API
-    3. Update ``state.scene_content`` to the new version
-    4. Auto-save all affected findings to the database
-
-    Returns ``None`` if the scene is unchanged, or a summary dict:
-        changed    – True
-        adjusted   – number of findings whose lines were shifted
-        stale      – number of findings originally marked stale
-        re_evaluated – list of {finding_number, status, reason?} dicts
-    """
+    """Check if the scene file has been modified and handle the change."""
     scene_path = Path(state.scene_path)
     if not scene_path.exists():
         return None
 
     try:
-        new_content = scene_path.read_text(encoding='utf-8')
+        new_content = scene_path.read_text(encoding="utf-8")
     except IOError:
         return None
 
     old_hash = compute_scene_hash(state.scene_content)
     new_hash = compute_scene_hash(new_content)
-
     if old_hash == new_hash:
         return None
 
-    # Scene has changed — compute diff and adjust findings
     old_content = state.scene_content
     change_summary = apply_scene_change(
         state.findings, old_content, new_content, start_index=current_index
     )
 
-    # Update state to the new scene content
     state.scene_content = new_content
-
-    # Update scene hash in DB
     if state.db_conn and state.session_id:
         SessionStore.update_scene(state.db_conn, state.session_id, new_hash)
 
-    # Auto-save all adjusted/stale findings
     for finding in state.findings[current_index:]:
         persist_finding(state, finding)
 
-    # Collect stale findings for re-evaluation
     stale_findings = [
         f for f in state.findings[current_index:]
         if f.stale and f.status not in ("withdrawn", "rejected")
@@ -498,16 +366,14 @@ async def detect_and_apply_scene_changes(state: SessionState,
 
     re_eval_results = []
     if stale_findings:
-        # Import here to avoid circular imports
-        from .api import re_evaluate_finding
+        from lit_platform.runtime.api import re_evaluate_finding
 
         for finding in stale_findings:
             result = await re_evaluate_finding(
                 state.client, finding, new_content,
-                model=state.model_id, max_tokens=1024
+                model=state.model_id, max_tokens=1024,
             )
             re_eval_results.append(result)
-            # Auto-save after re-evaluation
             persist_finding(state, finding)
 
     return {
@@ -523,12 +389,7 @@ async def review_current_finding_against_scene_edits(
     state: SessionState,
     current_index: int,
 ) -> dict:
-    """Re-check only the current finding against scene edits.
-
-    Unlike ``detect_and_apply_scene_changes()``, this function only asks the
-    LLM to reconsider the *current* finding after applying scene diff/line
-    remapping updates.
-    """
+    """Re-check only the current finding against scene edits."""
     if current_index < 0 or current_index >= len(state.findings):
         return {
             "changed": False,
@@ -589,7 +450,7 @@ async def review_current_finding_against_scene_edits(
     finding = state.findings[current_index]
     re_eval_results = []
     if finding.status not in ("withdrawn", "rejected"):
-        from .api import re_evaluate_finding
+        from lit_platform.runtime.api import re_evaluate_finding
 
         result = await re_evaluate_finding(
             state.client, finding, new_content,
