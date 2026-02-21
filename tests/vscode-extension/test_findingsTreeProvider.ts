@@ -33,10 +33,17 @@ describe('FindingsTreeProvider', () => {
     });
 
     describe('tree item creation', () => {
-        it('should format finding label with number and severity', () => {
+        it('should format finding label with status, severity token and number', () => {
             const finding = sampleFindings[0];
-            const label = `#${finding.number} ${finding.severity}`;
-            assert.match(label, /#1 major/);
+            const severityToken = finding.severity === 'critical'
+                ? 'CRIT'
+                : finding.severity === 'major'
+                    ? 'MAJ'
+                    : 'MIN';
+            const label = `PENDING [${severityToken}] #${finding.number}`;
+            assert.match(label, /PENDING/);
+            assert.match(label, /\[MAJ\]/);
+            assert.match(label, /#1/);
         });
 
         it('should format line range', () => {
@@ -47,14 +54,14 @@ describe('FindingsTreeProvider', () => {
             assert.equal(lineRange, 'L42-L45');
         });
 
-        it('should show status suffix', () => {
+        it('should define status label mapping', () => {
             const statuses = {
-                'pending': '',
-                'accepted': ' ✓',
-                'rejected': ' ✗',
+                'pending': 'PENDING',
+                'accepted': 'ACCEPTED',
+                'rejected': 'REJECTED',
             };
-            assert.equal(statuses.accepted, ' ✓');
-            assert.equal(statuses.rejected, ' ✗');
+            assert.equal(statuses.accepted, 'ACCEPTED');
+            assert.equal(statuses.rejected, 'REJECTED');
         });
     });
 

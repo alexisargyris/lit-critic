@@ -14,6 +14,8 @@ from lit_platform.session_state_machine import (
     next_index_for_lens,
     record_ambiguity_answer,
 )
+from lit_platform.persistence import LearningStore
+
 from lit_platform.services import (
     detect_and_apply_scene_changes,
     review_current_finding_against_scene_edits,
@@ -24,7 +26,7 @@ from lit_platform.services import (
     complete_session,
     create_session,
     discuss_finding_stream,
-    save_learning_to_file,
+    export_learning_markdown,
 )
 from lit_platform.models import SessionState, Finding
 
@@ -189,9 +191,9 @@ async def run_interactive_session(
                 persist_session_index(state, current)
                 break
 
-            # Export learning
+            # Export learning (file-only export from DB — learning is already saved)
             elif user_lower == 'export learning':
-                filepath = save_learning_to_file(state.learning, state.project_path)
+                filepath = export_learning_markdown(state.project_path)
                 print(f"\n  ✓ Exported to {filepath}")
 
             # Help
@@ -224,9 +226,17 @@ async def run_interactive_session(
         )
         return
 
+    # Increment review count once per completed session.
+    if state.db_conn:
+        LearningStore.increment_review_count(state.db_conn)
+        state.learning.review_count += 1  # keep in-memory state in sync
+
+    prefs = len(state.learning.preferences)
+    amb = len(state.learning.ambiguity_intentional) + len(state.learning.ambiguity_accidental)
     print("\n" + "=" * 60)
     print("All findings have been considered. Session completed.")
-    print("Type 'export learning' to export LEARNING.md, or 'quit' to exit.")
+    print(f"  Learning updated: {prefs} preference(s), {amb} ambiguity pattern(s) in DB.")
+    print("Type 'export learning' to write LEARNING.md, or 'quit' to exit.")
     print("=" * 60)
 
     while True:
@@ -236,7 +246,7 @@ async def run_interactive_session(
             break
 
         if final_input == 'export learning':
-            filepath = save_learning_to_file(state.learning, state.project_path)
+            filepath = export_learning_markdown(state.project_path)
             print(f"\n  ✓ Exported to {filepath}")
         elif final_input in ('quit', 'q', 'exit', ''):
             break

@@ -163,7 +163,14 @@ def _apply_discussion_side_effects(state: SessionState, finding: Finding,
         )
     
     # Phase 4: Richer learning extraction
-    if status in ("rejected", "conceded"):
+    if status in ("rejected", "conceded", "withdrawn"):
+        # "withdrawn" is included here as a fallback: the LLM may have
+        # recognised an intentional stylistic choice without emitting a
+        # [PREFERENCE:] tag.  Recording the rejection signal ensures the
+        # learning database always captures something for terminal outcomes.
+        # When [PREFERENCE:] IS present it is forwarded as preference_rule so
+        # the stored description is richer; when absent, the evidence + reason
+        # still form a useful preference entry.
         record_discussion_rejection(
             finding,
             state.learning,

@@ -9,17 +9,24 @@ const App = {
     // --- State ---
     sessionSummary: null,
     currentFinding: null,
+    repoPreflight: null,
 
     // --- Init ---
     init() {
         // Restore saved form values from localStorage
         const savedProject = localStorage.getItem('lc_project_path');
         const savedScene = localStorage.getItem('lc_scene_path');
+        const savedLensPreset = localStorage.getItem('lc_lens_preset');
         if (savedProject) document.getElementById('project-path').value = savedProject;
         if (savedScene) document.getElementById('scene-path').value = savedScene;
+        if (savedLensPreset) {
+            const presetSelect = document.getElementById('lens-preset-select');
+            if (presetSelect) presetSelect.dataset.saved = savedLensPreset;
+        }
 
         // Check if API key is already configured server-side
         App.checkApiKeyConfig();
+        App.checkRepoPreflight();
 
         // Setup form handler
         document.getElementById('setup-form').addEventListener('submit', (e) => {
@@ -37,6 +44,13 @@ const App = {
             App.resumeSession();
         });
 
+        const saveRepoBtn = document.getElementById('save-repo-path-btn');
+        if (saveRepoBtn) {
+            saveRepoBtn.addEventListener('click', () => {
+                App.saveRepoPathAndRetry();
+            });
+        }
+
         // Glossary toggle
         document.getElementById('glossary-toggle').addEventListener('click', () => {
             const list = document.getElementById('glossary-list');
@@ -50,6 +64,22 @@ const App = {
     showView(viewId) {
         document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
         document.getElementById(viewId).classList.add('active');
+    },
+
+    cloneDiscussionTurns(turns) {
+        return (turns || []).map((t) => ({ role: t.role, content: t.content }));
+    },
+
+    hasFindingContextChanged(previousFinding, nextFinding) {
+        if (!previousFinding || !nextFinding) return false;
+        return (
+            previousFinding.evidence !== nextFinding.evidence
+            || previousFinding.location !== nextFinding.location
+            || previousFinding.line_start !== nextFinding.line_start
+            || previousFinding.line_end !== nextFinding.line_end
+            || previousFinding.severity !== nextFinding.severity
+            || previousFinding.impact !== nextFinding.impact
+        );
     },
 
     // --- API Helpers ---
@@ -84,6 +114,53 @@ const App = {
     },
 
     // --- Config ---
+    async checkRepoPreflight() {
+        try {
+            const preflight = await App.api('GET', '/repo-preflight');
+            App.repoPreflight = preflight;
+            App.renderRepoPreflight();
+        } catch {
+            // Ignore and keep normal setup UI.
+        }
+    },
+
+    renderRepoPreflight() {
+        const box = document.getElementById('repo-preflight-warning');
+        const msg = document.getElementById('repo-preflight-message');
+        const input = document.getElementById('repo-path-input');
+        if (!box || !msg || !input) return;
+
+        if (!App.repoPreflight || App.repoPreflight.ok) {
+            box.classList.add('hidden');
+            return;
+        }
+
+        msg.textContent = `${App.repoPreflight.message} Expected marker: ${App.repoPreflight.marker}.`;
+        input.value = App.repoPreflight.path || App.repoPreflight.configured_path || '';
+        box.classList.remove('hidden');
+    },
+
+    async saveRepoPathAndRetry() {
+        const input = document.getElementById('repo-path-input');
+        if (!input) return;
+        const repoPath = input.value.trim();
+        if (!repoPath) {
+            App.toast('Please enter a repository path.', 'error');
+            return;
+        }
+
+        try {
+            const preflight = await App.api('POST', '/repo-path', { repo_path: repoPath });
+            App.repoPreflight = preflight;
+            App.renderRepoPreflight();
+            if (preflight.ok) {
+                App.toast('Repository path saved.', 'success');
+            }
+        } catch (err) {
+            App.toast(err.message, 'error');
+        }
+    },
+
     async checkApiKeyConfig() {
         try {
             const config = await App.api('GET', '/config');
@@ -104,8 +181,25 @@ const App = {
             if (config.available_models) {
                 App.populateModelSelector(config.available_models, config.default_model);
             }
+            if (config.lens_presets) {
+                App.populateLensPresetSelector(config.lens_presets);
+            }
         } catch (err) {
             // If the check fails, just show the input as usual
+        }
+    },
+
+    populateLensPresetSelector(presets) {
+        const select = document.getElementById('lens-preset-select');
+        if (!select) return;
+        const saved = select.dataset.saved || localStorage.getItem('lc_lens_preset') || 'balanced';
+        select.innerHTML = '';
+        for (const presetName of Object.keys(presets)) {
+            const option = document.createElement('option');
+            option.value = presetName;
+            option.textContent = presetName;
+            if (presetName === saved) option.selected = true;
+            select.appendChild(option);
         }
     },
 
@@ -154,12 +248,14 @@ const App = {
 
         const model = document.getElementById('model-select').value;
         const discussionModel = document.getElementById('discussion-model-select').value;
+        const lensPreset = document.getElementById('lens-preset-select').value || 'balanced';
 
         // Save to localStorage
         localStorage.setItem('lc_project_path', projectPath);
         localStorage.setItem('lc_scene_path', scenePath);
         localStorage.setItem('lc_model', model);
         localStorage.setItem('lc_discussion_model', discussionModel);
+        localStorage.setItem('lc_lens_preset', lensPreset);
 
         // Switch to analysis view
         App.showView('analysis-view');
@@ -169,13 +265,16 @@ const App = {
         App.listenToProgress();
 
         try {
-            const result = await App.api('POST', '/analyze', {
+            const result = await App.apiWithRepoRecovery('POST', '/analyze', {
                 scene_path: scenePath,
                 project_path: projectPath,
                 api_key: apiKey || null,
                 discussion_api_key: discussionApiKey || null,
                 model: model,
                 discussion_model: discussionModel || null,
+                lens_preferences: {
+                    preset: lensPreset,
+                },
             });
 
             App.sessionSummary = result;
@@ -267,7 +366,7 @@ const App = {
         }
 
         try {
-            const result = await App.api('POST', '/resume', {
+            const result = await App.apiWithRepoRecovery('POST', '/resume', {
                 project_path: projectPath,
                 api_key: apiKey || null,
                 discussion_api_key: discussionApiKey || null,
@@ -314,6 +413,37 @@ const App = {
 
             App.toast(err.message, 'error');
         }
+    },
+
+    async apiWithRepoRecovery(method, path, body = null) {
+        try {
+            return await App.api(method, path, body);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const detail = App.tryParseRepoPreflightDetail(msg);
+            if (!detail) {
+                throw err;
+            }
+
+            App.repoPreflight = detail;
+            App.renderRepoPreflight();
+            App.showView('setup-view');
+            throw new Error(detail.message || 'Repository path is invalid. Please correct it and retry.');
+        }
+    },
+
+    tryParseRepoPreflightDetail(message) {
+        const match = message.match(/^HTTP\s+\d+:\s+(\{.*\})$/);
+        if (!match) return null;
+        try {
+            const detail = JSON.parse(match[1]);
+            if (detail && detail.code === 'repo_path_invalid') {
+                return detail;
+            }
+        } catch {
+            // ignore parse errors
+        }
+        return null;
     },
 
     tryParseResumeErrorDetail(message) {
@@ -451,10 +581,72 @@ const App = {
 
         // Render persisted discussion thread for this finding unless we are
         // intentionally preserving the already-rendered live thread.
-        if (!data._preserveDiscussion) {
+        if (data._discussionTransition) {
+            App.renderDiscussionTransition(
+                data._discussionTransition.previousFinding,
+                data._discussionTransition.previousTurns,
+                data._discussionTransition.note,
+            );
+        } else if (!data._preserveDiscussion) {
             App.renderDiscussionTurns(f.discussion_turns || []);
             document.getElementById('discussion-input').value = '';
         }
+    },
+
+    renderDiscussionTransition(previousFinding, previousTurns, note) {
+        const thread = document.getElementById('discussion-thread');
+        thread.innerHTML = '';
+
+        const transition = document.createElement('div');
+        transition.className = 'discussion-context-transition';
+
+        const lineRange = previousFinding && previousFinding.line_start
+            ? (previousFinding.line_end && previousFinding.line_end !== previousFinding.line_start
+                ? `Lines ${previousFinding.line_start}–${previousFinding.line_end}`
+                : `Line ${previousFinding.line_start}`)
+            : (previousFinding?.location || 'Unknown location');
+
+        transition.innerHTML = `
+            <div class="transition-title">Previous context (before scene edits)</div>
+            <div class="transition-meta">${App.escapeHtml((previousFinding?.severity || '').toUpperCase())} • ${App.escapeHtml(previousFinding?.lens || '')} • ${App.escapeHtml(lineRange)}</div>
+            <div class="transition-evidence">${App.escapeHtml(previousFinding?.evidence || '')}</div>
+        `;
+
+        const archivedThread = document.createElement('div');
+        archivedThread.className = 'transition-thread';
+
+        (previousTurns || []).forEach(turn => {
+            const role = (turn.role || '').toLowerCase();
+            let label = 'System';
+            let roleClass = 'system';
+            if (role === 'user') {
+                label = 'You';
+                roleClass = 'user';
+            } else if (role === 'assistant') {
+                label = 'Critic';
+                roleClass = 'critic';
+            }
+            const msg = document.createElement('div');
+            msg.className = `discussion-msg ${roleClass} archived`;
+            msg.innerHTML = `<div class="msg-label">${label}</div><div>${App.escapeHtml(turn.content || '')}</div>`;
+            archivedThread.appendChild(msg);
+        });
+
+        if ((previousTurns || []).length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'discussion-msg system archived';
+            empty.innerHTML = '<div class="msg-label">System</div><div>No prior discussion turns.</div>';
+            archivedThread.appendChild(empty);
+        }
+
+        transition.appendChild(archivedThread);
+        thread.appendChild(transition);
+
+        App.addDiscussionMessage(
+            'System',
+            note || 'Finding re-evaluated after scene edits. Starting a new discussion context.',
+            'system'
+        );
     },
 
     renderDiscussionTurns(turns) {
@@ -534,6 +726,13 @@ const App = {
 
     async reviewFinding() {
         try {
+            const previousFinding = App.currentFinding?.finding
+                ? {
+                    ...App.currentFinding.finding,
+                    discussion_turns: App.cloneDiscussionTurns(App.currentFinding.finding.discussion_turns),
+                }
+                : null;
+
             const data = await App.api('POST', '/finding/review');
             if (data.review?.changed) {
                 App.handleSceneChange(data.review);
@@ -542,6 +741,22 @@ const App = {
             } else {
                 App.toast('Current finding reviewed against scene edits', 'info');
             }
+
+            if (
+                previousFinding
+                && !data.complete
+                && data.finding
+                && data.review?.changed
+                && previousFinding.number === data.finding.number
+                && App.hasFindingContextChanged(previousFinding, data.finding)
+            ) {
+                data._discussionTransition = {
+                    previousFinding,
+                    previousTurns: App.cloneDiscussionTurns(previousFinding.discussion_turns || data.finding.discussion_turns || []),
+                    note: 'Finding re-evaluated after scene edits. Starting a new discussion context.',
+                };
+            }
+
             App.handleFindingResponse(data);
         } catch (err) {
             App.toast(err.message, 'error');

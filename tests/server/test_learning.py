@@ -139,20 +139,23 @@ class TestSaveLearningToFile:
         assert filepath.exists()
         assert "Novel" in filepath.read_text(encoding='utf-8')
 
-        # DB was updated (review count incremented)
+        # review_count is NOT incremented by save_learning_to_file() — it is
+        # incremented once at session completion via
+        # LearningStore.increment_review_count().
         conn = get_connection(temp_project_dir)
         try:
             data = LearningStore.load(conn)
-            assert data["review_count"] == 1  # incremented by update_learning_from_session
+            assert data["review_count"] == 0
         finally:
             conn.close()
 
 
 class TestUpdateLearningFromSession:
-    def test_increments_review_count(self):
+    def test_does_not_increment_review_count(self):
+        """review_count is incremented at session completion, not here."""
         ld = LearningData(review_count=5)
         update_learning_from_session(ld)
-        assert ld.review_count == 6
+        assert ld.review_count == 5  # unchanged
 
     def test_rejections_to_preferences(self):
         ld = LearningData()
@@ -213,7 +216,9 @@ class TestRoundtrip:
 
         loaded = load_learning(temp_project_dir)
         assert loaded.project_name == original.project_name
-        assert loaded.review_count == initial_count + 1
+        # review_count is unchanged — it is incremented once at session
+        # completion via LearningStore.increment_review_count(), not here.
+        assert loaded.review_count == initial_count
         assert len(loaded.preferences) == 1
         assert len(loaded.blind_spots) == 1
         assert len(loaded.ambiguity_intentional) == 1

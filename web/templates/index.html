@@ -21,6 +21,17 @@
         <section id="setup-view" class="view active">
             <div class="card">
                 <h2>Start Review</h2>
+                <div id="repo-preflight-warning" class="saved-session hidden">
+                    <h3>Repository Path Setup Required</h3>
+                    <p id="repo-preflight-message"></p>
+                    <div class="form-group">
+                        <label for="repo-path-input">lit-critic installation directory</label>
+                        <input type="text" id="repo-path-input" placeholder="Path containing lit-critic-web.py">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" id="save-repo-path-btn" class="btn btn-primary">Save & Retry</button>
+                    </div>
+                </div>
                 <form id="setup-form">
                     <div class="form-group">
                         <label for="project-path">Project directory</label>
@@ -45,6 +56,11 @@
                             <!-- Populated dynamically from /api/config -->
                         </select>
                         <span class="hint">Model used for finding discussion. Leave empty to use the analysis model.</span>
+                    </div>
+                    <div class="form-group">
+                        <label for="lens-preset-select">Lens Preset</label>
+                        <select id="lens-preset-select"></select>
+                        <span class="hint">Adjust how strongly each lens influences finding ordering.</span>
                     </div>
                     <div class="form-group" id="api-key-group">
                         <label for="api-key">Analysis API key <span class="optional">(optional if env var set)</span></label>
@@ -216,7 +232,7 @@
     </div>
 
     <footer>
-        <p>lit-critic v2.0.0 — Web UI</p>
+        <p>lit-critic v2.2.1 — Web UI</p>
     </footer>
 
     <script src="/static/js/app.js"></script>

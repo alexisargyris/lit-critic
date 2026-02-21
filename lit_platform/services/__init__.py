@@ -6,7 +6,9 @@ while delegating behavior to the existing runtime implementation.
 
 from .discussion_service import discuss_finding, discuss_finding_stream
 from .learning_service import (
+    commit_pending_learning_entries,
     export_learning_markdown,
+    generate_learning_markdown,
     load_learning,
     load_learning_from_db,
     persist_learning,

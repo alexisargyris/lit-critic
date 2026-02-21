@@ -11,7 +11,7 @@
 
 import * as vscode from 'vscode';
 import { ApiClient } from './apiClient';
-import { Finding, DiscussResponse } from './types';
+import { Finding, DiscussResponse, DiscussionContextTransition } from './types';
 
 type PanelMessage =
     | { type: 'discuss'; message: string }
@@ -39,7 +39,13 @@ export class DiscussionPanel implements vscode.Disposable {
     /**
      * Show or update the discussion panel with a finding.
      */
-    show(finding: Finding, current: number, total: number, isAmbiguity: boolean): void {
+    show(
+        finding: Finding,
+        current: number,
+        total: number,
+        isAmbiguity: boolean,
+        discussionTransition?: DiscussionContextTransition,
+    ): void {
         if (!this.panel) {
             this.panel = vscode.window.createWebviewPanel(
                 'literaryCriticDiscussion',
@@ -61,7 +67,13 @@ export class DiscussionPanel implements vscode.Disposable {
             });
         }
 
-        this.panel.webview.html = this.getHtml(finding, current, total, isAmbiguity);
+        this.panel.webview.html = this.getHtml(
+            finding,
+            current,
+            total,
+            isAmbiguity,
+            discussionTransition,
+        );
 
         // Only reveal if the panel isn't already showing — calling reveal()
         // every time causes VS Code to re-layout editors (looks like the
@@ -207,7 +219,13 @@ export class DiscussionPanel implements vscode.Disposable {
     // Webview HTML
     // ------------------------------------------------------------------
 
-    private getHtml(finding: Finding, current: number, total: number, isAmbiguity: boolean): string {
+    private getHtml(
+        finding: Finding,
+        current: number,
+        total: number,
+        isAmbiguity: boolean,
+        discussionTransition?: DiscussionContextTransition,
+    ): string {
         const severityColor: Record<string, string> = {
             'critical': '#f44336',
             'major': '#ff9800',
@@ -215,11 +233,15 @@ export class DiscussionPanel implements vscode.Disposable {
         };
         const color = severityColor[finding.severity] || '#ff9800';
 
-        const lineRange = finding.line_start !== null
-            ? finding.line_end !== null && finding.line_end !== finding.line_start
-                ? `Lines ${finding.line_start}–${finding.line_end}`
-                : `Line ${finding.line_start}`
-            : finding.location;
+        const formatLineRange = (f: Pick<Finding, 'line_start' | 'line_end' | 'location'>): string => (
+            f.line_start !== null
+                ? f.line_end !== null && f.line_end !== f.line_start
+                    ? `Lines ${f.line_start}–${f.line_end}`
+                    : `Line ${f.line_start}`
+                : f.location
+        );
+
+        const lineRange = formatLineRange(finding);
 
         const optionsHtml = finding.options.length > 0
             ? `<div class="options"><strong>Suggestions:</strong><ol>${finding.options.map(o => `<li>${escapeHtml(o)}</li>`).join('')}</ol></div>`
@@ -235,7 +257,8 @@ export class DiscussionPanel implements vscode.Disposable {
                </div>`
             : '';
 
-        const initialTurns = (finding.discussion_turns || []).map((turn) => {
+        const currentTurns = discussionTransition ? [] : (finding.discussion_turns || []);
+        const initialTurns = currentTurns.map((turn) => {
             const role = (turn.role || '').toLowerCase();
             if (role === 'user') {
                 return { roleClass: 'user', label: 'You', content: turn.content || '' };
@@ -249,6 +272,39 @@ export class DiscussionPanel implements vscode.Disposable {
         const initialTurnsHtml = initialTurns.map((t) =>
             `<div class="message ${t.roleClass}">${escapeHtml(t.content)}</div>`
         ).join('');
+
+        const transitionTurns = (discussionTransition?.previousTurns || []).map((turn) => {
+            const role = (turn.role || '').toLowerCase();
+            if (role === 'user') {
+                return { roleClass: 'user', content: turn.content || '' };
+            }
+            if (role === 'assistant') {
+                return { roleClass: 'assistant', content: turn.content || '' };
+            }
+            return { roleClass: 'system', content: turn.content || '' };
+        });
+
+        const transitionTurnsHtml = transitionTurns.length > 0
+            ? transitionTurns.map((t) =>
+                `<div class="message ${t.roleClass}">${escapeHtml(t.content)}</div>`
+            ).join('')
+            : '<div class="message system">No prior discussion turns.</div>';
+
+        const transitionHtml = discussionTransition
+            ? `<div class="history-block">
+                <div class="history-title">Previous context (before scene edits)</div>
+                <div class="history-meta">
+                    <span class="severity">${escapeHtml(discussionTransition.previousFinding.severity)}</span> •
+                    ${escapeHtml(discussionTransition.previousFinding.lens)} •
+                    ${escapeHtml(formatLineRange(discussionTransition.previousFinding))}
+                </div>
+                <div class="history-evidence">${escapeHtml(discussionTransition.previousFinding.evidence)}</div>
+                <div class="history-thread">${transitionTurnsHtml}</div>
+            </div>
+            <div class="message system">📝 ${escapeHtml(
+                discussionTransition.note || 'Finding re-evaluated after scene edits. Starting a new discussion context.'
+            )}</div>`
+            : '';
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -362,6 +418,34 @@ export class DiscussionPanel implements vscode.Disposable {
         text-align: center;
         max-width: 100%;
     }
+    .history-block {
+        border: 1px dashed var(--border);
+        border-radius: 6px;
+        padding: 8px;
+        margin-bottom: 10px;
+        background: color-mix(in srgb, var(--bg) 70%, var(--vscode-textBlockQuote-background) 30%);
+    }
+    .history-title {
+        font-size: 0.82em;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        opacity: 0.8;
+        margin-bottom: 4px;
+    }
+    .history-meta {
+        font-size: 0.82em;
+        opacity: 0.8;
+        margin-bottom: 4px;
+    }
+    .history-evidence {
+        font-size: 0.9em;
+        margin-bottom: 8px;
+        line-height: 1.4;
+    }
+    .history-thread {
+        border-top: 1px dashed var(--border);
+        padding-top: 8px;
+    }
     .streaming-cursor::after {
         content: '▊';
         animation: blink 1s infinite;
@@ -376,6 +460,7 @@ export class DiscussionPanel implements vscode.Disposable {
         gap: 6px;
         margin-top: 8px;
         flex-shrink: 0;
+        align-items: flex-end;
     }
     .input-area textarea {
         flex: 1;
@@ -386,9 +471,9 @@ export class DiscussionPanel implements vscode.Disposable {
         padding: 6px 8px;
         font-family: inherit;
         font-size: inherit;
-        resize: none;
+        resize: vertical;
         min-height: 36px;
-        max-height: 120px;
+        max-height: 40vh;
     }
     .input-area textarea:focus {
         outline: 1px solid var(--vscode-focusBorder);
@@ -453,7 +538,7 @@ export class DiscussionPanel implements vscode.Disposable {
 
     ${ambiguityButtons}
 
-    <div class="chat" id="chat">${initialTurnsHtml}</div>
+    <div class="chat" id="chat">${transitionHtml}${initialTurnsHtml}</div>
 
     <div class="input-area">
         <textarea id="input" placeholder="Discuss this finding..." rows="2"

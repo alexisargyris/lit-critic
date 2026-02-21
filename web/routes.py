@@ -13,11 +13,15 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 
+from lit_platform.repo_preflight import MARKER_FILENAME, validate_repo_path
+from lit_platform.user_config import get_repo_path, set_repo_path
 from lit_platform.persistence import LearningStore, get_connection
 from lit_platform.services.analysis_service import (
     API_KEY_ENV_VARS,
     AVAILABLE_MODELS,
     DEFAULT_MODEL,
+    LENS_PRESETS,
+    normalize_lens_preferences,
 )
 from lit_platform.services import (
     check_active_session,
@@ -46,6 +50,7 @@ class AnalyzeRequest(BaseModel):
     discussion_api_key: Optional[str] = None
     model: Optional[str] = None
     discussion_model: Optional[str] = None
+    lens_preferences: Optional[dict] = None
 
 
 class ResumeRequest(BaseModel):
@@ -95,6 +100,10 @@ class SessionIdRequest(BaseModel):
 class LearningEntryDeleteRequest(BaseModel):
     project_path: str
     entry_id: int
+
+
+class RepoPathUpdateRequest(BaseModel):
+    repo_path: str
 
 
 # --- Helper ---
@@ -166,6 +175,33 @@ def _resolve_provider_api_key(provider: str, explicit_key: Optional[str], key_la
     )
 
 
+def _repo_preflight_payload() -> dict:
+    configured = get_repo_path()
+    validation = validate_repo_path(configured)
+    return {
+        "ok": validation.ok,
+        "reason_code": validation.reason_code,
+        "message": validation.message,
+        "path": validation.path,
+        "marker": MARKER_FILENAME,
+        "configured_path": configured,
+    }
+
+
+def _ensure_repo_preflight_ready() -> None:
+    payload = _repo_preflight_payload()
+    if payload["ok"]:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "repo_path_invalid",
+            **payload,
+            "next_action": "Provide a valid lit-critic installation path via POST /api/repo-path.",
+        },
+    )
+
+
 def _resolve_analysis_and_discussion_keys(
     model: str,
     discussion_model: Optional[str],
@@ -224,12 +260,43 @@ async def get_config():
             for name, cfg in AVAILABLE_MODELS.items()
         },
         "default_model": DEFAULT_MODEL,
+        "lens_presets": LENS_PRESETS,
     }
+
+
+@router.get("/repo-preflight")
+async def get_repo_preflight():
+    """Return preflight validation status for configured repo path."""
+    return _repo_preflight_payload()
+
+
+@router.post("/repo-path")
+async def update_repo_path(req: RepoPathUpdateRequest):
+    """Validate and persist the repo path in user-level config."""
+    validation = validate_repo_path(req.repo_path)
+    if not validation.ok:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "repo_path_invalid",
+                "ok": validation.ok,
+                "reason_code": validation.reason_code,
+                "message": validation.message,
+                "path": validation.path,
+                "marker": MARKER_FILENAME,
+            },
+        )
+
+    assert validation.path is not None
+    set_repo_path(validation.path)
+    return _repo_preflight_payload()
 
 
 @router.post("/analyze")
 async def start_analysis(req: AnalyzeRequest):
     """Start a new multi-lens analysis."""
+    _ensure_repo_preflight_ready()
+
     model = _normalise_model_name(req.model)
     discussion_model = _normalise_optional_model_name(req.discussion_model)
 
@@ -241,6 +308,11 @@ async def start_analysis(req: AnalyzeRequest):
     )
 
     try:
+        lens_preferences = normalize_lens_preferences(req.lens_preferences)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    try:
         result = await session_mgr.start_analysis(
             req.scene_path,
             req.project_path,
@@ -248,6 +320,7 @@ async def start_analysis(req: AnalyzeRequest):
             model=model,
             discussion_model=discussion_model,
             discussion_api_key=discussion_key,
+            lens_preferences=lens_preferences,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -307,6 +380,8 @@ async def analysis_progress(request: Request):
 @router.post("/resume")
 async def resume_session(req: ResumeRequest):
     """Resume the active session from SQLite."""
+    _ensure_repo_preflight_ready()
+
     # Peek at the active session to determine providers for key resolution.
     active = check_active_session(Path(req.project_path))
 
@@ -356,6 +431,8 @@ async def resume_session(req: ResumeRequest):
 @router.post("/resume-session")
 async def resume_session_by_id(req: ResumeSessionByIdRequest):
     """Resume a specific active session by id from SQLite."""
+    _ensure_repo_preflight_ready()
+
     project = Path(req.project_path)
     if not project.exists():
         raise HTTPException(status_code=404, detail="Project directory not found")

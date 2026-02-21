@@ -541,6 +541,44 @@ main {
     color: var(--accent);
 }
 
+.discussion-context-transition {
+    border: 1px dashed var(--border-light);
+    border-radius: 6px;
+    padding: 0.6rem;
+    margin-bottom: 0.75rem;
+    background: rgba(136, 153, 170, 0.08);
+}
+
+.discussion-context-transition .transition-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-muted);
+    margin-bottom: 0.3rem;
+}
+
+.discussion-context-transition .transition-meta {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 0.25rem;
+}
+
+.discussion-context-transition .transition-evidence {
+    font-size: 0.82rem;
+    line-height: 1.4;
+    margin-bottom: 0.5rem;
+}
+
+.discussion-context-transition .transition-thread {
+    border-top: 1px dashed var(--border);
+    padding-top: 0.45rem;
+}
+
+.discussion-msg.archived {
+    opacity: 0.75;
+}
+
 .discussion-input {
     display: flex;
     gap: 0.5rem;

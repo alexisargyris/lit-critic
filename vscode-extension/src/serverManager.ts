@@ -53,6 +53,10 @@ export class ServerManager implements vscode.Disposable {
         return `http://127.0.0.1:${this._port}`;
     }
 
+    get repoRoot(): string {
+        return this._repoRoot;
+    }
+
     /**
      * Start the backend server. Resolves when the health check passes.
      * If the server is already running (externally or from a prior start), reuses it.

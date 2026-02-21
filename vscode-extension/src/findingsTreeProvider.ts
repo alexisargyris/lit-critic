@@ -14,23 +14,90 @@
 import * as vscode from 'vscode';
 import { Finding } from './types';
 
-// Icons by severity
-const SEVERITY_ICONS: Record<string, vscode.ThemeIcon> = {
-    'critical': new vscode.ThemeIcon('error', new vscode.ThemeColor('errorForeground')),
-    'major': new vscode.ThemeIcon('warning', new vscode.ThemeColor('editorWarning.foreground')),
-    'minor': new vscode.ThemeIcon('info', new vscode.ThemeColor('editorInfo.foreground')),
+interface StatusVisual {
+    label: string;
+    icon: string;
+    color: string;
+    priority: number;
+}
+
+const STATUS_VISUALS: Record<string, StatusVisual> = {
+    'pending': {
+        label: 'PENDING',
+        icon: 'clock',
+        color: 'editorWarning.foreground',
+        priority: 0,
+    },
+    'escalated': {
+        label: 'ESCALATED',
+        icon: 'arrow-up',
+        color: 'errorForeground',
+        priority: 1,
+    },
+    'discussed': {
+        label: 'DISCUSSED',
+        icon: 'comment-discussion',
+        color: 'editorInfo.foreground',
+        priority: 2,
+    },
+    'revised': {
+        label: 'REVISED',
+        icon: 'edit',
+        color: 'editorInfo.foreground',
+        priority: 2,
+    },
+    'accepted': {
+        label: 'ACCEPTED',
+        icon: 'check',
+        color: 'gitDecoration.addedResourceForeground',
+        priority: 3,
+    },
+    'rejected': {
+        label: 'REJECTED',
+        icon: 'close',
+        color: 'gitDecoration.deletedResourceForeground',
+        priority: 3,
+    },
+    'withdrawn': {
+        label: 'WITHDRAWN',
+        icon: 'circle-slash',
+        color: 'disabledForeground',
+        priority: 3,
+    },
+    'conceded': {
+        label: 'CONCEDED',
+        icon: 'arrow-right',
+        color: 'disabledForeground',
+        priority: 3,
+    },
 };
 
-// Status suffixes
-const STATUS_SUFFIX: Record<string, string> = {
-    'pending': '',
-    'accepted': ' ✓',
-    'rejected': ' ✗',
-    'revised': ' ✎',
-    'withdrawn': ' ⊘',
-    'escalated': ' ⬆',
-    'discussed': ' 💬',
+const DEFAULT_STATUS_VISUAL: StatusVisual = {
+    label: 'PENDING',
+    icon: 'clock',
+    color: 'editorWarning.foreground',
+    priority: 0,
 };
+
+const SEVERITY_TOKENS: Record<string, string> = {
+    'critical': 'CRIT',
+    'major': 'MAJ',
+    'minor': 'MIN',
+};
+
+const SEVERITY_PRIORITY: Record<string, number> = {
+    'critical': 0,
+    'major': 1,
+    'minor': 2,
+};
+
+function getNormalizedStatus(status?: string): string {
+    return (status || 'pending').toLowerCase();
+}
+
+function getStatusVisual(status?: string): StatusVisual {
+    return STATUS_VISUALS[getNormalizedStatus(status)] || DEFAULT_STATUS_VISUAL;
+}
 
 export class FindingsTreeProvider implements vscode.TreeDataProvider<FindingTreeItem | LensGroupItem> {
     private _onDidChangeTreeData = new vscode.EventEmitter<FindingTreeItem | LensGroupItem | undefined | void>();
@@ -130,12 +197,30 @@ export class FindingsTreeProvider implements vscode.TreeDataProvider<FindingTree
     }
 
     private getFindingsForLens(lens: string): FindingTreeItem[] {
+        const currentFindingNumber = this.findings[this.currentIndex]?.number;
+
         return this.findings
-            .filter(f => f.lens.toLowerCase() === lens)
-            .map(f => {
-                const idx = this.findings.indexOf(f);
-                return new FindingTreeItem(f, idx, this.scenePath, f.number === this.findings[this.currentIndex]?.number);
-            });
+            .map((finding, index) => ({ finding, index }))
+            .filter(({ finding }) => finding.lens.toLowerCase() === lens)
+            .sort((a, b) => {
+                const statusPriority =
+                    getStatusVisual(a.finding.status).priority - getStatusVisual(b.finding.status).priority;
+                if (statusPriority !== 0) {
+                    return statusPriority;
+                }
+
+                const severityPriority =
+                    (SEVERITY_PRIORITY[a.finding.severity] ?? Number.MAX_SAFE_INTEGER) -
+                    (SEVERITY_PRIORITY[b.finding.severity] ?? Number.MAX_SAFE_INTEGER);
+                if (severityPriority !== 0) {
+                    return severityPriority;
+                }
+
+                return a.finding.number - b.finding.number;
+            })
+            .map(({ finding, index }) =>
+                new FindingTreeItem(finding, index, this.scenePath, finding.number === currentFindingNumber),
+            );
     }
 }
 
@@ -167,30 +252,30 @@ export class FindingTreeItem extends vscode.TreeItem {
     readonly findingIndex: number;
 
     constructor(finding: Finding, index: number, scenePath: string | null, isCurrent: boolean) {
-        const status = finding.status || 'pending';
-        const suffix = STATUS_SUFFIX[status] || '';
+        const statusVisual = getStatusVisual(finding.status);
+        const severityToken = SEVERITY_TOKENS[finding.severity] || finding.severity.toUpperCase();
         const lineRange = finding.line_start !== null
             ? finding.line_end !== null && finding.line_end !== finding.line_start
                 ? `L${finding.line_start}-L${finding.line_end}`
                 : `L${finding.line_start}`
             : '';
 
-        const label = `${isCurrent ? '▶ ' : ''}#${finding.number} ${finding.severity}${suffix}`;
+        const label = `${isCurrent ? '▶ ' : ''}${statusVisual.label} [${severityToken}] #${finding.number}`;
         super(label, vscode.TreeItemCollapsibleState.None);
 
         this.finding = finding;
         this.findingIndex = index;
+        const preview = finding.evidence.slice(0, 60) || finding.location;
         this.description = lineRange
-            ? `${lineRange} — ${finding.evidence.slice(0, 60)}`
+            ? `${lineRange} — ${preview}`
             : finding.evidence.slice(0, 80) || finding.location;
         this.tooltip = this.buildTooltip(finding);
-        this.iconPath = SEVERITY_ICONS[finding.severity] || SEVERITY_ICONS['major'];
+        this.iconPath = new vscode.ThemeIcon(statusVisual.icon, new vscode.ThemeColor(statusVisual.color));
         this.contextValue = 'finding';
 
-        // Highlight current finding with a stronger icon cue.
+        // Highlight current finding while preserving the status icon cue.
         if (isCurrent) {
             this.description = `▶ ${this.description}`;
-            this.iconPath = new vscode.ThemeIcon('target');
         }
 
         // Click opens the discussion panel for this finding (and navigates to its line)
@@ -202,8 +287,10 @@ export class FindingTreeItem extends vscode.TreeItem {
     }
 
     private buildTooltip(finding: Finding): vscode.MarkdownString {
+        const status = getNormalizedStatus(finding.status);
         const md = new vscode.MarkdownString();
         md.appendMarkdown(`**#${finding.number} — ${finding.severity.toUpperCase()}** (${finding.lens})\n\n`);
+        md.appendMarkdown(`**Status:** ${status}\n\n`);
         md.appendMarkdown(`${finding.evidence}\n\n`);
         if (finding.impact) {
             md.appendMarkdown(`**Impact:** ${finding.impact}\n\n`);
@@ -213,9 +300,6 @@ export class FindingTreeItem extends vscode.TreeItem {
             for (const opt of finding.options) {
                 md.appendMarkdown(`- ${opt}\n`);
             }
-        }
-        if (finding.status && finding.status !== 'pending') {
-            md.appendMarkdown(`\n**Status:** ${finding.status}`);
         }
         return md;
     }

@@ -484,7 +484,13 @@ If this finding involves ambiguity and the author clarifies, also include:
 [AMBIGUITY:INTENTIONAL] or [AMBIGUITY:ACCIDENTAL]
 
 If this interaction reveals a general author preference (not scene-specific), include:
-[PREFERENCE: one-line description of the preference for future reviews]"""
+[PREFERENCE: one-line description of the preference for future reviews]
+
+IMPORTANT — when using [WITHDRAWN] because you recognise this as an intentional author style choice
+(rather than a factual error in your finding), you MUST also include a [PREFERENCE: ...] tag.
+The [PREFERENCE:] tag is the ONLY mechanism that records learning to the database.
+Do NOT say "I'll note this in LEARNING.md" or similar phrases — that prose is ignored by the system.
+The [PREFERENCE:] tag IS the note."""
 
 
 def build_discussion_messages(finding, user_message: str,

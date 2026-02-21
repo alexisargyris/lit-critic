@@ -359,6 +359,53 @@ class TestHandleDiscussion:
         assert status == "withdrawn"
         assert "Withdrawn" in sample_finding.outcome_reason
 
+    async def test_withdrawn_without_preference_tag_records_learning(
+        self, sample_session_state, sample_finding, mock_api_response
+    ):
+        """Withdrawn finding (no [PREFERENCE:] tag) must still write a learning entry.
+
+        Regression test: previously [WITHDRAWN] without an explicit [PREFERENCE:] or
+        [AMBIGUITY:] tag produced zero learning records, so the LLM saying
+        "I'll note this in LEARNING.md as an intentional stylistic choice"
+        in natural language silently dropped the entry.
+        """
+        sample_session_state.client.create_message = AsyncMock(
+            return_value=mock_api_response(
+                "This is clearly an intentional stylistic choice. "
+                "I'll note this in LEARNING.md and retire the finding. [WITHDRAWN]"
+            )
+        )
+        sample_session_state.findings = [sample_finding]
+        response, status = await handle_discussion(
+            sample_session_state, sample_finding, "That's my deliberate style"
+        )
+
+        assert status == "withdrawn"
+        # A preference entry must be created even without a [PREFERENCE:] tag
+        assert len(sample_session_state.learning.session_rejections) == 1
+        rejection = sample_session_state.learning.session_rejections[0]
+        assert rejection["lens"] == sample_finding.lens
+
+    async def test_withdrawn_with_preference_tag_captures_rule(
+        self, sample_session_state, sample_finding, mock_api_response
+    ):
+        """Withdrawn finding with [PREFERENCE:] tag captures the explicit rule."""
+        sample_session_state.client.create_message = AsyncMock(
+            return_value=mock_api_response(
+                "Understood — intentional stylistic choice. [WITHDRAWN]"
+                "\n[PREFERENCE: Author uses sentence fragments deliberately for voice pacing]"
+            )
+        )
+        sample_session_state.findings = [sample_finding]
+        response, status = await handle_discussion(
+            sample_session_state, sample_finding, "That's my style"
+        )
+
+        assert status == "withdrawn"
+        assert len(sample_session_state.learning.session_rejections) == 1
+        rejection = sample_session_state.learning.session_rejections[0]
+        assert rejection["preference_rule"] == "Author uses sentence fragments deliberately for voice pacing"
+
     async def test_handles_escalated_status(self, sample_session_state, sample_finding, mock_api_response):
         """Phase 2: Escalated finding should increase severity."""
         sample_session_state.client.create_message = AsyncMock(
@@ -595,6 +642,25 @@ class TestHandleDiscussionStream:
         done = [e for e in events if e[0] == "done"][0]
         assert done[1]["status"] == "withdrawn"
         assert "Withdrawn" in sample_finding.outcome_reason
+
+    async def test_withdrawn_without_preference_tag_records_learning_stream(
+        self, sample_session_state, sample_finding, mock_streaming_response
+    ):
+        """Streaming: [WITHDRAWN] without [PREFERENCE:] still writes a session_rejection."""
+        full_text = (
+            "This is an intentional stylistic choice. "
+            "I'll note it in LEARNING.md and retire the finding. [WITHDRAWN]"
+        )
+        sample_session_state.client.stream_message = mock_streaming_response(full_text)
+        sample_session_state.findings = [sample_finding]
+
+        async for _ in handle_discussion_stream(
+            sample_session_state, sample_finding, "That's deliberate"
+        ):
+            pass
+
+        assert len(sample_session_state.learning.session_rejections) == 1
+        assert sample_session_state.learning.session_rejections[0]["lens"] == sample_finding.lens
 
     async def test_handles_escalated(self, sample_session_state, sample_finding, mock_streaming_response):
         full_text = 'Actually worse. [ESCALATED]\n[REVISION]\n{"severity": "critical"}\n[/REVISION]'

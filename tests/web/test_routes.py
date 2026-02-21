@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 from web.app import app
 from web.routes import session_mgr
@@ -613,8 +614,97 @@ class TestConfigEndpoint:
             assert data["api_keys_configured"]["openai"] is True
 
 
+class TestRepoPreflightEndpoints:
+    """Test repo-path preflight status and update routes."""
+
+    @patch("web.routes.get_repo_path")
+    @patch("web.routes.validate_repo_path")
+    def test_repo_preflight_returns_status_payload(self, mock_validate, mock_get_repo_path, client):
+        mock_get_repo_path.return_value = "C:/invalid/path"
+        mock_validate.return_value = type("Result", (), {
+            "ok": False,
+            "reason_code": "not_found",
+            "message": "Repository path was not found",
+            "path": "C:/invalid/path",
+        })()
+
+        response = client.get("/api/repo-preflight")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is False
+        assert payload["reason_code"] == "not_found"
+        assert payload["configured_path"] == "C:/invalid/path"
+        assert "marker" in payload
+
+    @patch("web.routes.set_repo_path")
+    @patch("web.routes.validate_repo_path")
+    @patch("web.routes.get_repo_path")
+    def test_repo_path_update_persists_when_valid(
+        self,
+        mock_get_repo_path,
+        mock_validate,
+        mock_set_repo_path,
+        client,
+    ):
+        valid_input = "C:/lit-critic"
+        mock_get_repo_path.return_value = valid_input
+        mock_validate.side_effect = [
+            type("Result", (), {
+                "ok": True,
+                "reason_code": "",
+                "message": "Repository path is valid.",
+                "path": valid_input,
+            })(),
+            type("Result", (), {
+                "ok": True,
+                "reason_code": "",
+                "message": "Repository path is valid.",
+                "path": valid_input,
+            })(),
+        ]
+
+        response = client.post("/api/repo-path", json={"repo_path": valid_input})
+        assert response.status_code == 200
+        mock_set_repo_path.assert_called_once_with(valid_input)
+        assert response.json()["ok"] is True
+
+    @patch("web.routes.validate_repo_path")
+    def test_repo_path_update_rejects_invalid(self, mock_validate, client):
+        mock_validate.return_value = type("Result", (), {
+            "ok": False,
+            "reason_code": "missing_marker",
+            "message": "Repository directory does not contain lit-critic-web.py",
+            "path": "C:/somewhere",
+        })()
+
+        response = client.post("/api/repo-path", json={"repo_path": "C:/somewhere"})
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["code"] == "repo_path_invalid"
+        assert detail["reason_code"] == "missing_marker"
+
+    @patch("web.routes._ensure_repo_preflight_ready")
+    def test_analyze_blocks_when_repo_preflight_invalid(self, mock_preflight, client, reset_session):
+        mock_preflight.side_effect = HTTPException(
+            status_code=409,
+            detail={"code": "repo_path_invalid", "message": "invalid repo path"},
+        )
+
+        response = client.post("/api/analyze", json={
+            "scene_path": "/any/scene.txt",
+            "project_path": "/any/project",
+            "api_key": "sk-ant-explicit",
+        })
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "repo_path_invalid"
+
+
 class TestAnalyzeEndpoint:
     """Test the analyze endpoint."""
+
+    @pytest.fixture(autouse=True)
+    def _repo_preflight_ok(self, monkeypatch):
+        monkeypatch.setattr("web.routes._ensure_repo_preflight_ready", lambda: None)
 
     def test_analyze_no_api_key(self, client, reset_session):
         """Test analyze fails without API key when env var is not set."""

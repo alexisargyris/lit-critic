@@ -1,6 +1,6 @@
 """Platform layer primitives for local orchestration over stateless Core."""
 
-__version__ = "2.0.1"
+__version__ = "2.2.1"
 
 from .context import condense_discussion_context
 from .core_client import CoreClient, CoreClientError, CoreClientHTTPError

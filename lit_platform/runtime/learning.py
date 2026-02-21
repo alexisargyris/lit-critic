@@ -27,6 +27,54 @@ from pathlib import Path
 from .db import get_connection, LearningStore
 from .models import LearningData
 
+# ---------------------------------------------------------------------------
+# Immediate DB commit (hot path)
+# ---------------------------------------------------------------------------
+
+
+def commit_pending_learning_entries(learning: LearningData, conn) -> None:
+    """Immediately write any unprocessed session learning events to ``learning_entry``.
+
+    This is the hot path called after every user action (reject, ambiguity,
+    discussion preference).  It drains the three session lists, writes each
+    new entry to SQLite via ``LearningStore``, updates the in-memory
+    long-term lists, and clears the processed items so subsequent calls are
+    idempotent.
+
+    ``review_count`` is intentionally *not* touched here — it is incremented
+    once at session completion via ``LearningStore.increment_review_count()``.
+    """
+    if conn is None:
+        return
+
+    # Process rejections → preferences
+    for rejection in learning.session_rejections:
+        if rejection.get("preference_rule"):
+            desc = f"[{rejection['lens']}] {rejection['preference_rule']}"
+        else:
+            reason = rejection.get("reason", "no reason given")
+            desc = f"[{rejection['lens']}] {rejection['pattern']} — Author says: \"{reason}\""
+        if not any(desc in p.get("description", "") for p in learning.preferences):
+            entry_id = LearningStore.add_preference(conn, desc)
+            learning.preferences.append({"id": entry_id, "description": desc})
+    learning.session_rejections = []  # drained
+
+    # Process ambiguity answers → ambiguity_intentional / ambiguity_accidental
+    for answer in learning.session_ambiguity_answers:
+        desc = f"{answer['location']}: {answer['description']}"
+        if answer["intentional"]:
+            if not any(desc in a.get("description", "") for a in learning.ambiguity_intentional):
+                entry_id = LearningStore.add_ambiguity(conn, desc, intentional=True)
+                learning.ambiguity_intentional.append({"id": entry_id, "description": desc})
+        else:
+            if not any(desc in a.get("description", "") for a in learning.ambiguity_accidental):
+                entry_id = LearningStore.add_ambiguity(conn, desc, intentional=False)
+                learning.ambiguity_accidental.append({"id": entry_id, "description": desc})
+    learning.session_ambiguity_answers = []  # drained
+
+    # session_acceptances are not yet mapped to long-term entries; clear them too
+    learning.session_acceptances = []
+
 
 # ---------------------------------------------------------------------------
 # Loading
@@ -214,8 +262,12 @@ def update_learning_from_session(learning: LearningData) -> None:
             if not any(desc in a.get('description', '') for a in learning.ambiguity_accidental):
                 learning.ambiguity_accidental.append({"description": desc})
 
-    # Increment review count
-    learning.review_count += 1
+    # Clear session lists so subsequent calls are idempotent
+    learning.session_rejections = []
+    learning.session_acceptances = []
+    learning.session_ambiguity_answers = []
+    # NOTE: review_count is NOT incremented here; use LearningStore.increment_review_count()
+    # at session completion (once per session, not once per export).
 
 
 # ---------------------------------------------------------------------------

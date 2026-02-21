@@ -13,15 +13,16 @@ class SessionStore:
     @staticmethod
     def create(conn: sqlite3.Connection, scene_path: str, scene_hash: str,
                model: str, glossary_issues: list[str] | None = None,
-               discussion_model: str | None = None) -> int:
+               discussion_model: str | None = None,
+               lens_preferences: dict | None = None) -> int:
         """Insert a new active session. Returns the session id."""
         now = datetime.now().isoformat()
         cursor = conn.execute(
             """INSERT INTO session
-               (scene_path, scene_hash, model, discussion_model, glossary_issues, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (scene_path, scene_hash, model, discussion_model, lens_preferences, glossary_issues, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (scene_path, scene_hash, model, discussion_model,
-             json.dumps(glossary_issues or []), now),
+             json.dumps(lens_preferences or {}), json.dumps(glossary_issues or []), now),
         )
         conn.commit()
         return cursor.lastrowid
@@ -220,12 +221,12 @@ class SessionStore:
     def _row_to_dict(row: sqlite3.Row) -> dict:
         """Convert a sqlite3.Row to a plain dict, deserialising JSON columns."""
         d = dict(row)
-        for key in ("glossary_issues", "discussion_history"):
+        for key in ("glossary_issues", "discussion_history", "lens_preferences"):
             if key in d and isinstance(d[key], str):
                 try:
                     d[key] = json.loads(d[key])
                 except (json.JSONDecodeError, TypeError):
-                    d[key] = []
+                    d[key] = {} if key == "lens_preferences" else []
         if "learning_session" in d and isinstance(d["learning_session"], str):
             try:
                 d["learning_session"] = json.loads(d["learning_session"])

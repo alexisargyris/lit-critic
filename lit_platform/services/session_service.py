@@ -48,6 +48,7 @@ def create_session(state: SessionState, glossary_issues: list[str] | None = None
         model=state.model,
         glossary_issues=glossary_issues or state.glossary_issues,
         discussion_model=state.discussion_model,
+        lens_preferences=state.lens_preferences,
     )
     state.session_id = session_id
 
@@ -82,6 +83,7 @@ def check_active_session(project_path: Path) -> Optional[dict]:
             "total_findings": len(findings),
             "model": session_data.get("model", ""),
             "discussion_model": session_data.get("discussion_model"),
+            "lens_preferences": session_data.get("lens_preferences", {}),
         }
     finally:
         conn.close()
@@ -106,6 +108,7 @@ def load_active_session(project_path: Path) -> Optional[dict]:
         "scene_hash": session_data.get("scene_hash", ""),
         "model": session_data.get("model", ""),
         "discussion_model": session_data.get("discussion_model"),
+        "lens_preferences": session_data.get("lens_preferences", {}),
         "current_index": session_data.get("current_index", 0),
         "glossary_issues": session_data.get("glossary_issues", []),
         "discussion_history": session_data.get("discussion_history", []),
@@ -139,6 +142,7 @@ def load_session_by_id(project_path: Path, session_id: int) -> Optional[dict]:
         "scene_hash": session_data.get("scene_hash", ""),
         "model": session_data.get("model", ""),
         "discussion_model": session_data.get("discussion_model"),
+        "lens_preferences": session_data.get("lens_preferences", {}),
         "current_index": session_data.get("current_index", 0),
         "glossary_issues": session_data.get("glossary_issues", []),
         "discussion_history": session_data.get("discussion_history", []),
@@ -316,7 +320,7 @@ def persist_discussion_history(state: SessionState) -> None:
 
 
 def _persist_learning_session(state: SessionState) -> None:
-    """Auto-save in-session learning data."""
+    """Auto-save in-session learning data (raw session blob on the session row)."""
     if not state.db_conn or not state.session_id:
         return
     learning_session = learning_session_payload(state.learning)
@@ -326,8 +330,21 @@ def _persist_learning_session(state: SessionState) -> None:
 
 
 def persist_session_learning(state: SessionState) -> None:
-    """Public alias for auto-saving in-session learning data."""
+    """Persist in-session learning data and immediately commit new entries to the DB.
+
+    This is the single chokepoint called after every learning-producing user
+    action (reject, ambiguity answer, discussion preference).  It:
+
+    1. Saves the raw session lists to the session row (for resume / audit).
+    2. Drains those lists by writing each new entry directly to
+       ``learning_entry`` via ``commit_pending_learning_entries()``.
+
+    ``review_count`` is not touched here — see ``complete_session()`` for that.
+    """
     _persist_learning_session(state)
+    if state.db_conn:
+        from lit_platform.services.learning_service import commit_pending_learning_entries
+        commit_pending_learning_entries(state.learning, state.db_conn)
 
 
 async def detect_and_apply_scene_changes(state: SessionState,

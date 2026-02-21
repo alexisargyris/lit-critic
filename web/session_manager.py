@@ -18,14 +18,18 @@ from lit_platform.services.analysis_service import (
     INDEX_FILES,
     OPTIONAL_FILES,
     create_client,
+    normalize_lens_preferences,
     run_coordinator,
     run_coordinator_chunked,
     run_lens,
 )
+from lit_platform.persistence import LearningStore
+
 from lit_platform.services import (
     load_learning,
     load_learning_from_db,
-    save_learning_to_file,
+    generate_learning_markdown,
+    export_learning_markdown,
     check_active_session,
     load_active_session,
     validate_session,
@@ -126,7 +130,8 @@ class WebSessionManager:
 
     async def start_analysis(self, scene_path: str, project_path: str, api_key: str,
                              model: str = DEFAULT_MODEL, discussion_model: str = None,
-                             discussion_api_key: str | None = None) -> dict:
+                             discussion_api_key: str | None = None,
+                             lens_preferences: dict | None = None) -> dict:
         """Start a new analysis. Returns summary info. Populates self.state."""
         project = Path(project_path)
         scene = Path(scene_path)
@@ -152,8 +157,10 @@ class WebSessionManager:
         indexes, loaded_files, missing_files = self._load_project_files(project)
         scene_content = self._load_scene(scene)
 
-        # Load learning
+        # Load learning and inject directly into indexes so that analysis prompts
+        # always reflect the current DB state (no need for a LEARNING.md file on disk).
         learning = load_learning(project)
+        indexes['LEARNING.md'] = generate_learning_markdown(learning)
 
         # Initialize provider-agnostic client
         provider = AVAILABLE_MODELS[model]["provider"]
@@ -178,6 +185,7 @@ class WebSessionManager:
             project_path=project,
             indexes=indexes,
             learning=learning,
+            lens_preferences=normalize_lens_preferences(lens_preferences),
             model=model,
             discussion_model=discussion_model,
             discussion_client=discussion_client,
@@ -220,6 +228,7 @@ class WebSessionManager:
                 client, lens_results, scene_content,
                 model=model_id, max_tokens=max_tokens,
                 progress_callback=_coord_progress,
+                lens_preferences=self.state.lens_preferences,
             )
         except CoordinatorError:
             # Fallback to single-call coordinator
@@ -230,6 +239,7 @@ class WebSessionManager:
                 coordinated = await run_coordinator(
                     client, lens_results, scene_content,
                     model=model_id, max_tokens=max_tokens,
+                    lens_preferences=self.state.lens_preferences,
                 )
             except CoordinatorError as e:
                 error_msg = str(e)
@@ -383,6 +393,7 @@ class WebSessionManager:
             findings=[Finding.from_dict(f) for f in session_data.get("findings", [])],
             glossary_issues=session_data.get("glossary_issues", []),
             discussion_history=session_data.get("discussion_history", []),
+            lens_preferences=session_data.get("lens_preferences") or normalize_lens_preferences(None),
             model=saved_model,
             discussion_model=saved_discussion_model,
             discussion_client=discussion_client,
@@ -500,6 +511,7 @@ class WebSessionManager:
             findings=[Finding.from_dict(f) for f in session_data.get("findings", [])],
             glossary_issues=session_data.get("glossary_issues", []),
             discussion_history=session_data.get("discussion_history", []),
+            lens_preferences=session_data.get("lens_preferences") or normalize_lens_preferences(None),
             model=saved_model,
             discussion_model=saved_discussion_model,
             discussion_client=discussion_client,
@@ -525,6 +537,7 @@ class WebSessionManager:
             "glossary_issues": self.state.glossary_issues,
             "counts": {"critical": 0, "major": 0, "minor": 0},
             "lens_counts": {},
+            "lens_preferences": self.state.lens_preferences,
         }
 
         for f in self.state.findings:
@@ -617,6 +630,10 @@ class WebSessionManager:
         result = {"scene_change": change_report}
         if finding is None:
             if complete_session(self.state):
+                # Increment review_count once per completed session.
+                if self.state.db_conn:
+                    LearningStore.increment_review_count(self.state.db_conn)
+                    self.state.learning.review_count += 1
                 result["complete"] = True
                 result["message"] = "All findings have been considered."
             else:
@@ -884,11 +901,11 @@ class WebSessionManager:
                 yield ("done", result)
 
     def save_learning(self) -> dict:
-        """Export LEARNING.md to project directory."""
+        """Export LEARNING.md to project directory (DB is already up to date)."""
         if not self.state:
             return {"error": "No active session"}
 
-        filepath = save_learning_to_file(self.state.learning, self.state.project_path)
+        filepath = export_learning_markdown(self.state.project_path)
         return {"saved": True, "path": str(filepath)}
 
     def check_saved_session(self, project_path: str) -> dict:

@@ -49,6 +49,8 @@ code --install-extension lit-critic-1.0.0.vsix --force
 
 Open the folder that contains `CANON.md`, `CAST.md`, and scene `.txt` files. The extension activates automatically when `CANON.md` is detected.
 
+When `literaryCritic.autoStartServer` is enabled (default), the extension also auto-reveals the **lit-critic** activity view after startup in `CANON.md` workspaces.
+
 > If your fiction project is outside the lit-critic repository, set `literaryCritic.repoPath` to the lit-critic installation directory (for example `C:\Projects\lit-critic`). See [Opening a Scene Folder](#opening-a-scene-folder-separate-from-the-repo).
 
 ### 2) Run analysis
@@ -99,11 +101,20 @@ Clients do not orchestrate Core directly; Platform owns the workflow boundary.
 
 Findings grouped by lens with click-to-jump navigation.
 
+- Auto-reveals the lit-critic activity view on startup in `CANON.md` projects (when auto-start is enabled)
+
+- **Status-first rendering** so pending/actionable findings stand out immediately
+- **Severity tokens** (`[CRIT]`, `[MAJ]`, `[MIN]`) as a compact secondary cue
+- **Operational ordering inside each lens**: pending/actionable first, then by severity
+- Dedicated status symbols/colors for `pending`, `accepted`, `rejected`, `withdrawn`, `conceded`, `revised`, `discussed`, and `escalated`
+
 ### Discussion Panel
 
 - Finding details
 - Chat-style discussion
+- Resizable discussion input (drag the textarea handle to enlarge/shrink)
 - Streaming responses
+- Re-review context preservation: when scene edits re-evaluate a finding, prior turns are shown as archived context and the updated finding starts a fresh discussion block
 - Actions: Accept, Reject, Skip Minor, Export Learning
 
 ### Status Bar
@@ -112,6 +123,15 @@ Findings grouped by lens with click-to-jump navigation.
 - Analyzing with progress
 - Active review (`current/total`)
 - Review complete
+
+### Slow-operation feedback
+
+For operations that can take noticeable time (for example loading a large session, resuming, or refreshing sessions/learning):
+
+- Fast operations stay silent (no flicker/noise)
+- Slow operations show a temporary spinning status-bar message
+- Very slow operations escalate to a VS Code progress notification
+- Timings are logged to the `lit-critic` output channel to help identify bottlenecks
 
 ### Scene Change Detection
 

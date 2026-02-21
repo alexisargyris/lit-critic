@@ -8,7 +8,7 @@ from lit_platform.runtime.config import DB_FILE
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def get_db_path(project_path: Path) -> Path:
@@ -47,6 +47,10 @@ def init_db(conn: sqlite3.Connection) -> None:
     if current < 2 or needs_skip_minor_drop:
         _migrate_drop_skip_minor(conn)
 
+    needs_lens_preferences = not _table_has_column(conn, "session", "lens_preferences")
+    if current < 3 or needs_lens_preferences:
+        _migrate_add_lens_preferences(conn)
+
     if current < SCHEMA_VERSION:
         conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
@@ -76,6 +80,7 @@ def _migrate_drop_skip_minor(conn: sqlite3.Connection) -> None:
                    scene_hash TEXT NOT NULL,
                    model TEXT NOT NULL,
                    discussion_model TEXT,
+                   lens_preferences TEXT DEFAULT '{}',
                    current_index INTEGER DEFAULT 0,
                    status TEXT DEFAULT 'active',
                    glossary_issues TEXT DEFAULT '[]',
@@ -93,12 +98,14 @@ def _migrate_drop_skip_minor(conn: sqlite3.Connection) -> None:
         conn.execute(
             """INSERT INTO session_new (
                    id, scene_path, scene_hash, model, discussion_model,
+                   lens_preferences,
                    current_index, status, glossary_issues, discussion_history,
                    learning_session, created_at, completed_at, total_findings,
                    accepted_count, rejected_count, withdrawn_count
                )
                SELECT
                    id, scene_path, scene_hash, model, discussion_model,
+                   '{}',
                    current_index, status, glossary_issues, discussion_history,
                    learning_session, created_at, completed_at, total_findings,
                    accepted_count, rejected_count, withdrawn_count
@@ -113,6 +120,17 @@ def _migrate_drop_skip_minor(conn: sqlite3.Connection) -> None:
         raise
 
 
+def _migrate_add_lens_preferences(conn: sqlite3.Connection) -> None:
+    """Add ``session.lens_preferences`` when missing."""
+    if _table_has_column(conn, "session", "lens_preferences"):
+        return
+
+    logger.info("Applying DB migration: add session.lens_preferences")
+    conn.execute("ALTER TABLE session ADD COLUMN lens_preferences TEXT DEFAULT '{}' ")
+    conn.execute("UPDATE session SET lens_preferences = '{}' WHERE lens_preferences IS NULL")
+    conn.commit()
+
+
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
@@ -124,6 +142,7 @@ CREATE TABLE IF NOT EXISTS session (
     scene_hash TEXT NOT NULL,
     model TEXT NOT NULL,
     discussion_model TEXT,
+    lens_preferences TEXT DEFAULT '{}',
     current_index INTEGER DEFAULT 0,
     status TEXT DEFAULT 'active',
     glossary_issues TEXT DEFAULT '[]',

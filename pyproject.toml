@@ -7,7 +7,7 @@ include = ["core*", "contracts*", "cli*", "web*", "lit_platform*"]
 
 [project]
 name = "lit-critic"
-version = "2.0.1"
+version = "2.2.1"
 description = "Multi-lens editorial review system for fiction manuscripts"
 readme = "README.md"
 requires-python = ">=3.10"

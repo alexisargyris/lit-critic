@@ -18,6 +18,13 @@ from lit_platform.runtime.config import (
     resolve_model,
 )
 from lit_platform.runtime.llm import create_client
+from lit_platform.runtime.lens_preferences import (
+    DEFAULT_LENS_PRESET,
+    LENS_PRESETS,
+    MAX_LENS_WEIGHT,
+    MIN_LENS_WEIGHT,
+    normalize_lens_preferences,
+)
 
 __all__ = [
     "INDEX_FILES",
@@ -35,4 +42,9 @@ __all__ = [
     "run_coordinator",
     "run_coordinator_chunked",
     "run_analysis",
+    "DEFAULT_LENS_PRESET",
+    "LENS_PRESETS",
+    "MIN_LENS_WEIGHT",
+    "MAX_LENS_WEIGHT",
+    "normalize_lens_preferences",
 ]

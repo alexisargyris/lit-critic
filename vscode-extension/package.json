@@ -2,7 +2,7 @@
   "name": "lit-critic",
   "displayName": "lit-critic",
   "description": "Multi-lens editorial review system for fiction manuscripts",
-  "version": "2.0.1",
+  "version": "2.3.0",
   "publisher": "alexisargyris",
   "repository": {
     "type": "git",
@@ -172,6 +172,24 @@
             "o3 (reasoning)"
           ],
           "description": "Discussion model (optional): leave empty to use the analysis model"
+        },
+        "literaryCritic.lensPreset": {
+          "type": "string",
+          "default": "balanced",
+          "order": 42,
+          "enum": [
+            "balanced",
+            "prose-first",
+            "story-logic",
+            "clarity-pass"
+          ],
+          "enumDescriptions": [
+            "Balanced across all lenses",
+            "Prioritize prose/style findings",
+            "Prioritize structure and logic consistency",
+            "Prioritize clarity and readability"
+          ],
+          "description": "Lens weighting preset used to rank findings"
         },
         "literaryCritic.autoStartServer": {
           "type": "boolean",

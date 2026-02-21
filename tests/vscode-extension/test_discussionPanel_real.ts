@@ -147,6 +147,17 @@ describe('DiscussionPanel (Real)', () => {
             assert.match(mockWebviewPanel.webview.html, /Export Learning/);
         });
 
+        it('should allow vertically resizing the discussion input textarea', () => {
+            panel = new DiscussionPanel(mockApiClient);
+
+            panel.show(sampleFinding, 1, 3, false);
+
+            const html = mockWebviewPanel.webview.html;
+            assert.match(html, /resize:\s*vertical/);
+            assert.match(html, /max-height:\s*40vh/);
+            assert.ok(!html.includes('resize: none'));
+        });
+
         it('should render the latest finding status badge', () => {
             panel = new DiscussionPanel(mockApiClient);
             const acceptedFinding = { ...sampleFinding, status: 'accepted' };
@@ -155,6 +166,36 @@ describe('DiscussionPanel (Real)', () => {
 
             assert.match(mockWebviewPanel.webview.html, /status-accepted/);
             assert.match(mockWebviewPanel.webview.html, />accepted</);
+        });
+
+        it('should render archived pre-edit context when a discussion transition is provided', () => {
+            panel = new DiscussionPanel(mockApiClient);
+
+            const findingAfterReview = {
+                ...sampleFinding,
+                evidence: 'Updated evidence',
+                discussion_turns: [],
+            };
+
+            panel.show(
+                findingAfterReview,
+                1,
+                3,
+                false,
+                {
+                    previousFinding: sampleFinding,
+                    previousTurns: [
+                        { role: 'assistant', content: 'Original recommendation.' },
+                        { role: 'user', content: 'I revised this part.' },
+                    ],
+                    note: 'Finding re-evaluated after scene edits. Starting a new discussion context.',
+                },
+            );
+
+            assert.match(mockWebviewPanel.webview.html, /Previous context \(before scene edits\)/);
+            assert.match(mockWebviewPanel.webview.html, /Original recommendation\./);
+            assert.match(mockWebviewPanel.webview.html, /I revised this part\./);
+            assert.ok(!mockWebviewPanel.webview.html.includes('No prior discussion turns.'));
         });
     });
 

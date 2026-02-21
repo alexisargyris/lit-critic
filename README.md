@@ -31,7 +31,7 @@ lit-critic (short for Literary Critic) reads your novel scenes and provides deta
 1. **Loads** your index files (CANON, CAST, GLOSSARY, STYLE, THREADS, TIMELINE) and scene
 2. **Runs 5 lenses in parallel**: Prose, Structure, Logic, Clarity, Continuity
 3. **Coordinates** results: deduplicates, prioritizes, detects conflicts
-4. **Presents** findings one at a time with line-number locations
+4. **Presents** findings with line-number locations
 5. **Discusses** findings with you — the AI can revise, withdraw, or defend based on your input
 6. **Learns** your preferences for future sessions
 7. **Auto-saves everything** — close anytime, resume anywhere
@@ -47,11 +47,17 @@ You're writing a novel and want AI-powered editorial feedback that respects your
 lit-critic is an **editorial assistant, not a content generator**. It will never write prose for you, rewrite your sentences, or impose external standards. It reads your scenes, checks them against rules *you* define in your index files, and presents findings for you to accept, reject, or discuss. When it suggests specific wording (rarely), it's minimal — a couple of example words to illustrate a concept, never a rewritten paragraph. Your novel, your voice.
 
 - ✅ **Five editorial lenses** — Prose, Structure, Logic, Clarity, Continuity
-- ✅ **Three interfaces** — CLI, Web UI, VS Code Extension (all use the same Platform workflow)
+- ✅ **Three interfaces** — CLI, Web UI, VS Code Extension (all use the same workflow)
+- ✅ **Auto-reveal in VS Code** — when a `CANON.md` project opens and extension auto-start runs, the lit-critic activity view is shown automatically
+- ✅ **Status-first Findings tree in VS Code** — pending findings are visually prioritized with severity tokens for quick triage
+- ✅ **Lens weighting presets** — choose balanced, prose-first, story-logic, or clarity-pass per analysis
 - ✅ **Interactive discussion** — debate findings; the AI can revise or withdraw
+- ✅ **Resizable VS Code discussion input** — drag the panel textarea handle to expand/shrink longer prompts comfortably
+- ✅ **Discussion context snapshots on re-review** — when a scene edit changes a finding, prior discussion remains visible as archived context and a new discussion block starts for the updated finding
 - ✅ **Learning system** — adapts to your style over time
 - ✅ **Auto-save & resume** — every decision is instantly saved; close anytime, with moved-scene recovery prompts when paths change
 - ✅ **Session management** — view history, inspect findings, clean up old reviews
+- ✅ **Slow-operation feedback in VS Code** — long-running actions (session load/refresh/resume) show progressive busy indicators and are timing-logged for diagnostics
 - ✅ **Scene change detection** — edit mid-review; line numbers adjust automatically
 - ✅ **Your rules, your voice** — validates against CANON, CAST, GLOSSARY, STYLE, THREADS, TIMELINE
 
@@ -117,9 +123,11 @@ See **[Using the Tool](docs/user-guide/using-the-tool.md)** for details on each 
 
 ### Cost Estimate
 
+Examples based on Anthropic models.
+
 | Model | Cost per Scene | Notes |
 |-------|---------------|-------|
-| **Sonnet** (default) | ~$0.10–0.15 | Good balance of quality and cost |
+| **Sonnet** | ~$0.10–0.15 | Good balance of quality and cost |
 | **Opus** | ~$0.50–0.75 | Deepest analysis |
 | **Haiku** | ~$0.02–0.05 | Fastest |
 

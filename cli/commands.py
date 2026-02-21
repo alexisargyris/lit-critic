@@ -14,15 +14,20 @@ Subcommands::
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
+from lit_platform.repo_preflight import MARKER_FILENAME, validate_repo_path
+from lit_platform.user_config import get_repo_path, set_repo_path
 from lit_platform.session_state_machine import restore_learning_session
 from lit_platform.models import SessionState, Finding, CoordinatorError
 from lit_platform.services.analysis_service import (
     AVAILABLE_MODELS,
     DEFAULT_MODEL,
+    LENS_PRESETS,
     create_client,
+    normalize_lens_preferences,
     resolve_api_key,
     resolve_model,
     run_analysis,
@@ -38,7 +43,7 @@ from lit_platform.services import (
     get_session_detail,
     load_learning,
     load_learning_from_db,
-    save_learning_to_file,
+    generate_learning_markdown,
     export_learning_markdown,
     reset_learning,
 )
@@ -48,11 +53,98 @@ from .interface import load_project_files, load_scene, print_summary
 from .session_loop import run_interactive_session
 
 
+MAX_REPO_PATH_RETRIES = 3
+
+
+def _resolve_repo_path_candidate() -> tuple[str | None, str]:
+    env_value = os.environ.get("LIT_CRITIC_REPO_PATH", "").strip()
+    if env_value:
+        return env_value, "environment variable LIT_CRITIC_REPO_PATH"
+
+    config_value = (get_repo_path() or "").strip()
+    if config_value:
+        return config_value, "user config"
+
+    return None, "user config"
+
+
+def _ensure_repo_path_preflight() -> str:
+    repo_path, source = _resolve_repo_path_candidate()
+    validation = validate_repo_path(repo_path)
+    if validation.ok:
+        return validation.path or str(Path(repo_path).resolve())
+
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    if not interactive:
+        raise RuntimeError(
+            "Repository preflight failed: "
+            f"{validation.message}\n"
+            "Set a valid repo path in user config or export LIT_CRITIC_REPO_PATH. "
+            f"The path must be a directory containing {MARKER_FILENAME}."
+        )
+
+    print("\nRepository path preflight failed.")
+    print(f"  Current source: {source}")
+
+    attempts = 0
+    current_validation = validation
+    while attempts < MAX_REPO_PATH_RETRIES:
+        attempts += 1
+        print(f"  Reason: {current_validation.message}")
+        try:
+            corrected = input(
+                f"  Enter lit-critic repo path (contains {MARKER_FILENAME}) "
+                "or 'q' to abort: "
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            raise RuntimeError("Repository path setup aborted.")
+
+        if corrected.lower() in {"q", "quit", "exit"}:
+            raise RuntimeError("Repository path setup aborted.")
+
+        current_validation = validate_repo_path(corrected)
+        if current_validation.ok:
+            assert current_validation.path is not None
+            set_repo_path(current_validation.path)
+            print(f"  ✓ Saved repo path to user config: {current_validation.path}")
+            return current_validation.path
+
+    raise RuntimeError(
+        "Repository preflight failed after multiple attempts. "
+        f"Please set a valid path containing {MARKER_FILENAME}."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Subcommand: analyze
 # ---------------------------------------------------------------------------
 
 async def cmd_analyze(args):
+    lens_overrides = {}
+    for item in args.lens_weight or []:
+        if '=' not in item:
+            print(f"Error: Invalid --lens-weight '{item}'. Expected format lens=weight (e.g. prose=1.3)")
+            sys.exit(1)
+        lens_name, raw_weight = item.split('=', 1)
+        lens_name = lens_name.strip().lower()
+        raw_weight = raw_weight.strip()
+        try:
+            lens_overrides[lens_name] = float(raw_weight)
+        except ValueError:
+            print(f"Error: Invalid weight '{raw_weight}' for lens '{lens_name}'.")
+            sys.exit(1)
+
+    try:
+        lens_preferences = normalize_lens_preferences(
+            {
+                "preset": args.lens_preset,
+                "weights": lens_overrides,
+            }
+        )
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
     """Run a new multi-lens analysis."""
     project_path = Path(args.project)
     if not project_path.exists():
@@ -135,15 +227,18 @@ async def cmd_analyze(args):
         print(f"Error: {e}")
         sys.exit(1)
 
-    # Load learning
+    # Load learning and inject directly into indexes so that analysis prompts
+    # always reflect the current DB state (no need for a LEARNING.md file on disk).
     print("\nLoading learning data...")
     learning = load_learning(project_path)
+    indexes['LEARNING.md'] = generate_learning_markdown(learning)
     print(f"  ✓ Review count: {learning.review_count}")
     print(f"  ✓ Preferences: {len(learning.preferences)}")
     print(f"  ✓ Blind spots: {len(learning.blind_spots)}")
     print(f"  ✓ Analysis model: {args.model} ({model_cfg['id']})")
     if discussion_model:
         print(f"  ✓ Discussion model: {discussion_model} ({discussion_model_cfg['id']})")
+    print(f"  ✓ Lens preset: {lens_preferences['preset']}")
 
     # Create session state
     state = SessionState(
@@ -153,6 +248,7 @@ async def cmd_analyze(args):
         project_path=project_path,
         indexes=indexes,
         learning=learning,
+        lens_preferences=lens_preferences,
         model=args.model,
         discussion_model=discussion_model,
         discussion_client=discussion_client,
@@ -167,6 +263,7 @@ async def cmd_analyze(args):
         results = await run_analysis(
             client, scene, indexes,
             model=state.model_id, max_tokens=state.model_max_tokens,
+            lens_preferences=state.lens_preferences,
         )
     except CoordinatorError as e:
         print(f"\nError during coordination: {e}")
@@ -328,6 +425,7 @@ async def cmd_resume(args):
         findings=[Finding.from_dict(f) for f in session_data.get("findings", [])],
         glossary_issues=session_data.get("glossary_issues", []),
         discussion_history=session_data.get("discussion_history", []),
+        lens_preferences=session_data.get("lens_preferences") or normalize_lens_preferences(None),
         model=saved_model,
         discussion_model=saved_discussion_model,
         discussion_client=discussion_client,
@@ -511,6 +609,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--discussion-model", choices=list(AVAILABLE_MODELS.keys()),
         default=None, help="Model for discussion (default: same as analysis model)",
     )
+    p_analyze.add_argument(
+        "--lens-preset",
+        choices=sorted(LENS_PRESETS.keys()),
+        default="balanced",
+        help="Lens weighting preset (default: balanced)",
+    )
+    p_analyze.add_argument(
+        "--lens-weight",
+        action="append",
+        help="Override individual lens weight, format lens=weight (repeatable)",
+    )
 
     # --- resume ---
     p_resume = subparsers.add_parser("resume", help="Resume an active session")
@@ -552,6 +661,13 @@ async def main():
     """Entry point for the CLI."""
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.command in {'analyze', 'resume'}:
+        try:
+            _ensure_repo_path_preflight()
+        except RuntimeError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
 
     if args.command == 'analyze':
         await cmd_analyze(args)

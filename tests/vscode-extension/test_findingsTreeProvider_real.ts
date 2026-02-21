@@ -151,14 +151,15 @@ describe('FindingsTreeProvider (Real)', () => {
     });
 
     describe('FindingTreeItem', () => {
-        it('should format label with number and severity', () => {
+        it('should format label with status-first and severity token', () => {
             treeProvider.setFindings([sampleFindings[0]], '/test/scene.txt', 0);
             
             const groups = treeProvider.getChildren();
             const findings = treeProvider.getChildren(groups[0]);
             
+            assert.match(findings[0].label, /PENDING/);
+            assert.match(findings[0].label, /\[MAJ\]/);
             assert.match(findings[0].label, /#1/);
-            assert.match(findings[0].label, /major/i);
         });
 
         it('should format line range in description', () => {
@@ -182,14 +183,25 @@ describe('FindingsTreeProvider (Real)', () => {
             assert.ok(!findings[0].description.includes('L42-L42'));
         });
 
-        it('should include status suffix for accepted findings', () => {
+        it('should show accepted status in label and icon', () => {
             treeProvider.setFindings([sampleFindings[2]], '/test/scene.txt', 0);
             
             const groups = treeProvider.getChildren();
             const findings = treeProvider.getChildren(groups[0]);
             
-            // sampleFindings[2] is accepted
-            assert.match(findings[0].label, /✓/);
+            assert.match(findings[0].label, /ACCEPTED/);
+            assert.equal(findings[0].iconPath.id, 'check');
+        });
+
+        it('should handle conceded status with dedicated label/icon', () => {
+            const concededFinding = { ...sampleFindings[0], status: 'conceded' };
+            treeProvider.setFindings([concededFinding], '/test/scene.txt', 0);
+
+            const groups = treeProvider.getChildren();
+            const findings = treeProvider.getChildren(groups[0]);
+
+            assert.match(findings[0].label, /CONCEDED/);
+            assert.equal(findings[0].iconPath.id, 'arrow-right');
         });
 
         it('should set contextValue to "finding"', () => {
@@ -230,6 +242,24 @@ describe('FindingsTreeProvider (Real)', () => {
             
             // First finding should have arrow
             assert.match(findings[0].description, /▶/);
+        });
+
+        it('should prioritize pending findings, then severity within same status', () => {
+            const findings = [
+                { ...sampleFindings[0], number: 11, lens: 'prose', severity: 'minor', status: 'accepted' },
+                { ...sampleFindings[0], number: 12, lens: 'prose', severity: 'minor', status: 'pending' },
+                { ...sampleFindings[0], number: 13, lens: 'prose', severity: 'critical', status: 'pending' },
+            ];
+            treeProvider.setFindings(findings, '/test/scene.txt', 0);
+
+            const groups = treeProvider.getChildren();
+            const proseGroup = groups.find((g: any) => g.lens === 'prose');
+            const proseFindings = treeProvider.getChildren(proseGroup);
+
+            // pending critical first, then pending minor, then accepted minor
+            assert.match(proseFindings[0].label, /PENDING \[CRIT\] #13/);
+            assert.match(proseFindings[1].label, /PENDING \[MIN\] #12/);
+            assert.match(proseFindings[2].label, /ACCEPTED \[MIN\] #11/);
         });
     });
 

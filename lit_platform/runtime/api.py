@@ -12,6 +12,7 @@ from lit_platform.session_state_machine import apply_re_evaluation_result
 from .llm import LLMClient
 from .config import MODEL, MAX_TOKENS, COORDINATOR_MAX_TOKENS
 from .models import Finding, LensResult, CoordinatorError
+from .lens_preferences import normalize_lens_preferences, rerank_coordinated_findings
 from .prompts import (
     get_lens_prompt, get_coordinator_prompt, get_coordinator_chunk_prompt,
     get_re_evaluation_prompt, COORDINATOR_TOOL, LENS_GROUPS,
@@ -220,7 +221,8 @@ async def _run_coordinator_chunk(client: LLMClient, group_name: str,
 async def run_coordinator_chunked(client: LLMClient, lens_results: list[LensResult],
                                   scene: str, *, model: str = MODEL,
                                   max_tokens: int = COORDINATOR_MAX_TOKENS,
-                                  progress_callback=None) -> dict:
+                                  progress_callback=None,
+                                  lens_preferences: dict | None = None) -> dict:
     """Run the coordinator in 3 chunks (prose → structure → coherence).
 
     Each chunk is a smaller coordinator call that handles one lens group.
@@ -296,18 +298,22 @@ async def run_coordinator_chunked(client: LLMClient, lens_results: list[LensResu
     for group in ["prose", "structure", "coherence"]:
         summary.setdefault(group, {"critical": 0, "major": 0, "minor": 0})
 
-    return {
+    coordinated = {
         "findings": deduped,
         "glossary_issues": all_glossary_issues,
         "conflicts": all_conflicts,
         "ambiguities": all_ambiguities,
         "summary": summary,
     }
+    if lens_preferences is not None:
+        coordinated = rerank_coordinated_findings(coordinated, normalize_lens_preferences(lens_preferences))
+    return coordinated
 
 
 async def run_coordinator(client: LLMClient, lens_results: list[LensResult], scene: str, *,
                           model: str = MODEL, max_tokens: int = COORDINATOR_MAX_TOKENS,
-                          max_retries: int = COORDINATOR_MAX_RETRIES) -> dict:
+                          max_retries: int = COORDINATOR_MAX_RETRIES,
+                          lens_preferences: dict | None = None) -> dict:
     """Run the coordinator to merge and prioritize findings (single-call mode).
 
     Uses tool/function calling to guarantee structured JSON output, with automatic
@@ -337,6 +343,8 @@ async def run_coordinator(client: LLMClient, lens_results: list[LensResult], sce
 
             data = _extract_tool_use_input(response)
             data = _validate_coordinator_output(data)
+            if lens_preferences is not None:
+                data = rerank_coordinated_findings(data, normalize_lens_preferences(lens_preferences))
             return data
 
         except CoordinatorError:
@@ -359,7 +367,8 @@ async def run_coordinator(client: LLMClient, lens_results: list[LensResult], sce
 
 
 async def run_analysis(client: LLMClient, scene: str, indexes: dict[str, str],
-                       model: str = MODEL, max_tokens: int = MAX_TOKENS) -> dict:
+                       model: str = MODEL, max_tokens: int = MAX_TOKENS,
+                       lens_preferences: dict | None = None) -> dict:
     """Run all lenses in parallel and coordinate results.
 
     Uses the chunked coordinator by default (3 smaller calls by lens group).
@@ -390,11 +399,13 @@ async def run_analysis(client: LLMClient, scene: str, indexes: dict[str, str],
     try:
         coordinated = await run_coordinator_chunked(
             client, lens_results, scene, model=model,
+            lens_preferences=lens_preferences,
         )
     except CoordinatorError:
         print("  Chunked coordinator failed. Falling back to single-call coordinator...")
         coordinated = await run_coordinator(
             client, lens_results, scene, model=model,
+            lens_preferences=lens_preferences,
         )
 
     return coordinated

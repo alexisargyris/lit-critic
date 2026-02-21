@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from .llm import LLMClient
 
 from .config import DEFAULT_MODEL, AVAILABLE_MODELS
+from .lens_preferences import default_lens_preferences
 
 
 class CoordinatorError(Exception):
@@ -142,6 +143,7 @@ class SessionState:
     glossary_issues: list[str] = field(default_factory=list)
     learning: LearningData = field(default_factory=LearningData)
     discussion_history: list[dict] = field(default_factory=list)
+    lens_preferences: dict = field(default_factory=default_lens_preferences)
     model: str = field(default_factory=lambda: DEFAULT_MODEL)
     discussion_model: Optional[str] = None  # None = use analysis model
     discussion_client: Optional["LLMClient"] = None  # None = use analysis client

@@ -19,6 +19,8 @@ import {
     SessionDetail,
     LearningData,
     ResumeErrorDetail,
+    RepoPreflightStatus,
+    RepoPathInvalidDetail,
 } from './types';
 
 export class ApiClient {
@@ -107,6 +109,24 @@ export class ApiClient {
         try {
             const detail = JSON.parse(match[1]) as ResumeErrorDetail;
             if (detail && detail.code === 'scene_path_not_found') {
+                return detail;
+            }
+        } catch {
+            // ignore parse failures
+        }
+
+        return null;
+    }
+
+    private extractRepoPathInvalidDetail(message: string): RepoPathInvalidDetail | null {
+        const match = message.match(/^HTTP\s+\d+:\s+(\{.*\})$/);
+        if (!match) {
+            return null;
+        }
+
+        try {
+            const detail = JSON.parse(match[1]) as RepoPathInvalidDetail;
+            if (detail && detail.code === 'repo_path_invalid') {
                 return detail;
             }
         } catch {
@@ -206,14 +226,34 @@ export class ApiClient {
         return this.request<ServerConfig>('GET', '/api/config');
     }
 
+    /** GET /api/repo-preflight — get backend repo-path preflight status. */
+    async getRepoPreflight(): Promise<RepoPreflightStatus> {
+        return this.request<RepoPreflightStatus>('GET', '/api/repo-preflight');
+    }
+
+    /** POST /api/repo-path — validate and persist backend repo path. */
+    async updateRepoPath(repoPath: string): Promise<RepoPreflightStatus> {
+        return this.request<RepoPreflightStatus>('POST', '/api/repo-path', {
+            repo_path: repoPath,
+        });
+    }
+
     /** POST /api/analyze — start a new analysis. */
-    async analyze(scenePath: string, projectPath: string, model?: string, discussionModel?: string, apiKey?: string): Promise<AnalysisSummary> {
+    async analyze(
+        scenePath: string,
+        projectPath: string,
+        model?: string,
+        discussionModel?: string,
+        apiKey?: string,
+        lensPreferences?: { preset: string; weights?: Record<string, number> },
+    ): Promise<AnalysisSummary> {
         return this.request<AnalysisSummary>('POST', '/api/analyze', {
             scene_path: scenePath,
             project_path: projectPath,
             ...(model ? { model } : {}),
             ...(discussionModel ? { discussion_model: discussionModel } : {}),
             ...(apiKey ? { api_key: apiKey } : {}),
+            ...(lensPreferences ? { lens_preferences: lensPreferences } : {}),
         });
     }
 
@@ -272,6 +312,25 @@ export class ApiClient {
             }
 
             return this.resume(projectPath, apiKey, override.trim());
+        }
+    }
+
+    async resumeWithRepoPathRecovery(
+        projectPath: string,
+        apiKey: string | undefined,
+        repoPath: string,
+    ): Promise<AnalysisSummary> {
+        try {
+            return await this.resume(projectPath, apiKey);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            const detail = this.extractRepoPathInvalidDetail(message);
+            if (!detail) {
+                throw err;
+            }
+
+            await this.updateRepoPath(repoPath);
+            return this.resume(projectPath, apiKey);
         }
     }
 

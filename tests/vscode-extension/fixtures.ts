@@ -138,6 +138,10 @@ export const sampleServerConfig = {
         'haiku': { label: 'Haiku 4.5 (fast & cheap)' },
     },
     default_model: 'sonnet',
+    lens_presets: {
+        balanced: { prose: 1.0, structure: 1.0, logic: 1.0, clarity: 1.0, continuity: 1.0 },
+        'prose-first': { prose: 1.6, structure: 1.1, logic: 0.9, clarity: 0.9, continuity: 0.8 },
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -315,11 +319,24 @@ export function createFreshMockVscode() {
             dispose: () => {},
             visible: true,
         }),
+        setStatusBarMessage: (text: string, hideAfterTimeoutOrThenable?: any) => ({
+            dispose: () => {},
+        }),
+        withProgress: async (options: any, task: any) => {
+            return task(
+                { report: (_value: any) => {} },
+                {
+                    isCancellationRequested: false,
+                    onCancellationRequested: (_listener: any) => ({ dispose: () => {} }),
+                },
+            );
+        },
         showInformationMessage: async (message: string, ...items: string[]) => items[0],
         showWarningMessage: async (message: string, ...items: string[]) => items[0],
         showErrorMessage: async (message: string, ...items: string[]) => items[0],
         showQuickPick: async (items: any[], options?: any) => items[0],
         showInputBox: async (options?: any) => 'test input',
+        showOpenDialog: async (options?: any) => [],
         createOutputChannel: (name: string) => ({
             appendLine: (text: string) => {},
             show: (preserveFocus?: boolean) => {},
@@ -412,6 +429,11 @@ export function createFreshMockVscode() {
     StatusBarAlignment: {
         Left: 1,
         Right: 2,
+    },
+    ProgressLocation: {
+        SourceControl: 1,
+        Window: 10,
+        Notification: 15,
     },
     ThemeIcon: class {
         id: string;

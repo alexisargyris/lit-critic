@@ -25,10 +25,18 @@ export interface Finding {
     outcome_reason?: string;
 }
 
+/** UI-only transition payload used when review re-evaluates a finding context. */
+export interface DiscussionContextTransition {
+    previousFinding: Finding;
+    previousTurns: Array<{ role: string; content: string }>;
+    note?: string;
+}
+
 /** Response from GET /api/finding */
 export interface FindingResponse {
     complete: boolean;
     message?: string;
+    review?: SceneChangeReport;
     finding?: Finding;
     index?: number;
     current?: number;
@@ -48,6 +56,10 @@ export interface AnalysisSummary {
     lens_counts: Record<string, { critical: number; major: number; minor: number }>;
     model: { name: string; id: string; label: string };
     discussion_model?: { name: string; id: string; label: string } | null;
+    lens_preferences?: {
+        preset: string;
+        weights: Record<string, number>;
+    };
     learning: { review_count: number; preferences: number; blind_spots: number };
     error?: string;
     findings_status?: Array<{
@@ -69,6 +81,20 @@ export interface ResumeErrorDetail {
     attempted_scene_path?: string;
     project_path?: string;
     override_provided?: boolean;
+}
+
+export interface RepoPreflightStatus {
+    ok: boolean;
+    reason_code?: string | null;
+    message: string;
+    path?: string | null;
+    marker?: string;
+    configured_path?: string | null;
+}
+
+export interface RepoPathInvalidDetail extends RepoPreflightStatus {
+    code?: string;
+    next_action?: string;
 }
 
 /** Response from GET /api/session */
@@ -152,11 +178,13 @@ export interface ServerConfig {
     api_key_configured: boolean;
     available_models: Record<string, { label: string }>;
     default_model: string;
+    lens_presets?: Record<string, Record<string, number>>;
 }
 
 /** Response from POST /api/check-session */
 export interface CheckSessionResponse {
     exists: boolean;
+    session_id?: number;
     scene_path?: string;
     saved_at?: string;
     current_index?: number;
