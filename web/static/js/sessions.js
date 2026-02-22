@@ -70,6 +70,23 @@ const Sessions = {
         }
     },
 
+    /** Format a scene label: show compact "+N" for multi-scene sessions. */
+    formatSceneLabel(session) {
+        const scenePaths = session.scene_paths || [session.scene_path];
+        if (scenePaths.length > 1) {
+            const first = scenePaths[0].split(/[/\\]/).pop();
+            return `${first} +${scenePaths.length - 1}`;
+        }
+        return session.scene_path.split(/[/\\]/).pop();
+    },
+
+    /** Build a full tooltip listing all scenes for multi-scene sessions. */
+    formatSceneTooltip(session) {
+        const scenePaths = session.scene_paths || [session.scene_path];
+        if (scenePaths.length <= 1) return '';
+        return scenePaths.map(p => p.split(/[/\\]/).pop()).join('\n');
+    },
+
     renderTable(bodyId, sessions, isActive) {
         const tbody = document.getElementById(bodyId);
         tbody.innerHTML = '';
@@ -77,13 +94,14 @@ const Sessions = {
         sessions.forEach(session => {
             const row = document.createElement('tr');
             
-            const sceneName = session.scene_path.split(/[/\\]/).pop();
+            const sceneName = this.formatSceneLabel(session);
+            const sceneTooltip = this.formatSceneTooltip(session);
             const created = new Date(session.created_at).toLocaleDateString();
 
             if (isActive) {
                 row.innerHTML = `
                     <td>${session.id}</td>
-                    <td class="scene-name">${sceneName}</td>
+                    <td class="scene-name" ${sceneTooltip ? `title="${this.escapeHtml(sceneTooltip)}"` : ''}>${sceneName}</td>
                     <td>${session.total_findings}</td>
                     <td>${session.model}</td>
                     <td>${created}</td>
@@ -96,7 +114,7 @@ const Sessions = {
                 const stats = `${session.accepted_count}/${session.rejected_count}`;
                 row.innerHTML = `
                     <td>${session.id}</td>
-                    <td class="scene-name">${sceneName}</td>
+                    <td class="scene-name" ${sceneTooltip ? `title="${this.escapeHtml(sceneTooltip)}"` : ''}>${sceneName}</td>
                     <td>${session.total_findings}</td>
                     <td>${stats}</td>
                     <td>${created}</td>
@@ -133,13 +151,22 @@ const Sessions = {
 
         title.textContent = `Session #${session.id}`;
 
+        const scenePaths = session.scene_paths || [session.scene_path];
         const sceneName = session.scene_path.split(/[/\\]/).pop();
         const created = new Date(session.created_at).toLocaleString();
         const completed = session.completed_at ? new Date(session.completed_at).toLocaleString() : 'N/A';
 
+        let sceneHtml;
+        if (scenePaths.length > 1) {
+            const sceneList = scenePaths.map(p => this.escapeHtml(p.split(/[/\\]/).pop())).join(', ');
+            sceneHtml = `<p><strong>Scenes (${scenePaths.length}):</strong> ${sceneList}</p>`;
+        } else {
+            sceneHtml = `<p><strong>Scene:</strong> ${this.escapeHtml(sceneName)}</p>`;
+        }
+
         let html = `
             <p><strong>Status:</strong> ${session.status}</p>
-            <p><strong>Scene:</strong> ${sceneName}</p>
+            ${sceneHtml}
             <p><strong>Model:</strong> ${session.model}</p>
             <p><strong>Created:</strong> ${created}</p>
             <p><strong>Completed:</strong> ${completed}</p>

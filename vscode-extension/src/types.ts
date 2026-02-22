@@ -10,6 +10,7 @@ export interface Finding {
     location: string;
     line_start: number | null;
     line_end: number | null;
+    scene_path?: string | null;
     evidence: string;
     impact: string;
     options: string[];
@@ -32,6 +33,13 @@ export interface DiscussionContextTransition {
     note?: string;
 }
 
+export interface IndexChangeReport {
+    changed: boolean;
+    stale: boolean;
+    changed_files: string[];
+    prompt: boolean;
+}
+
 /** Response from GET /api/finding */
 export interface FindingResponse {
     complete: boolean;
@@ -42,11 +50,13 @@ export interface FindingResponse {
     current?: number;
     total?: number;
     is_ambiguity?: boolean;
+    index_change?: IndexChangeReport | null;
 }
 
 /** Response from POST /api/analyze */
 export interface AnalysisSummary {
     scene_path: string;
+    scene_paths?: string[];
     scene_name: string;
     project_path: string;
     total_findings: number;
@@ -71,7 +81,12 @@ export interface AnalysisSummary {
         evidence: string;
         line_start: number | null;
         line_end: number | null;
+        scene_path?: string | null;
     }>;
+    index_context_stale?: boolean;
+    index_changed_files?: string[];
+    rerun_recommended?: boolean;
+    index_change?: IndexChangeReport;
 }
 
 export interface ResumeErrorDetail {
@@ -101,6 +116,7 @@ export interface RepoPathInvalidDetail extends RepoPreflightStatus {
 export interface SessionInfo {
     active: boolean;
     scene_path?: string;
+    scene_paths?: string[];
     scene_name?: string;
     project_path?: string;
     total_findings?: number;
@@ -115,6 +131,10 @@ export interface SessionInfo {
         line_start: number | null;
         line_end: number | null;
     }>;
+    index_context_stale?: boolean;
+    index_changed_files?: string[];
+    rerun_recommended?: boolean;
+    index_change?: IndexChangeReport;
 }
 
 /** Response from POST /api/finding/continue (and accept/reject) */
@@ -130,6 +150,7 @@ export interface AdvanceResponse {
     // For accept/reject wrappers
     action?: Record<string, unknown>;
     next?: AdvanceResponse;
+    index_change?: IndexChangeReport | null;
 }
 
 /** Scene change detection report */
@@ -153,6 +174,7 @@ export interface DiscussResponse {
     finding?: Finding;
     revision_history?: Array<Record<string, unknown>>;
     error?: string;
+    index_change?: IndexChangeReport | null;
 }
 
 /** SSE event from /api/analyze/progress */
@@ -196,6 +218,7 @@ export interface SessionSummary {
     id: number;
     status: 'active' | 'completed' | 'abandoned';
     scene_path: string;
+    scene_paths?: string[];
     model: string;
     created_at: string;
     completed_at?: string;
@@ -203,6 +226,9 @@ export interface SessionSummary {
     accepted_count: number;
     rejected_count: number;
     withdrawn_count: number;
+    index_context_stale?: boolean;
+    index_changed_files?: string[];
+    rerun_recommended?: boolean;
 }
 
 /** Session detail from GET /api/sessions/{id} */

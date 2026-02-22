@@ -16,7 +16,7 @@ import * as path from 'path';
 import { ServerManager } from './serverManager';
 import { ApiClient } from './apiClient';
 import { DiagnosticsProvider } from './diagnosticsProvider';
-import { FindingsTreeProvider } from './findingsTreeProvider';
+import { FindingsDecorationProvider, FindingsTreeProvider } from './findingsTreeProvider';
 import { SessionsTreeProvider } from './sessionsTreeProvider';
 import { LearningTreeProvider } from './learningTreeProvider';
 import { DiscussionPanel } from './discussionPanel';
@@ -30,6 +30,7 @@ import {
     FindingResponse,
     AdvanceResponse,
     DiscussResponse,
+    IndexChangeReport,
     ResumeErrorDetail,
     CheckSessionResponse,
     SessionSummary,
@@ -44,8 +45,11 @@ let serverManager: ServerManager | undefined;
 let apiClient: ApiClient;
 let diagnosticsProvider: DiagnosticsProvider;
 let findingsTreeProvider: FindingsTreeProvider;
+let findingsDecorationProvider: FindingsDecorationProvider;
 let sessionsTreeProvider: SessionsTreeProvider;
 let learningTreeProvider: LearningTreeProvider;
+let findingsTreeView: vscode.TreeView<any> | undefined;
+let sessionsTreeView: vscode.TreeView<any> | undefined;
 let discussionPanel: DiscussionPanel;
 let statusBar: StatusBar;
 let operationTracker: OperationTracker;
@@ -54,6 +58,8 @@ let operationTracker: OperationTracker;
 let allFindings: Finding[] = [];
 let currentFindingIndex = 0;
 let totalFindings = 0;
+let closedSessionNotice: string | undefined;
+let indexChangeDismissed = false;
 
 function cloneDiscussionTurns(turns?: Array<{ role: string; content: string }>): Array<{ role: string; content: string }> {
     return (turns || []).map((t) => ({ role: t.role, content: t.content }));
@@ -99,17 +105,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusBar = new StatusBar();
     operationTracker = new OperationTracker();
     diagnosticsProvider = new DiagnosticsProvider();
-    findingsTreeProvider = new FindingsTreeProvider();
+    findingsDecorationProvider = new FindingsDecorationProvider();
+    findingsTreeProvider = new FindingsTreeProvider(findingsDecorationProvider);
     sessionsTreeProvider = new SessionsTreeProvider();
     learningTreeProvider = new LearningTreeProvider();
 
     // Register tree views — must always happen so VS Code can populate the sidebar
-    const findingsTreeView = vscode.window.createTreeView('literaryCritic.findings', {
+    findingsTreeView = vscode.window.createTreeView('literaryCritic.findings', {
         treeDataProvider: findingsTreeProvider,
         showCollapseAll: true,
     });
 
-    const sessionsTreeView = vscode.window.createTreeView('literaryCritic.sessions', {
+    sessionsTreeView = vscode.window.createTreeView('literaryCritic.sessions', {
         treeDataProvider: sessionsTreeProvider,
         showCollapseAll: true,
     });
@@ -124,10 +131,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         statusBar,
         operationTracker,
         diagnosticsProvider,
+        vscode.window.registerFileDecorationProvider(findingsDecorationProvider),
         findingsTreeView,
         sessionsTreeView,
         learningTreeView,
     );
+
+    const findingsVisibilityDisposable = findingsTreeView.onDidChangeVisibility?.((event) => {
+        if (event.visible) {
+            revealCurrentFindingSelection();
+        }
+    });
+    if (findingsVisibilityDisposable) {
+        context.subscriptions.push(findingsVisibilityDisposable);
+    }
+
+    const sessionsVisibilityDisposable = sessionsTreeView.onDidChangeVisibility?.((event) => {
+        if (event.visible) {
+            revealCurrentSessionSelection();
+        }
+    });
+    if (sessionsVisibilityDisposable) {
+        context.subscriptions.push(sessionsVisibilityDisposable);
+    }
 
     // Register commands — must always happen so Command Palette entries work
     context.subscriptions.push(
@@ -140,6 +166,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand('literaryCritic.selectFinding', cmdSelectFinding),
         vscode.commands.registerCommand('literaryCritic.reviewFinding', cmdReviewFinding),
         vscode.commands.registerCommand('literaryCritic.clearSession', cmdClearSession),
+        vscode.commands.registerCommand('literaryCritic.rerunAnalysisWithUpdatedIndexes', cmdRerunAnalysis),
         vscode.commands.registerCommand('literaryCritic.selectModel', cmdSelectModel),
         vscode.commands.registerCommand('literaryCritic.stopServer', cmdStopServer),
         // Phase 2: Management commands
@@ -154,6 +181,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const config = vscode.workspace.getConfiguration('literaryCritic');
     const autoStartServer = config.get<boolean>('autoStartServer', true);
+    const activationStartupHint = autoStartServer
+        ? vscode.window.setStatusBarMessage('lit-critic: Preparing startup...', 5000)
+        : undefined;
+
+    // Apply workspace-scoped problem-decoration preferences (optional).
+    // This can suppress diagnostic-based tab/file tinting for this workspace.
+    await applyWorkspaceProblemDecorationPreferences();
+
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration((event) => {
+            if (
+                event.affectsConfiguration('literaryCritic.disableProblemDecorationColors')
+                || event.affectsConfiguration('literaryCritic.disableProblemDecorationBadges')
+            ) {
+                void applyWorkspaceProblemDecorationPreferences();
+            }
+        })
+    );
 
     // Try to locate the repo root now. If found, create the server manager
     // eagerly and optionally auto-start.
@@ -180,31 +225,57 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
     }
 
-    if (repoRoot) {
-        serverManager = new ServerManager(repoRoot);
-        context.subscriptions.push(serverManager);
+    try {
+        if (repoRoot) {
+            serverManager = new ServerManager(repoRoot);
+            context.subscriptions.push(serverManager);
 
-        // Auto-start server if configured
-        if (autoStartServer) {
-            try {
-                await serverManager.start();
-                // Auto-load sidebar after server is running
-                await autoLoadSidebar();
-                // If this workspace is a lit-critic project (CANON.md present),
-                // automatically reveal the lit-critic activity container.
-                await revealLitCriticActivityContainerIfProjectDetected();
-            } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                statusBar.setError(msg);
-                // Don't block activation — user can start manually via analyze command
+            // Auto-start server if configured
+            if (autoStartServer) {
+                try {
+                    await startServerWithBusyUi(repoRoot);
+                    // Auto-load sidebar after server is running
+                    await autoLoadSidebar();
+                    // If this workspace is a lit-critic project (CANON.md present),
+                    // automatically reveal the lit-critic activity container.
+                    await revealLitCriticActivityContainerIfProjectDetected();
+                } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    statusBar.setError(msg);
+                    // Don't block activation — user can start manually via analyze command
+                }
             }
         }
+    } finally {
+        activationStartupHint?.dispose();
     }
 }
 
 export function deactivate(): void {
     discussionPanel?.dispose();
     serverManager?.stop();
+}
+
+async function applyWorkspaceProblemDecorationPreferences(): Promise<void> {
+    const config = vscode.workspace.getConfiguration('literaryCritic');
+    const disableColors = config.get<boolean>('disableProblemDecorationColors', false);
+    const disableBadges = config.get<boolean>('disableProblemDecorationBadges', false);
+
+    const workbenchConfig = vscode.workspace.getConfiguration('workbench');
+
+    // When enabled, pin the workspace setting to false.
+    // When disabled, remove the workspace override to restore normal behavior.
+    await workbenchConfig.update(
+        'editor.decorations.colors',
+        disableColors ? false : undefined,
+        vscode.ConfigurationTarget.Workspace,
+    );
+
+    await workbenchConfig.update(
+        'editor.decorations.badges',
+        disableBadges ? false : undefined,
+        vscode.ConfigurationTarget.Workspace,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +330,32 @@ function findRepoRootFromWorkspace(): string | undefined {
     }
 
     return undefined;
+}
+
+async function startServerWithBusyUi(repoRoot: string): Promise<void> {
+    statusBar.setAnalyzing('Starting server...');
+    await vscode.window.withProgress(
+        {
+            location: vscode.ProgressLocation.Notification,
+            title: 'lit-critic: Starting server',
+            cancellable: false,
+        },
+        async (progress) => {
+            progress.report({ message: 'Launching lit-critic backend...' });
+            await serverManager!.start();
+        },
+    );
+
+    // Keep repo-path sync best-effort and outside the startup progress UI so the
+    // "Starting server" notification disappears as soon as the backend is ready.
+    await ensureApiClient().updateRepoPath(repoRoot).catch(() => {
+        // Non-fatal: commands also do on-demand recovery when needed.
+    });
+
+    // Startup busy text should only cover backend boot. Once boot completes,
+    // return to the default idle state unless a subsequent flow (e.g. resume)
+    // immediately sets a more specific status.
+    statusBar.setReady();
 }
 
 async function ensureRepoRootWithRecovery(): Promise<string> {
@@ -359,29 +456,48 @@ function detectProjectPath(): string | undefined {
  * Priority:
  *   1. Active text editor, if it is a file-backed document.
  *   2. Any visible file-backed editor (auto-activate it for clarity).
+ *   3. Native file picker (open selected file and return its editor).
  */
-async function resolveSceneEditorForAnalyze(): Promise<vscode.TextEditor | undefined> {
-    const active = vscode.window.activeTextEditor;
-    if (active?.document?.uri?.scheme === 'file') {
-        return active;
-    }
+/** Result from resolving scene file(s) for analysis. */
+interface ResolvedSceneFiles {
+    editor: vscode.TextEditor;
+    /** All selected scene paths (length > 1 for multi-scene). */
+    scenePaths: string[];
+}
 
-    const fallback = vscode.window.visibleTextEditors.find(
-        (editor) => editor?.document?.uri?.scheme === 'file'
-    );
-    if (!fallback) {
+async function resolveSceneEditorForAnalyze(): Promise<ResolvedSceneFiles | undefined> {
+    const selected = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: true,
+        openLabel: 'Analyze Scene',
+        title: 'Select scene file(s) to analyze',
+    });
+
+    if (!selected || selected.length === 0) {
         return undefined;
     }
 
+    const allPaths = selected.map(uri => uri.fsPath);
+
     try {
-        return await vscode.window.showTextDocument(fallback.document, {
-            viewColumn: fallback.viewColumn,
-            preserveFocus: false,
+        const firstEditor = await vscode.window.showTextDocument(selected[0], {
             preview: false,
+            preserveFocus: false,
         });
+
+        // Ensure all selected scene files are opened in tabs for multi-scene sessions.
+        for (let i = 1; i < selected.length; i += 1) {
+            await vscode.window.showTextDocument(selected[i], {
+                preview: false,
+                preserveFocus: true,
+                viewColumn: firstEditor.viewColumn,
+            });
+        }
+
+        return { editor: firstEditor, scenePaths: allPaths };
     } catch {
-        // If activation fails for any reason, still use the discovered editor.
-        return fallback;
+        return undefined;
     }
 }
 
@@ -558,6 +674,7 @@ async function autoLoadSidebar(): Promise<void> {
                 sessionsTreeProvider.setCurrentSessionByScenePath(
                     sessionInfo.active ? sessionInfo.scene_path : undefined,
                 );
+                revealCurrentSessionSelection();
                 if (sessionInfo.active && sessionInfo.scene_path) {
                     // There's an active session — resume it silently
                     const summary = await resumeWithScenePathRecovery(client, projectPath);
@@ -606,6 +723,7 @@ async function revealLitCriticActivityContainerIfProjectDetected(): Promise<void
  * `literaryCritic.repoPath` since activation, or we prompt them to do so.
  */
 async function ensureServer(): Promise<void> {
+    const startupHint = vscode.window.setStatusBarMessage('lit-critic: Preparing startup...', 5000);
     const repoRoot = await ensureRepoRootWithRecovery();
 
     // Lazily create (or rebind) ServerManager
@@ -628,17 +746,14 @@ async function ensureServer(): Promise<void> {
         return;
     }
 
-    statusBar.setAnalyzing('Starting server...');
     try {
-        await serverManager.start();
-        // Ensure backend config path is updated after successful startup.
-        await ensureApiClient().updateRepoPath(repoRoot).catch(() => {
-            // Non-fatal: commands also do on-demand recovery when needed.
-        });
+        await startServerWithBusyUi(repoRoot);
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         statusBar.setError(msg);
         throw new Error(`Could not start lit-critic server: ${msg}`);
+    } finally {
+        startupHint.dispose();
     }
 }
 
@@ -717,10 +832,117 @@ function getLatestFindingStatus(result: DiscussResponse): string | undefined {
     return result.finding?.status || result.finding_status;
 }
 
+async function navigateToFindingLine(finding: Finding): Promise<void> {
+    if (finding.line_start === null) {
+        return;
+    }
+
+    const scenePath = finding.scene_path || diagnosticsProvider.scenePath;
+    if (!scenePath) {
+        return;
+    }
+
+    const line = Math.max(0, finding.line_start - 1);
+    const endLine = Math.max(0, (finding.line_end || finding.line_start) - 1);
+    const range = new vscode.Range(line, 0, endLine, 0);
+
+    const scenePathLower = scenePath.toLowerCase();
+    const existingEditor = vscode.window.visibleTextEditors.find(
+        e => e.document.uri.fsPath.toLowerCase() === scenePathLower
+    );
+
+    if (existingEditor) {
+        existingEditor.selection = new vscode.Selection(range.start, range.end);
+        existingEditor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    } else {
+        const uri = vscode.Uri.file(scenePath);
+        await vscode.window.showTextDocument(uri, {
+            viewColumn: vscode.ViewColumn.One,
+            selection: range,
+            preserveFocus: true,
+        });
+    }
+}
+
+function revealCurrentFindingSelection(): void {
+    const item = findingsTreeProvider?.getCurrentFindingItem?.();
+    if (!findingsTreeView || typeof findingsTreeView.reveal !== 'function' || !item) {
+        return;
+    }
+
+    const revealResult = findingsTreeView.reveal(item, {
+        select: true,
+        focus: false,
+        expand: true,
+    });
+    void Promise.resolve(revealResult).catch(() => {
+        // Non-fatal: tree may not be visible/materialized yet.
+    });
+}
+
+function revealCurrentSessionSelection(): void {
+    const item = sessionsTreeProvider?.getCurrentSessionItem?.();
+    if (!sessionsTreeView || typeof sessionsTreeView.reveal !== 'function' || !item) {
+        return;
+    }
+
+    const revealResult = sessionsTreeView.reveal(item, {
+        select: true,
+        focus: false,
+        expand: true,
+    });
+    void Promise.resolve(revealResult).catch(() => {
+        // Non-fatal: tree may not be visible/materialized yet.
+    });
+}
+
+function resolvePresentedFindingIndex(
+    findingResp: FindingResponse,
+    preferredIndex?: number,
+): number {
+    let resolvedIndex: number | undefined;
+
+    if (findingResp.finding) {
+        const matchedIndex = allFindings.findIndex((f) => f.number === findingResp.finding!.number);
+        if (matchedIndex >= 0) {
+            resolvedIndex = matchedIndex;
+        }
+    }
+
+    // Prefer explicit backend index only when we couldn't map by finding number.
+    // In some resume/view flows the backend may return a stale or missing index
+    // while still returning the correct finding payload.
+    if (typeof resolvedIndex !== 'number' && typeof findingResp.index === 'number') {
+        resolvedIndex = findingResp.index;
+    }
+
+    if (typeof resolvedIndex !== 'number' && typeof preferredIndex === 'number') {
+        resolvedIndex = preferredIndex;
+    }
+
+    if (typeof resolvedIndex !== 'number') {
+        resolvedIndex = currentFindingIndex;
+    }
+
+    if (allFindings.length <= 0) {
+        return Math.max(0, resolvedIndex);
+    }
+
+    if (resolvedIndex < 0) {
+        return 0;
+    }
+    if (resolvedIndex >= allFindings.length) {
+        return allFindings.length - 1;
+    }
+    return resolvedIndex;
+}
+
 async function handleDiscussionResult(result: DiscussResponse): Promise<void> {
     if (result.error) {
         return;
     }
+
+    handleIndexChangeReport(result.index_change ?? null);
 
     const activeFinding = allFindings[currentFindingIndex];
     if (!activeFinding) {
@@ -770,6 +992,7 @@ function presentFinding(
         if (fallback) {
             currentFindingIndex = fallback.index;
             findingsTreeProvider.setCurrentIndex(currentFindingIndex);
+            revealCurrentFindingSelection();
 
             const total = getSafeTotalFindings();
             ensureDiscussionPanel().show(
@@ -792,11 +1015,12 @@ function presentFinding(
         return;
     }
 
-    currentFindingIndex = findingResp.index ?? currentFindingIndex;
+    currentFindingIndex = resolvePresentedFindingIndex(findingResp, preferredIndex);
     totalFindings = findingResp.total ?? totalFindings;
 
     statusBar.setProgress(findingResp.current ?? currentFindingIndex + 1, totalFindings);
     findingsTreeProvider.setCurrentIndex(currentFindingIndex);
+    revealCurrentFindingSelection();
 
     // Show the discussion panel
     ensureDiscussionPanel().show(
@@ -805,6 +1029,7 @@ function presentFinding(
         totalFindings,
         findingResp.is_ambiguity ?? false,
         discussionTransition,
+        closedSessionNotice,
     );
 }
 
@@ -824,8 +1049,41 @@ function handleAdvanceResponse(resp: AdvanceResponse, preferredIndex?: number): 
         refreshDiagnosticsFromSession();
     }
 
+    handleIndexChangeReport(resp.index_change ?? null);
+
     // Present the next finding
     presentFinding(resp, preferredIndex);
+}
+
+function handleIndexChangeReport(report: IndexChangeReport | null | undefined): void {
+    if (!report || !report.stale) {
+        ensureDiscussionPanel().clearIndexChangeNotice();
+        return;
+    }
+
+    if (report.prompt) {
+        indexChangeDismissed = false;
+    }
+
+    if (!indexChangeDismissed) {
+        ensureDiscussionPanel().notifyIndexChange(report);
+    }
+
+    if (report.prompt) {
+        const changed = report.changed_files?.length ? report.changed_files.join(', ') : 'index context';
+        void vscode.window.showWarningMessage(
+            `lit-critic: ${changed} changed. Findings may be stale. Re-run analysis is recommended.`,
+            'Re-run Analysis',
+            'Dismiss',
+        ).then(async (choice) => {
+            if (choice === 'Re-run Analysis') {
+                await cmdRerunAnalysis();
+            } else if (choice === 'Dismiss') {
+                indexChangeDismissed = true;
+                ensureDiscussionPanel().clearIndexChangeNotice();
+            }
+        });
+    }
 }
 
 /**
@@ -881,6 +1139,7 @@ async function populateFindingsAfterAnalysis(summary: AnalysisSummary): Promise<
         location: f.location,
         line_start: f.line_start ?? null,
         line_end: f.line_end ?? null,
+        scene_path: (f as any).scene_path ?? null,
         evidence: f.evidence ?? '',
         impact: '',
         options: [],
@@ -892,7 +1151,8 @@ async function populateFindingsAfterAnalysis(summary: AnalysisSummary): Promise<
 
     totalFindings = allFindings.length;
     findingsTreeProvider.setFindings(allFindings, summary.scene_path, summary.current_index);
-    diagnosticsProvider.setScenePath(summary.scene_path);
+    revealCurrentFindingSelection();
+    diagnosticsProvider.setScenePath(summary.scene_path, summary.scene_paths);
 
     // Get the first full finding to start
     try {
@@ -928,18 +1188,10 @@ function updateCachedFinding(finding: Finding): void {
 
 async function cmdAnalyze(): Promise<void> {
     try {
+        closedSessionNotice = undefined;
+        indexChangeDismissed = false;
         await ensureServer();
         const client = ensureApiClient();
-
-        // Determine scene path (active editor, with fallback to an open file editor)
-        const editor = await resolveSceneEditorForAnalyze();
-        if (!editor) {
-            vscode.window.showErrorMessage(
-                'lit-critic: No open file found to analyze. Open your scene file and try again.'
-            );
-            return;
-        }
-        const scenePath = editor.document.uri.fsPath;
 
         // Determine project path
         const projectPath = detectProjectPath();
@@ -979,12 +1231,26 @@ async function cmdAnalyze(): Promise<void> {
             await populateFindingsAfterAnalysis(summary);
             await sessionsTreeProvider.refresh();
             sessionsTreeProvider.setCurrentSession(entryAction.sessionId);
+            revealCurrentSessionSelection();
+            handleIndexChangeReport(summary.index_change ?? null);
 
             const finding = await client.getCurrentFinding();
+            handleIndexChangeReport(finding.index_change ?? null);
             presentFinding(finding, summary.current_index);
             refreshManagementViews();
             return;
         }
+
+        // Start-new analyses always use the picker so users can choose one or many files.
+        const resolved = await resolveSceneEditorForAnalyze();
+        if (!resolved) {
+            vscode.window.showErrorMessage(
+                'lit-critic: No scene file selected.'
+            );
+            return;
+        }
+        const scenePath = resolved.scenePaths[0];
+        const scenePaths = resolved.scenePaths.length > 1 ? resolved.scenePaths : undefined;
 
         // Select model
         const config = vscode.workspace.getConfiguration('literaryCritic');
@@ -997,6 +1263,20 @@ async function cmdAnalyze(): Promise<void> {
         statusBar.setAnalyzing(buildAnalysisStartStatusMessage(lensPreset, serverConfig));
         vscode.window.showInformationMessage('lit-critic: Starting analysis...');
 
+        let firstProgressEventSeen = false;
+        let resolveFirstProgressEvent: (() => void) | undefined;
+        const firstProgressEventPromise = new Promise<void>((resolve) => {
+            resolveFirstProgressEvent = resolve;
+        });
+        const markFirstProgressEvent = (): void => {
+            if (firstProgressEventSeen) {
+                return;
+            }
+            firstProgressEventSeen = true;
+            resolveFirstProgressEvent?.();
+            resolveFirstProgressEvent = undefined;
+        };
+
         // Fire off analysis first (don't await yet) — the POST creates the
         // backend's analysis_progress tracker that the SSE endpoint needs.
         const analysisPromise = (async () => {
@@ -1008,6 +1288,7 @@ async function cmdAnalyze(): Promise<void> {
                     discussionModel,
                     undefined,
                     { preset: lensPreset },
+                    scenePaths,
                 );
             } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
@@ -1029,6 +1310,7 @@ async function cmdAnalyze(): Promise<void> {
                     discussionModel,
                     undefined,
                     { preset: lensPreset },
+                    scenePaths,
                 );
             }
         })();
@@ -1041,6 +1323,7 @@ async function cmdAnalyze(): Promise<void> {
         const progressPromise = new Promise<void>((resolve) => {
             client.streamAnalysisProgress(
                 (event) => {
+                    markFirstProgressEvent();
                     switch (event.type) {
                         case 'status':
                             statusBar.setAnalyzing(event.message);
@@ -1055,17 +1338,37 @@ async function cmdAnalyze(): Promise<void> {
                             statusBar.setAnalyzing('Analysis complete!');
                             break;
                         case 'done':
+                            markFirstProgressEvent();
                             resolve();
                             break;
                     }
                 },
-                resolve,
+                () => {
+                    markFirstProgressEvent();
+                    resolve();
+                },
                 (err) => {
                     // Progress stream error is non-fatal — analysis may still complete
+                    markFirstProgressEvent();
                     resolve();
                 },
             );
         });
+
+        await vscode.window.withProgress(
+            {
+                location: vscode.ProgressLocation.Notification,
+                title: 'lit-critic: Starting analysis',
+                cancellable: false,
+            },
+            async (progress) => {
+                progress.report({ message: 'Sending analysis request...' });
+                await Promise.race([
+                    firstProgressEventPromise,
+                    analysisPromise.then(() => undefined),
+                ]);
+            },
+        );
 
         // Wait for the analysis to finish
         const summary = await analysisPromise;
@@ -1094,6 +1397,7 @@ async function cmdAnalyze(): Promise<void> {
 
         // Present the first finding
         const firstFinding = await client.getCurrentFinding();
+        handleIndexChangeReport(firstFinding.index_change ?? null);
         presentFinding(firstFinding);
 
         // Refresh management views
@@ -1108,6 +1412,8 @@ async function cmdAnalyze(): Promise<void> {
 
 async function cmdResume(): Promise<void> {
     try {
+        closedSessionNotice = undefined;
+        indexChangeDismissed = false;
         await runTrackedOperation(
             {
                 id: 'resume-session',
@@ -1143,8 +1449,11 @@ async function cmdResume(): Promise<void> {
                 await populateFindingsAfterAnalysis(summary);
                 await sessionsTreeProvider.refresh();
                 sessionsTreeProvider.setCurrentSessionByScenePath(summary.scene_path);
+                revealCurrentSessionSelection();
+                handleIndexChangeReport(summary.index_change ?? null);
 
                 const finding = await client.getCurrentFinding();
+                handleIndexChangeReport(finding.index_change ?? null);
                 presentFinding(finding);
 
                 // Refresh management views
@@ -1246,6 +1555,7 @@ async function cmdDiscuss(): Promise<void> {
 
     try {
         const finding = await client.getCurrentFinding();
+        handleIndexChangeReport(finding.index_change ?? null);
         if (!finding.complete && finding.finding) {
             updateCachedFinding(finding.finding);
             ensureDiscussionPanel().show(
@@ -1274,43 +1584,33 @@ async function cmdSelectFinding(index: number): Promise<void> {
         const client = ensureApiClient();
         currentFindingIndex = index;
         findingsTreeProvider.setCurrentIndex(currentFindingIndex);
+        revealCurrentFindingSelection();
 
-        const resp = await client.gotoFinding(index);
+        let resp: AdvanceResponse;
+        try {
+            resp = await client.gotoFinding(index);
+        } catch (gotoErr) {
+            const cached = allFindings[index];
+            if (!cached) {
+                throw gotoErr;
+            }
+
+            await navigateToFindingLine(cached);
+            ensureDiscussionPanel().show(
+                cached,
+                index + 1,
+                getSafeTotalFindings(),
+                cached.ambiguity_type !== null,
+                undefined,
+                closedSessionNotice,
+            );
+            return;
+        }
 
         // Update cached finding with full data from the backend
         if (!resp.complete && resp.finding) {
             updateCachedFinding(resp.finding);
-
-            // Navigate to the finding's line in the editor
-            const finding = resp.finding;
-            if (finding.line_start !== null) {
-                const scenePath = diagnosticsProvider.scenePath;
-                if (scenePath) {
-                    const line = Math.max(0, finding.line_start - 1);
-                    const endLine = Math.max(0, (finding.line_end || finding.line_start) - 1);
-                    const range = new vscode.Range(line, 0, endLine, 0);
-
-                    // If the file is already visible, just move the cursor —
-                    // don't re-open it (which would create a new editor group).
-                    // Use case-insensitive comparison for Windows paths.
-                    const scenePathLower = scenePath.toLowerCase();
-                    const existingEditor = vscode.window.visibleTextEditors.find(
-                        e => e.document.uri.fsPath.toLowerCase() === scenePathLower
-                    );
-
-                    if (existingEditor) {
-                        existingEditor.selection = new vscode.Selection(range.start, range.end);
-                        existingEditor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
-                    } else {
-                        const uri = vscode.Uri.file(scenePath);
-                        await vscode.window.showTextDocument(uri, {
-                            viewColumn: vscode.ViewColumn.One,
-                            selection: range,
-                            preserveFocus: true,
-                        });
-                    }
-                }
-            }
+            await navigateToFindingLine(resp.finding);
         }
 
         handleAdvanceResponse(resp, index);
@@ -1324,6 +1624,7 @@ async function cmdReviewFinding(): Promise<void> {
     try {
         const client = ensureApiClient();
         const resp = await client.reviewFinding();
+        handleIndexChangeReport(resp.index_change ?? null);
         let discussionTransition: DiscussionContextTransition | undefined;
 
         if (!resp.complete && resp.finding) {
@@ -1403,6 +1704,8 @@ async function cmdClearSession(): Promise<void> {
         findingsTreeProvider.clear();
         statusBar.setReady();
         allFindings = [];
+        closedSessionNotice = undefined;
+        indexChangeDismissed = false;
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         vscode.window.showErrorMessage(`lit-critic: ${msg}`);
@@ -1479,6 +1782,13 @@ async function handleFindingAction(action: string, data?: unknown): Promise<void
         case 'exportLearning':
             await cmdExportLearning();
             break;
+        case 'rerunAnalysis':
+            await cmdRerunAnalysis();
+            break;
+        case 'dismissIndexChange':
+            indexChangeDismissed = true;
+            ensureDiscussionPanel().clearIndexChangeNotice();
+            break;
     }
 }
 
@@ -1549,6 +1859,8 @@ async function cmdViewSession(item: any): Promise<void> {
 
                 // If this is an active session, resume it
                 if (detail.status === 'active') {
+                    closedSessionNotice = undefined;
+                    indexChangeDismissed = false;
                     statusBar.setAnalyzing('Resuming session...');
 
                     // Explicit click on an active session should switch context directly
@@ -1589,8 +1901,11 @@ async function cmdViewSession(item: any): Promise<void> {
                     await populateFindingsAfterAnalysis(summary);
                     await sessionsTreeProvider.refresh();
                     sessionsTreeProvider.setCurrentSession(sessionId);
+                    revealCurrentSessionSelection();
+                    handleIndexChangeReport(summary.index_change ?? null);
 
                     const currentFinding = await client.getCurrentFinding();
+                    handleIndexChangeReport(currentFinding.index_change ?? null);
                     if (!currentFinding.complete && currentFinding.finding) {
                         updateCachedFinding(currentFinding.finding);
                     }
@@ -1607,73 +1922,53 @@ async function cmdViewSession(item: any): Promise<void> {
                     // Refresh management views
                     refreshManagementViews();
                 } else {
-                    // Completed or abandoned session — show findings in read-only mode
+                    const summary = await viewSessionByIdWithScenePathRecovery(client, projectPath, sessionId);
 
-                    // Open the scene file in the editor (path is not subject to recovery here)
+                    if (summary.error) {
+                        statusBar.setError(summary.error);
+                        vscode.window.showErrorMessage(`lit-critic: Load failed — ${summary.error}`);
+                        return;
+                    }
+
+                    closedSessionNotice = `Viewing ${detail.status} session — actions will reopen it.`;
+
+                    const resolvedScenePath = summary.scene_path || detail.scene_path;
                     const fs = require('fs');
-                    if (fs.existsSync(detail.scene_path)) {
-                        const uri = vscode.Uri.file(detail.scene_path);
+                    if (fs.existsSync(resolvedScenePath)) {
+                        const uri = vscode.Uri.file(resolvedScenePath);
                         await vscode.window.showTextDocument(uri, {
                             viewColumn: vscode.ViewColumn.One,
                             preview: false,
                         });
                     } else {
-                        vscode.window.showWarningMessage(
-                            `Scene file not found: ${detail.scene_path}`
-                        );
+                        vscode.window.showWarningMessage(`Scene file not found: ${resolvedScenePath}`);
                     }
 
-                    if (detail.findings && detail.findings.length > 0) {
-                        // Build findings for display
-                        const findings: Finding[] = detail.findings.map(f => ({
-                            number: f.number,
-                            severity: f.severity as 'critical' | 'major' | 'minor',
-                            lens: f.lens,
-                            location: f.location,
-                            line_start: f.line_start ?? null,
-                            line_end: f.line_end ?? null,
-                            evidence: f.evidence,
-                            impact: f.impact || '',
-                            options: f.options || [],
-                            flagged_by: f.flagged_by || [],
-                            ambiguity_type: null,
-                            stale: false,
-                            status: f.status,
-                            author_response: f.author_response || '',
-                            discussion_turns: f.discussion_turns || [],
-                            revision_history: f.revision_history || [],
-                            outcome_reason: f.outcome_reason || '',
-                        }));
-
-                        // Display in findings tree (read-only)
-                        allFindings = findings;
-                        totalFindings = findings.length;
-
-                        const selectedIndex = Math.min(
-                            Math.max(detail.current_index ?? 0, 0),
-                            findings.length - 1,
-                        );
-                        currentFindingIndex = selectedIndex;
-
-                        findingsTreeProvider.setFindings(findings, detail.scene_path, selectedIndex);
-                        diagnosticsProvider.setScenePath(detail.scene_path);
-                        diagnosticsProvider.updateFromFindings(findings);
-
-                        ensureDiscussionPanel().show(
-                            findings[selectedIndex],
-                            selectedIndex + 1,
-                            findings.length,
-                            findings[selectedIndex].ambiguity_type !== null,
-                        );
-
-                        vscode.window.showInformationMessage(
-                            `Viewing ${detail.status} session: ${detail.total_findings} findings ` +
-                            `(${detail.accepted_count} accepted, ${detail.rejected_count} rejected)`
-                        );
-                    }
-
-                    // "Current" in the sessions tree tracks explicit user selection.
+                    await populateFindingsAfterAnalysis(summary);
+                    await sessionsTreeProvider.refresh();
                     sessionsTreeProvider.setCurrentSession(sessionId);
+                    revealCurrentSessionSelection();
+                    handleIndexChangeReport(summary.index_change ?? null);
+
+                    const currentFinding = await client.getCurrentFinding();
+                    handleIndexChangeReport(currentFinding.index_change ?? null);
+                    if (!currentFinding.complete && currentFinding.finding) {
+                        updateCachedFinding(currentFinding.finding);
+                    }
+
+                    const selectedIndex = Math.min(
+                        Math.max(detail.current_index ?? 0, 0),
+                        Math.max(0, summary.total_findings - 1),
+                    );
+
+                    presentFinding(currentFinding, selectedIndex);
+                    statusBar.setProgress(selectedIndex + 1, summary.total_findings);
+
+                    vscode.window.showInformationMessage(
+                        `Viewing ${detail.status} session: ${summary.total_findings} findings`
+                    );
+
+                    refreshManagementViews();
                 }
             },
         );
@@ -1737,7 +2032,20 @@ async function resumeSessionByIdWithScenePathRecovery(
     );
 }
 
-async function cmdDeleteSession(item: any): Promise<void> {
+async function viewSessionByIdWithScenePathRecovery(
+    client: ApiClient,
+    projectPath: string,
+    sessionId: number,
+): Promise<AnalysisSummary> {
+    return client.viewSessionWithRecovery(
+        projectPath,
+        sessionId,
+        undefined,
+        promptForScenePathOverride,
+    );
+}
+
+async function cmdDeleteSession(item?: any): Promise<void> {
     try {
         await runTrackedOperation(
             {
@@ -1746,13 +2054,17 @@ async function cmdDeleteSession(item: any): Promise<void> {
                 statusMessage: 'Deleting session...',
             },
             async () => {
+                const selectedItem = sessionsTreeView?.selection?.[0];
+                const targetItem = item ?? selectedItem;
+
                 // Handle both calling patterns:
                 // 1. From context menu: receives SessionTreeItem object with session property
                 // 2. From direct call: receives number
-                const sessionId = typeof item === 'number' ? item : item?.session?.id;
+                // 3. From view title toolbar: no arg, use current tree selection
+                const sessionId = typeof targetItem === 'number' ? targetItem : targetItem?.session?.id;
 
                 if (!sessionId) {
-                    vscode.window.showErrorMessage('lit-critic: Could not determine session ID.');
+                    vscode.window.showWarningMessage('lit-critic: Select a session in the Sessions view to delete.');
                     return;
                 }
 
@@ -1777,7 +2089,7 @@ async function cmdDeleteSession(item: any): Promise<void> {
                 // Check if this is the currently active session
                 const sessionInfo = await client.getSession();
                 const isActiveSession = sessionInfo.active &&
-                                        item?.session?.status === 'active';
+                                        targetItem?.session?.status === 'active';
 
                 await client.deleteSession(sessionId, projectPath);
 
@@ -1832,6 +2144,45 @@ async function cmdRefreshLearning(): Promise<void> {
         );
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`lit-critic: ${msg}`);
+    }
+}
+
+async function cmdRerunAnalysis(): Promise<void> {
+    try {
+        await ensureServer();
+        const client = ensureApiClient();
+
+        const projectPath = detectProjectPath();
+        if (!projectPath) {
+            vscode.window.showErrorMessage(
+                'lit-critic: Could not detect project directory (no CANON.md found in workspace).'
+            );
+            return;
+        }
+
+        statusBar.setAnalyzing('Re-running analysis with updated indexes...');
+        const summary = await client.rerunAnalysis(projectPath);
+        if (summary.error) {
+            statusBar.setError(summary.error);
+            vscode.window.showErrorMessage(`lit-critic: Re-run failed — ${summary.error}`);
+            return;
+        }
+
+        indexChangeDismissed = false;
+        // Explicit re-run from the index-change prompt should dismiss the
+        // current discussion panel/dialog before presenting refreshed results.
+        discussionPanel?.close();
+
+        await populateFindingsAfterAnalysis(summary);
+        const firstFinding = await client.getCurrentFinding();
+        presentFinding(firstFinding);
+        refreshManagementViews();
+
+        vscode.window.showInformationMessage('lit-critic: Analysis re-run completed with updated indexes.');
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        statusBar.setError(msg);
         vscode.window.showErrorMessage(`lit-critic: ${msg}`);
     }
 }

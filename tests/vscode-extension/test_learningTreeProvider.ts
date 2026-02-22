@@ -80,14 +80,14 @@ describe('LearningTreeProvider', () => {
     });
 
     describe('tree items', () => {
-        it('should show entry count in category description', () => {
+        it('should encode entry count in category resource URI', () => {
             const category = {
                 label: 'Preferences',
                 count: sampleLearningData.preferences.length,
-                description: `${sampleLearningData.preferences.length}`,
+                resourceUri: `lit-critic-count://learning-category/preferences?count=${sampleLearningData.preferences.length}`,
             };
             
-            assert.equal(category.description, '2');
+            assert.equal(category.resourceUri, 'lit-critic-count://learning-category/preferences?count=2');
         });
 
         it('should set correct icons for each category', () => {

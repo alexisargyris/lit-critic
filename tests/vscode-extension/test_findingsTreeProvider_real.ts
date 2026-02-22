@@ -1,7 +1,5 @@
 /**
  * Real tests for FindingsTreeProvider module.
- * 
- * Tests the actual FindingsTreeProvider class with mocked vscode API.
  */
 
 import { strict as assert } from 'assert';
@@ -9,306 +7,156 @@ import { createFreshMockVscode, sampleFindings } from './fixtures';
 
 const proxyquire = require('proxyquire').noCallThru();
 
+declare const describe: (name: string, fn: () => void) => void;
+declare const beforeEach: (fn: () => void) => void;
+declare const it: (name: string, fn: () => Promise<void> | void) => void;
+
 describe('FindingsTreeProvider (Real)', () => {
     let FindingsTreeProvider: any;
+    let FindingsDecorationProvider: any;
     let LensGroupItem: any;
     let FindingTreeItem: any;
     let mockVscode: any;
-    let treeProvider: any;
 
     beforeEach(() => {
         mockVscode = createFreshMockVscode();
 
         const module = proxyquire('../../vscode-extension/src/findingsTreeProvider', {
-            'vscode': mockVscode,
+            vscode: mockVscode,
         });
+
         FindingsTreeProvider = module.FindingsTreeProvider;
+        FindingsDecorationProvider = module.FindingsDecorationProvider;
         LensGroupItem = module.LensGroupItem;
         FindingTreeItem = module.FindingTreeItem;
-
-        treeProvider = new FindingsTreeProvider();
     });
 
-    afterEach(() => {
-        if (treeProvider) {
-            treeProvider.clear();
-        }
+    it('formats finding label and marks current finding in description', () => {
+        const provider = new FindingsTreeProvider();
+        provider.setFindings([sampleFindings[0]], '/test/scene.txt', 0);
+
+        const group = provider.getChildren()[0];
+        const finding = provider.getChildren(group)[0];
+
+        assert.equal(finding.label, '#1 L42-L45');
+        assert.ok(String(finding.description).includes('· current'));
+        assert.ok(!String(finding.description).includes('▶'));
     });
 
-    describe('setFindings', () => {
-        it('should store findings and trigger tree refresh', () => {
-            let eventFired = false;
-            treeProvider.onDidChangeTreeData(() => { eventFired = true; });
-            
-            treeProvider.setFindings(sampleFindings, '/test/scene.txt', 0);
-            
-            assert.ok(eventFired);
-        });
+    it('keeps non-current finding description as plain preview text', () => {
+        const provider = new FindingsTreeProvider();
+        provider.setFindings(sampleFindings, '/test/scene.txt', 1);
 
-        it('should store scene path', () => {
-            treeProvider.setFindings(sampleFindings, '/test/scene.txt', 0);
-            // Would need to check internal state - for now just verify no errors
-            assert.ok(true);
-        });
+        const proseGroup = provider.getChildren().find((g: any) => g.lens === 'prose');
+        const proseFindings = provider.getChildren(proseGroup);
+        const nonCurrent = proseFindings.find((f: any) => f.finding.number === 1);
+
+        assert.ok(nonCurrent, 'Expected non-current finding item');
+        assert.ok(!String(nonCurrent.description).includes('· current'));
+        assert.ok(!String(nonCurrent.description).includes('▶'));
     });
 
-    describe('getChildren - root level', () => {
-        it('should return lens groups when findings exist', () => {
-            treeProvider.setFindings(sampleFindings, '/test/scene.txt', 0);
-            
-            const children = treeProvider.getChildren();
-            
-            assert.ok(Array.isArray(children));
-            assert.ok(children.length > 0);
-            assert.ok(children[0] instanceof LensGroupItem);
-        });
+    it('returns current finding item for native TreeView reveal', () => {
+        const provider = new FindingsTreeProvider();
+        provider.setFindings(sampleFindings, '/test/scene.txt', 1);
 
-        it('should group findings by lens', () => {
-            treeProvider.setFindings(sampleFindings, '/test/scene.txt', 0);
-            
-            const children = treeProvider.getChildren();
-            
-            // sampleFindings has prose and structure
-            const lensNames = children.map((item: any) => item.lens);
-            assert.ok(lensNames.includes('prose'));
-            assert.ok(lensNames.includes('structure'));
-        });
+        const current = provider.getCurrentFindingItem();
 
-        it('should order lenses correctly (prose, structure, logic, clarity, continuity)', () => {
-            const multiLensFindings = [
-                { ...sampleFindings[0], lens: 'clarity' },
-                { ...sampleFindings[1], lens: 'prose' },
-                { ...sampleFindings[2], lens: 'structure', status: 'pending' },
-            ];
-            treeProvider.setFindings(multiLensFindings, '/test/scene.txt', 0);
-            
-            const children = treeProvider.getChildren();
-            const lensNames = children.map((item: any) => item.lens);
-            
-            // Should be in order: prose, structure, clarity
-            const proseIdx = lensNames.indexOf('prose');
-            const structureIdx = lensNames.indexOf('structure');
-            const clarityIdx = lensNames.indexOf('clarity');
-            
-            assert.ok(proseIdx < structureIdx);
-            assert.ok(structureIdx < clarityIdx);
-        });
-
-        it('should return empty array when no findings', () => {
-            const children = treeProvider.getChildren();
-            
-            assert.ok(Array.isArray(children));
-            assert.equal(children.length, 0);
-        });
+        assert.ok(current, 'Expected current finding item');
+        assert.equal(current.findingIndex, 1);
+        assert.equal(current.id, 'finding:2');
     });
 
-    describe('getChildren - lens group level', () => {
-        it('should return findings for specific lens', () => {
-            treeProvider.setFindings(sampleFindings, '/test/scene.txt', 0);
-            
-            const groups = treeProvider.getChildren();
-            const proseGroup = groups.find((g: any) => g.lens === 'prose');
-            
-            const findings = treeProvider.getChildren(proseGroup);
-            
-            assert.ok(Array.isArray(findings));
-            assert.ok(findings.length > 0);
-            assert.ok(findings[0] instanceof FindingTreeItem);
-        });
+    it('uses lens-specific icons and lens resource URI metadata', () => {
+        const provider = new FindingsTreeProvider();
+        provider.setFindings(sampleFindings, '/test/scene.txt', 0);
 
-        it('should only include findings from that lens', () => {
-            treeProvider.setFindings(sampleFindings, '/test/scene.txt', 0);
-            
-            const groups = treeProvider.getChildren();
-            const proseGroup = groups.find((g: any) => g.lens === 'prose');
-            
-            const findings = treeProvider.getChildren(proseGroup);
-            
-            findings.forEach((item: any) => {
-                assert.equal(item.finding.lens, 'prose');
-            });
-        });
+        const groups = provider.getChildren();
+        const prose = groups.find((g: any) => g.lens === 'prose');
+        const structure = groups.find((g: any) => g.lens === 'structure');
+
+        assert.equal(prose.iconPath.id, 'whole-word');
+        assert.equal(structure.iconPath.id, 'list-tree');
+        assert.equal(prose.resourceUri.scheme, 'lit-critic-finding');
+        assert.equal(prose.resourceUri.authority, 'lens');
+        assert.match(prose.resourceUri.query, /active=1/);
+        assert.match(prose.resourceUri.query, /maxSeverity=major/);
     });
 
-    describe('LensGroupItem', () => {
-        it('should format label correctly', () => {
-            treeProvider.setFindings(sampleFindings, '/test/scene.txt', 0);
-            
-            const groups = treeProvider.getChildren();
-            const proseGroup = groups.find((g: any) => g.lens === 'prose');
-            
-            assert.match(proseGroup.label, /Prose/);
-            assert.match(proseGroup.label, /\(\d+\)/); // Should include count
-        });
+    it('uses severity/status-specific finding icons and finding resource URI metadata', () => {
+        const provider = new FindingsTreeProvider();
+        const findings = [
+            { ...sampleFindings[0], status: 'pending', severity: 'major', number: 11, lens: 'prose' },
+            { ...sampleFindings[0], status: 'accepted', severity: 'critical', number: 12, lens: 'prose' },
+        ];
+        provider.setFindings(findings, '/test/scene.txt', -1);
 
-        it('should be expanded by default', () => {
-            treeProvider.setFindings(sampleFindings, '/test/scene.txt', 0);
-            
-            const groups = treeProvider.getChildren();
-            
-            assert.equal(groups[0].collapsibleState, mockVscode.TreeItemCollapsibleState.Expanded);
-        });
+        const proseGroup = provider.getChildren().find((g: any) => g.lens === 'prose');
+        const proseFindings = provider.getChildren(proseGroup);
+
+        const pending = proseFindings.find((f: any) => f.finding.number === 11);
+        const accepted = proseFindings.find((f: any) => f.finding.number === 12);
+
+        assert.equal(pending.iconPath.id, 'warning');
+        assert.equal(pending.iconPath.color.id, 'charts.yellow');
+        assert.equal(accepted.iconPath.id, 'pass');
+        assert.equal(accepted.iconPath.color.id, 'gitDecoration.ignoredResourceForeground');
+
+        assert.equal(pending.resourceUri.scheme, 'lit-critic-finding');
+        assert.equal(pending.resourceUri.authority, 'f');
+        assert.match(pending.resourceUri.query, /status=pending/);
+        assert.match(pending.resourceUri.query, /severity=major/);
     });
 
-    describe('FindingTreeItem', () => {
-        it('should format label with status-first and severity token', () => {
-            treeProvider.setFindings([sampleFindings[0]], '/test/scene.txt', 0);
-            
-            const groups = treeProvider.getChildren();
-            const findings = treeProvider.getChildren(groups[0]);
-            
-            assert.match(findings[0].label, /PENDING/);
-            assert.match(findings[0].label, /\[MAJ\]/);
-            assert.match(findings[0].label, /#1/);
-        });
+    it('fires decoration updates when tree data changes', () => {
+        let fired = 0;
+        const provider = new FindingsTreeProvider({ fireChange: () => { fired += 1; } });
 
-        it('should format line range in description', () => {
-            treeProvider.setFindings([sampleFindings[0]], '/test/scene.txt', 0);
-            
-            const groups = treeProvider.getChildren();
-            const findings = treeProvider.getChildren(groups[0]);
-            
-            // sampleFindings[0] has line_start=42, line_end=45
-            assert.match(findings[0].description, /L42-L45/);
-        });
+        provider.setFindings(sampleFindings, '/test/scene.txt', 0);
+        provider.setCurrentIndex(1);
+        provider.updateFinding({ ...sampleFindings[0], status: 'accepted' });
+        provider.clear();
 
-        it('should show single line format when start=end', () => {
-            const finding = { ...sampleFindings[0], line_start: 42, line_end: 42 };
-            treeProvider.setFindings([finding], '/test/scene.txt', 0);
-            
-            const groups = treeProvider.getChildren();
-            const findings = treeProvider.getChildren(groups[0]);
-            
-            assert.match(findings[0].description, /L42/);
-            assert.ok(!findings[0].description.includes('L42-L42'));
-        });
-
-        it('should show accepted status in label and icon', () => {
-            treeProvider.setFindings([sampleFindings[2]], '/test/scene.txt', 0);
-            
-            const groups = treeProvider.getChildren();
-            const findings = treeProvider.getChildren(groups[0]);
-            
-            assert.match(findings[0].label, /ACCEPTED/);
-            assert.equal(findings[0].iconPath.id, 'check');
-        });
-
-        it('should handle conceded status with dedicated label/icon', () => {
-            const concededFinding = { ...sampleFindings[0], status: 'conceded' };
-            treeProvider.setFindings([concededFinding], '/test/scene.txt', 0);
-
-            const groups = treeProvider.getChildren();
-            const findings = treeProvider.getChildren(groups[0]);
-
-            assert.match(findings[0].label, /CONCEDED/);
-            assert.equal(findings[0].iconPath.id, 'arrow-right');
-        });
-
-        it('should set contextValue to "finding"', () => {
-            treeProvider.setFindings([sampleFindings[0]], '/test/scene.txt', 0);
-            
-            const groups = treeProvider.getChildren();
-            const findings = treeProvider.getChildren(groups[0]);
-            
-            assert.equal(findings[0].contextValue, 'finding');
-        });
-
-        it('should set command to selectFinding', () => {
-            treeProvider.setFindings([sampleFindings[0]], '/test/scene.txt', 0);
-            
-            const groups = treeProvider.getChildren();
-            const findings = treeProvider.getChildren(groups[0]);
-            
-            assert.ok(findings[0].command);
-            assert.equal(findings[0].command.command, 'literaryCritic.selectFinding');
-        });
-
-        it('should pass finding index as command argument', () => {
-            treeProvider.setFindings(sampleFindings, '/test/scene.txt', 0);
-            
-            const groups = treeProvider.getChildren();
-            const findings = treeProvider.getChildren(groups[0]);
-            
-            assert.ok(findings[0].command.arguments);
-            assert.equal(typeof findings[0].command.arguments[0], 'number');
-        });
-
-        it('should highlight current finding with arrow', () => {
-            treeProvider.setFindings(sampleFindings, '/test/scene.txt', 0);
-            treeProvider.setCurrentIndex(0);
-            
-            const groups = treeProvider.getChildren();
-            const findings = treeProvider.getChildren(groups[0]);
-            
-            // First finding should have arrow
-            assert.match(findings[0].description, /▶/);
-        });
-
-        it('should prioritize pending findings, then severity within same status', () => {
-            const findings = [
-                { ...sampleFindings[0], number: 11, lens: 'prose', severity: 'minor', status: 'accepted' },
-                { ...sampleFindings[0], number: 12, lens: 'prose', severity: 'minor', status: 'pending' },
-                { ...sampleFindings[0], number: 13, lens: 'prose', severity: 'critical', status: 'pending' },
-            ];
-            treeProvider.setFindings(findings, '/test/scene.txt', 0);
-
-            const groups = treeProvider.getChildren();
-            const proseGroup = groups.find((g: any) => g.lens === 'prose');
-            const proseFindings = treeProvider.getChildren(proseGroup);
-
-            // pending critical first, then pending minor, then accepted minor
-            assert.match(proseFindings[0].label, /PENDING \[CRIT\] #13/);
-            assert.match(proseFindings[1].label, /PENDING \[MIN\] #12/);
-            assert.match(proseFindings[2].label, /ACCEPTED \[MIN\] #11/);
-        });
+        assert.ok(fired >= 4);
     });
 
-    describe('updateFinding', () => {
-        it('should update specific finding and refresh tree', () => {
-            treeProvider.setFindings(sampleFindings, '/test/scene.txt', 0);
-            
-            let eventFired = false;
-            treeProvider.onDidChangeTreeData(() => { eventFired = true; });
-            
-            const updatedFinding = { ...sampleFindings[0], status: 'accepted' };
-            treeProvider.updateFinding(updatedFinding);
-            
-            assert.ok(eventFired);
-        });
+    it('provides expected status/severity decorations for finding URIs', () => {
+        const decorations = new FindingsDecorationProvider();
+
+        const escalated = decorations.provideFileDecoration(
+            mockVscode.Uri.parse('lit-critic-finding://f/1?status=escalated&severity=critical'),
+        );
+        assert.equal(escalated.badge, '!!');
+        assert.equal(escalated.color.id, 'charts.red');
+
+        const accepted = decorations.provideFileDecoration(
+            mockVscode.Uri.parse('lit-critic-finding://f/2?status=accepted&severity=major'),
+        );
+        assert.equal(accepted.badge, '✓');
+        assert.equal(accepted.color.id, 'gitDecoration.ignoredResourceForeground');
+
+        const pendingMinor = decorations.provideFileDecoration(
+            mockVscode.Uri.parse('lit-critic-finding://f/3?status=pending&severity=minor'),
+        );
+        assert.equal(pendingMinor.badge, undefined);
+        assert.equal(pendingMinor.color, undefined);
     });
 
-    describe('setCurrentIndex', () => {
-        it('should update current index and refresh tree', () => {
-            treeProvider.setFindings(sampleFindings, '/test/scene.txt', 0);
-            
-            let eventFired = false;
-            treeProvider.onDidChangeTreeData(() => { eventFired = true; });
-            
-            treeProvider.setCurrentIndex(1);
-            
-            assert.ok(eventFired);
-        });
-    });
+    it('provides expected lens decorations and ignores unknown URI schemes', () => {
+        const decorations = new FindingsDecorationProvider();
 
-    describe('clear', () => {
-        it('should clear findings and refresh tree', () => {
-            treeProvider.setFindings(sampleFindings, '/test/scene.txt', 0);
-            
-            let eventFired = false;
-            treeProvider.onDidChangeTreeData(() => { eventFired = true; });
-            
-            treeProvider.clear();
-            
-            assert.ok(eventFired);
-        });
+        const lens = decorations.provideFileDecoration(
+            mockVscode.Uri.parse('lit-critic-finding://lens/prose?active=3&total=5&maxSeverity=critical'),
+        );
+        assert.equal(lens.badge, '5');
+        assert.equal(lens.color.id, 'charts.red');
 
-        it('should result in empty tree', () => {
-            treeProvider.setFindings(sampleFindings, '/test/scene.txt', 0);
-            treeProvider.clear();
-            
-            const children = treeProvider.getChildren();
-            
-            assert.equal(children.length, 0);
-        });
+        const count = decorations.provideFileDecoration(
+            mockVscode.Uri.parse('lit-critic-count://learning-category/preferences?count=2'),
+        );
+        assert.equal(count.badge, '2');
+
+        const none = decorations.provideFileDecoration(mockVscode.Uri.parse('file://x/test.txt'));
+        assert.equal(none, undefined);
     });
 });

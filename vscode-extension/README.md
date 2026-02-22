@@ -40,7 +40,7 @@ npm run package
 Install the generated `.vsix`:
 
 ```bash
-code --install-extension lit-critic-1.0.0.vsix --force
+code --install-extension lit-critic-2.3.0.vsix --force
 ```
 
 ## Usage
@@ -55,8 +55,8 @@ When `literaryCritic.autoStartServer` is enabled (default), the extension also a
 
 ### 2) Run analysis
 
-1. Open a scene `.txt` file.
-2. Press **`Ctrl+Shift+L`** (or run **lit-critic: Analyze Current Scene**).
+1. Press **`Ctrl+Shift+L`** (or run **lit-critic: Analyze Current Scene**).
+2. Use the multi-scene selection UI to choose one or more consecutive scenes (the same UI is used even for single-scene runs).
 3. The extension starts the local Platform API process if needed.
 4. Platform runs the 5 lenses in parallel (Prose, Structure, Logic, Clarity, Continuity).
 5. The Discussion Panel opens with the first finding.
@@ -96,6 +96,7 @@ Clients do not orchestrate Core directly; Platform owns the workflow boundary.
 - Critical -> red squiggles
 - Major -> yellow squiggles
 - Minor -> blue squiggles
+- Diagnostics are grouped per source file in multi-scene sessions (`finding.scene_path`)
 
 ### Sidebar Tree
 
@@ -107,6 +108,7 @@ Findings grouped by lens with click-to-jump navigation.
 - **Severity tokens** (`[CRIT]`, `[MAJ]`, `[MIN]`) as a compact secondary cue
 - **Operational ordering inside each lens**: pending/actionable first, then by severity
 - Dedicated status symbols/colors for `pending`, `accepted`, `rejected`, `withdrawn`, `conceded`, `revised`, `discussed`, and `escalated`
+- Session labels support scene sets (for example `01.02.01_scene.txt +2`) with full-scene-list tooltips
 
 ### Discussion Panel
 
@@ -135,7 +137,7 @@ For operations that can take noticeable time (for example loading a large sessio
 
 ### Scene Change Detection
 
-If the scene changes mid-review, Platform adjusts line mappings and re-evaluates stale findings automatically.
+If one or more reviewed scenes change mid-review, Platform adjusts per-scene line mappings and re-evaluates stale findings automatically.
 
 ## Commands
 

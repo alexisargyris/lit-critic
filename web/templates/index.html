@@ -39,8 +39,14 @@
                         <span class="hint">Directory containing CANON.md, CAST.md, etc.</span>
                     </div>
                     <div class="form-group">
-                        <label for="scene-path">Scene file</label>
+                        <label for="scene-path">Scene file(s)</label>
                         <input type="text" id="scene-path" placeholder="/path/to/your/novel/text/01.01.01_scene.txt" required>
+                        <span class="hint">Enter one path per line for multi-scene analysis (consecutive scenes).</span>
+                        <div id="scene-paths-list" class="scene-paths-list hidden">
+                            <strong>Selected scenes (in order):</strong>
+                            <ol id="scene-paths-order"></ol>
+                        </div>
+                        <button type="button" id="add-scene-btn" class="btn btn-small" style="margin-top: 4px;">+ Add another scene</button>
                     </div>
                     <div class="form-group">
                         <label for="model-select">Analysis Model <span class="required">(required)</span></label>
@@ -140,6 +146,7 @@
                     <span id="finding-number" class="finding-number">#1</span>
                     <span id="finding-severity" class="severity-badge">MAJOR</span>
                     <span id="finding-lens" class="lens-badge">PROSE</span>
+                    <span id="finding-source-scene" class="source-scene-badge hidden" title=""></span>
                     <span id="finding-flagged" class="flagged-info"></span>
                 </div>
 
@@ -232,7 +239,7 @@
     </div>
 
     <footer>
-        <p>lit-critic v2.2.1 — Web UI</p>
+        <p>lit-critic v2.4.0 — Web UI</p>
     </footer>
 
     <script src="/static/js/app.js"></script>

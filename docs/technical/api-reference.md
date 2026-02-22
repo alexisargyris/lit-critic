@@ -76,6 +76,7 @@ Start a new analysis session.
 ```json
 {
   "scene_path": "/path/to/scene.txt",
+  "scene_paths": ["/path/to/scene-01.txt", "/path/to/scene-02.txt"],
   "project_path": "/path/to/project/",
   "api_key": "sk-ant-...",
   "model": "sonnet"
@@ -83,7 +84,9 @@ Start a new analysis session.
 ```
 
 **Fields:**
-- `scene_path` (string, required) — Absolute path to scene file
+- `scene_path` (string, optional) — Backward-compatible single-scene input
+- `scene_paths` (string[], optional) — Multi-scene input (ordered scene set). If provided, this is used.
+- At least one of `scene_path` or `scene_paths` must be present.
 - `project_path` (string, required) — Absolute path to project directory
 - `api_key` (string, optional) — API key for the model's provider. If omitted, resolved from environment (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`)
 - `model` (string, optional) — Model short name (default: "sonnet"). See `GET /api/config` for available models
@@ -93,6 +96,8 @@ Start a new analysis session.
 {
   "status": "success",
   "total_findings": 12,
+  "scene_path": "/path/to/scene-01.txt",
+  "scene_paths": ["/path/to/scene-01.txt", "/path/to/scene-02.txt"],
   "summary": {
     "prose": {"critical": 1, "major": 2, "minor": 3},
     "structure": {"critical": 0, "major": 1, "minor": 1},
@@ -105,6 +110,7 @@ Start a new analysis session.
     "location": "L042-L045",
     "line_start": 42,
     "line_end": 45,
+    "scene_path": "/path/to/scene-02.txt",
     "evidence": "The sentence spans 47 words...",
     "impact": "Readers may lose track...",
     "options": ["Break into two sentences", "..."],
@@ -237,6 +243,7 @@ Check if a saved session exists without loading it.
 {
   "exists": true,
   "scene_path": "/path/to/scene.txt",
+  "scene_paths": ["/path/to/scene-01.txt", "/path/to/scene-02.txt"],
   "current_finding": 5,
   "total_findings": 12
 }
@@ -244,6 +251,62 @@ Check if a saved session exists without loading it.
 
 **Status Codes:**
 - `200 OK` Check complete
+
+---
+
+#### `POST /api/view-session`
+
+Load a specific session (active, completed, or abandoned) into the runtime for viewing and navigation.
+
+This endpoint is used by clients to inspect historical sessions while still using standard finding endpoints
+(`GET /api/finding`, `POST /api/finding/goto`, `POST /api/finding/accept`, etc.).
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/",
+  "session_id": 42,
+  "api_key": "sk-ant-...",
+  "scene_path_override": "/path/to/moved/scene.txt"
+}
+```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+- `session_id` (integer, required) — Session to load
+- `api_key` (string, optional) — API key for the analysis model provider. If omitted, resolved from environment
+- `discussion_api_key` (string, optional) — API key for the discussion model provider when it differs from analysis provider
+- `scene_path_override` (string, optional) — Correct scene path to use when the saved path no longer exists
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Session loaded for viewing",
+  "total_findings": 12,
+  "current_index": 5,
+  "current_finding": { /* Finding object */ }
+}
+```
+
+**Status Codes:**
+- `200 OK` Session loaded
+- `404 Not Found` Project directory or session not found
+- `409 Conflict` Saved scene path not found; response includes structured detail for recovery UIs
+
+**409 Error Example:**
+```json
+{
+  "detail": {
+    "code": "scene_path_not_found",
+    "message": "Saved scene file was not found. Provide scene_path_override to relink this session.",
+    "saved_scene_path": "D:/old-machine/project/ch01.md",
+    "attempted_scene_path": "D:/old-machine/project/ch01.md",
+    "project_path": "D:/new-machine/project",
+    "override_provided": false
+  }
+}
+```
 
 ---
 
@@ -261,6 +324,7 @@ Get current session information.
   "skip_minor": false,
   "model": "sonnet",
   "scene_path": "/path/to/scene.txt",
+  "scene_paths": ["/path/to/scene-01.txt", "/path/to/scene-02.txt"],
   "project_path": "/path/to/project/"
 }
 ```
@@ -289,6 +353,7 @@ List all sessions for a project (active, completed, abandoned).
     {
       "id": 3,
       "scene_path": "/path/to/scene.txt",
+      "scene_paths": ["/path/to/scene-01.txt", "/path/to/scene-02.txt"],
       "model": "sonnet",
       "status": "completed",
       "created_at": "2026-02-09T10:30:00",
@@ -337,6 +402,7 @@ can hydrate both active and historical views with full discussion context.
   "session": {
     "id": 3,
     "scene_path": "/path/to/scene.txt",
+    "scene_paths": ["/path/to/scene-01.txt", "/path/to/scene-02.txt"],
     "scene_hash": "abc123...",
     "model": "sonnet",
     "status": "completed",
@@ -353,6 +419,7 @@ can hydrate both active and historical views with full discussion context.
       "severity": "major",
       "lens": "prose",
       "location": "L042-L045",
+      "scene_path": "/path/to/scene-02.txt",
       "evidence": "...",
       "status": "accepted",
       "discussion_turns": [
@@ -544,6 +611,7 @@ Get the current finding.
   "location": "L042-L045",
   "line_start": 42,
   "line_end": 45,
+  "scene_path": "/path/to/scene-02.txt",
   "evidence": "...",
   "impact": "...",
   "options": ["...", "..."],
@@ -609,6 +677,14 @@ Advance to the next finding.
 
 Jump to a specific finding by index.
 
+Behavior notes:
+- In-range findings are always navigable, including terminal statuses such as
+  `withdrawn`, `accepted`, and `rejected`.
+- Response includes full persisted finding state (`discussion_turns`,
+  `revision_history`, `author_response`, etc.) so clients can rehydrate
+  historical discussion threads when revisiting completed findings.
+- `complete: true` indicates an invalid/out-of-range index.
+
 **Request Body:**
 ```json
 {
@@ -619,15 +695,18 @@ Jump to a specific finding by index.
 **Response:**
 ```json
 {
-  "status": "success",
-  "scene_changed": false,
-  "current_finding": { /* Finding object */ }
+  "complete": false,
+  "scene_change": null,
+  "finding": { /* Finding object with full state */ },
+  "index": 5,
+  "current": 6,
+  "total": 12,
+  "is_ambiguity": false
 }
 ```
 
 **Status Codes:**
 - `200 OK` Success
-- `400 Bad Request` Invalid index
 - `404 Not Found` No active session
 
 ---
@@ -876,6 +955,7 @@ interface Finding {
   location: string;                    // e.g., "L042-L045"
   line_start: number | null;           // 1-based line number
   line_end: number | null;
+  scene_path: string | null;           // Owning scene file (multi-scene sessions)
   evidence: string;
   impact: string;
   options: string[];                   // Suggestions for fixing

@@ -25,6 +25,7 @@ class FindingStore:
                 f.get("location", ""),
                 f.get("line_start"),
                 f.get("line_end"),
+                f.get("scene_path"),
                 f.get("evidence", ""),
                 f.get("impact", ""),
                 json.dumps(f.get("options", [])),
@@ -41,11 +42,11 @@ class FindingStore:
         conn.executemany(
             """INSERT INTO finding
                (session_id, number, severity, lens, location,
-                line_start, line_end, evidence, impact, options,
+                line_start, line_end, scene_path, evidence, impact, options,
                 flagged_by, ambiguity_type, stale, status,
                 author_response, discussion_turns, revision_history,
                 outcome_reason)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             rows,
         )
         conn.commit()

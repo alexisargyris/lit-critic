@@ -8,7 +8,7 @@ from lit_platform.runtime.config import DB_FILE
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 
 
 def get_db_path(project_path: Path) -> Path:
@@ -50,6 +50,23 @@ def init_db(conn: sqlite3.Connection) -> None:
     needs_lens_preferences = not _table_has_column(conn, "session", "lens_preferences")
     if current < 3 or needs_lens_preferences:
         _migrate_add_lens_preferences(conn)
+
+    needs_finding_scene_path = not _table_has_column(conn, "finding", "scene_path")
+    if current < 4 or needs_finding_scene_path:
+        _migrate_add_finding_scene_path(conn)
+
+    needs_index_context_hash = not _table_has_column(conn, "session", "index_context_hash")
+    needs_index_context_stale = not _table_has_column(conn, "session", "index_context_stale")
+    needs_index_rerun_prompted = not _table_has_column(conn, "session", "index_rerun_prompted")
+    needs_index_changed_files = not _table_has_column(conn, "session", "index_changed_files")
+    if (
+        current < 5
+        or needs_index_context_hash
+        or needs_index_context_stale
+        or needs_index_rerun_prompted
+        or needs_index_changed_files
+    ):
+        _migrate_add_index_context_fields(conn)
 
     if current < SCHEMA_VERSION:
         conn.execute(
@@ -131,6 +148,30 @@ def _migrate_add_lens_preferences(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_add_finding_scene_path(conn: sqlite3.Connection) -> None:
+    """Add ``finding.scene_path`` when missing."""
+    if _table_has_column(conn, "finding", "scene_path"):
+        return
+
+    logger.info("Applying DB migration: add finding.scene_path")
+    conn.execute("ALTER TABLE finding ADD COLUMN scene_path TEXT")
+    conn.commit()
+
+
+def _migrate_add_index_context_fields(conn: sqlite3.Connection) -> None:
+    """Add index-context stale detection columns to ``session`` when missing."""
+    logger.info("Applying DB migration: add session index-context fields")
+    if not _table_has_column(conn, "session", "index_context_hash"):
+        conn.execute("ALTER TABLE session ADD COLUMN index_context_hash TEXT DEFAULT ''")
+    if not _table_has_column(conn, "session", "index_context_stale"):
+        conn.execute("ALTER TABLE session ADD COLUMN index_context_stale INTEGER DEFAULT 0")
+    if not _table_has_column(conn, "session", "index_rerun_prompted"):
+        conn.execute("ALTER TABLE session ADD COLUMN index_rerun_prompted INTEGER DEFAULT 0")
+    if not _table_has_column(conn, "session", "index_changed_files"):
+        conn.execute("ALTER TABLE session ADD COLUMN index_changed_files TEXT DEFAULT '[]'")
+    conn.commit()
+
+
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
@@ -153,7 +194,11 @@ CREATE TABLE IF NOT EXISTS session (
     total_findings INTEGER DEFAULT 0,
     accepted_count INTEGER DEFAULT 0,
     rejected_count INTEGER DEFAULT 0,
-    withdrawn_count INTEGER DEFAULT 0
+    withdrawn_count INTEGER DEFAULT 0,
+    index_context_hash TEXT DEFAULT '',
+    index_context_stale INTEGER DEFAULT 0,
+    index_rerun_prompted INTEGER DEFAULT 0,
+    index_changed_files TEXT DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS finding (
@@ -165,6 +210,7 @@ CREATE TABLE IF NOT EXISTS finding (
     location TEXT DEFAULT '',
     line_start INTEGER,
     line_end INTEGER,
+    scene_path TEXT,
     evidence TEXT DEFAULT '',
     impact TEXT DEFAULT '',
     options TEXT DEFAULT '[]',

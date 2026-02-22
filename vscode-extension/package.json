@@ -2,7 +2,7 @@
   "name": "lit-critic",
   "displayName": "lit-critic",
   "description": "Multi-lens editorial review system for fiction manuscripts",
-  "version": "2.3.0",
+"version": "2.4.1",
   "publisher": "alexisargyris",
   "repository": {
     "type": "git",
@@ -95,6 +95,10 @@
       {
         "command": "literaryCritic.clearSession",
         "title": "lit-critic: Clear Session"
+      },
+      {
+        "command": "literaryCritic.rerunAnalysisWithUpdatedIndexes",
+        "title": "lit-critic: Re-run Analysis with Updated Indexes"
       },
       {
         "command": "literaryCritic.selectModel",
@@ -195,6 +199,16 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically start the backend server on activation"
+        },
+        "literaryCritic.disableProblemDecorationColors": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, lit-critic sets workspace setting workbench.editor.decorations.colors=false to reduce diagnostic color tinting in file/tab labels. Affects all diagnostics in this workspace."
+        },
+        "literaryCritic.disableProblemDecorationBadges": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, lit-critic sets workspace setting workbench.editor.decorations.badges=false. Affects all diagnostics in this workspace."
         }
       }
     },
@@ -226,26 +240,6 @@
     "menus": {
       "view/item/context": [
         {
-          "command": "literaryCritic.acceptFinding",
-          "when": "view == literaryCritic.findings && viewItem == finding",
-          "group": "inline"
-        },
-        {
-          "command": "literaryCritic.rejectFinding",
-          "when": "view == literaryCritic.findings && viewItem == finding",
-          "group": "inline"
-        },
-        {
-          "command": "literaryCritic.discuss",
-          "when": "view == literaryCritic.findings && viewItem == finding",
-          "group": "inline"
-        },
-        {
-          "command": "literaryCritic.deleteSession",
-          "when": "view == literaryCritic.sessions && viewItem == session",
-          "group": "inline"
-        },
-        {
           "command": "literaryCritic.deleteLearningEntry",
           "when": "view == literaryCritic.learning && viewItem == learningEntry",
           "group": "inline"
@@ -259,6 +253,11 @@
         },
         {
           "command": "literaryCritic.refreshSessions",
+          "when": "view == literaryCritic.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "literaryCritic.deleteSession",
           "when": "view == literaryCritic.sessions",
           "group": "navigation"
         },

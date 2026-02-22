@@ -144,7 +144,7 @@ describe('DiscussionPanel (Real)', () => {
             assert.match(mockWebviewPanel.webview.html, /Accept/);
             assert.match(mockWebviewPanel.webview.html, /Reject/);
             assert.match(mockWebviewPanel.webview.html, /Review/);
-            assert.match(mockWebviewPanel.webview.html, /Export Learning/);
+            assert.doesNotMatch(mockWebviewPanel.webview.html, /Export Learning/);
         });
 
         it('should allow vertically resizing the discussion input textarea', () => {
@@ -196,6 +196,22 @@ describe('DiscussionPanel (Real)', () => {
             assert.match(mockWebviewPanel.webview.html, /Original recommendation\./);
             assert.match(mockWebviewPanel.webview.html, /I revised this part\./);
             assert.ok(!mockWebviewPanel.webview.html.includes('No prior discussion turns.'));
+        });
+
+        it('should render read-only notice when provided for closed sessions', () => {
+            panel = new DiscussionPanel(mockApiClient);
+
+            panel.show(
+                sampleFinding,
+                1,
+                3,
+                false,
+                undefined,
+                'Viewing completed session — actions will reopen it.',
+            );
+
+            assert.match(mockWebviewPanel.webview.html, /session-notice/);
+            assert.match(mockWebviewPanel.webview.html, /Viewing completed session — actions will reopen it\./);
         });
     });
 

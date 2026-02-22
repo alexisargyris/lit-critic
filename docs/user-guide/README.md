@@ -174,7 +174,7 @@ docs/user-guide/
 1. **Start small** Try one scene with minimal index files
 2. **Use templates** Copy and customize the templates in `templates/`
 3. **Update as you write** Keep TIMELINE.md and ContAnchors current
-4. **Save learning regularly** After every 2–3 scenes, run `save learning`
+4. **Export learning snapshots regularly** After every 2–3 scenes, run `export learning`
 5. **Trust your instincts** Reject findings that don't fit your vision
 6. **Discuss when unsure** Use the discussion feature to explore findings
 
@@ -186,9 +186,9 @@ docs/user-guide/
 
 1. Create index files (can be empty): CANON, CAST, GLOSSARY, STYLE, THREADS, TIMELINE
 2. Write your first scene with a @@META header
-3. Run analysis: `python lit-critic.py --scene text/01.01.01.txt --project ~/novel/`
+3. Run analysis: `python lit-critic.py analyze --scene text/01.01.01.txt --project ~/novel/`
 4. Review findings, discuss unclear ones
-5. Save learning: `save learning`
+5. Export learning snapshot: `export learning`
 6. Update TIMELINE.md with scene outcome
 
 ### Subsequent Scenes
@@ -197,7 +197,7 @@ docs/user-guide/
 2. Update index files (add new characters to CAST, terms to GLOSSARY, etc.)
 3. Run analysis
 4. Review findings (tool now knows your preferences from LEARNING.md)
-5. Save learning periodically
+5. Export learning snapshots periodically (`export learning`)
 6. Update TIMELINE.md
 
 ---

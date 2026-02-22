@@ -10,6 +10,8 @@ const App = {
     sessionSummary: null,
     currentFinding: null,
     repoPreflight: null,
+    /** @type {string[]} Additional scene paths for multi-scene analysis */
+    extraScenePaths: [],
 
     // --- Init ---
     init() {
@@ -51,6 +53,14 @@ const App = {
             });
         }
 
+        // Multi-scene: "Add another scene" button
+        const addSceneBtn = document.getElementById('add-scene-btn');
+        if (addSceneBtn) {
+            addSceneBtn.addEventListener('click', () => {
+                App.addExtraScene();
+            });
+        }
+
         // Glossary toggle
         document.getElementById('glossary-toggle').addEventListener('click', () => {
             const list = document.getElementById('glossary-list');
@@ -58,6 +68,80 @@ const App = {
             list.classList.toggle('collapsed');
             icon.classList.toggle('open');
         });
+    },
+
+    // --- Multi-Scene Management ---
+    /** Collect all scene paths: primary input + extras. */
+    getScenePaths() {
+        const primary = document.getElementById('scene-path').value.trim();
+        if (!primary) return [];
+        return [primary, ...App.extraScenePaths];
+    },
+
+    /** Add an extra scene path from a prompt and update the list display. */
+    addExtraScene() {
+        const newPath = window.prompt('Enter the path for the next consecutive scene:');
+        if (!newPath || !newPath.trim()) return;
+        App.extraScenePaths.push(newPath.trim());
+        App.renderScenePathsList();
+    },
+
+    /** Remove an extra scene by index and re-render. */
+    removeExtraScene(index) {
+        App.extraScenePaths.splice(index, 1);
+        App.renderScenePathsList();
+    },
+
+    /** Render the ordered list of selected scenes. */
+    renderScenePathsList() {
+        const container = document.getElementById('scene-paths-list');
+        const ol = document.getElementById('scene-paths-order');
+        if (!container || !ol) return;
+
+        if (App.extraScenePaths.length === 0) {
+            container.classList.add('hidden');
+            return;
+        }
+
+        container.classList.remove('hidden');
+        ol.innerHTML = '';
+
+        // Show the primary scene first
+        const primary = document.getElementById('scene-path').value.trim();
+        if (primary) {
+            const li = document.createElement('li');
+            li.textContent = primary.split(/[/\\]/).pop() + ' (primary)';
+            ol.appendChild(li);
+        }
+
+        App.extraScenePaths.forEach((sp, idx) => {
+            const li = document.createElement('li');
+            const name = sp.split(/[/\\]/).pop();
+            li.innerHTML = `${App.escapeHtml(name)} <button class="btn btn-small btn-reject" onclick="App.removeExtraScene(${idx})" style="padding:0 6px;margin-left:6px;font-size:0.75rem;">✗</button>`;
+            ol.appendChild(li);
+        });
+    },
+
+    /** Estimate word count for scene content(s) and warn if high. */
+    async checkWordCountWarning(scenePaths) {
+        // Word count warning threshold (spec §4)
+        const WORD_WARNING_THRESHOLD = 15000;
+        try {
+            // Ask the backend for a quick word count check
+            const result = await App.api('POST', '/check-word-count', { scene_paths: scenePaths });
+            if (result.total_words && result.total_words > WORD_WARNING_THRESHOLD) {
+                const proceed = window.confirm(
+                    `The selected scene(s) total ~${result.total_words.toLocaleString()} words, ` +
+                    `which exceeds the recommended ${WORD_WARNING_THRESHOLD.toLocaleString()} word limit.\n\n` +
+                    `Large inputs may increase cost and reduce analysis quality.\n\n` +
+                    `Continue anyway?`
+                );
+                return proceed;
+            }
+        } catch {
+            // If the endpoint doesn't exist or fails, skip the warning
+        }
+        return true;
     },
 
     // --- View Management ---
@@ -246,9 +330,19 @@ const App = {
             return;
         }
 
+        // Build multi-scene paths array
+        const scenePaths = App.getScenePaths();
+
         const model = document.getElementById('model-select').value;
         const discussionModel = document.getElementById('discussion-model-select').value;
         const lensPreset = document.getElementById('lens-preset-select').value || 'balanced';
+
+        // Word-count guardrail (spec §4): warn but don't block
+        const proceed = await App.checkWordCountWarning(scenePaths);
+        if (!proceed) {
+            App.toast('Analysis cancelled.', 'info');
+            return;
+        }
 
         // Save to localStorage
         localStorage.setItem('lc_project_path', projectPath);
@@ -265,7 +359,7 @@ const App = {
         App.listenToProgress();
 
         try {
-            const result = await App.apiWithRepoRecovery('POST', '/analyze', {
+            const body = {
                 scene_path: scenePath,
                 project_path: projectPath,
                 api_key: apiKey || null,
@@ -275,7 +369,13 @@ const App = {
                 lens_preferences: {
                     preset: lensPreset,
                 },
-            });
+            };
+            // Include scene_paths array for multi-scene analysis
+            if (scenePaths.length > 1) {
+                body.scene_paths = scenePaths;
+            }
+
+            const result = await App.apiWithRepoRecovery('POST', '/analyze', body);
 
             App.sessionSummary = result;
             App.enterReview(result);
@@ -344,8 +444,15 @@ const App = {
             if (result.exists) {
                 const info = document.getElementById('saved-session-info');
                 const details = document.getElementById('saved-session-details');
-                const sceneName = result.scene_path.split(/[/\\]/).pop();
-                details.textContent = `Scene: ${sceneName} — Saved: ${result.saved_at} — Progress: ${result.current_index}/${result.total_findings} findings`;
+                const scenePaths = result.scene_paths || [result.scene_path];
+                let sceneLabel;
+                if (scenePaths.length > 1) {
+                    const first = scenePaths[0].split(/[/\\]/).pop();
+                    sceneLabel = `${first} +${scenePaths.length - 1} scene${scenePaths.length - 1 > 1 ? 's' : ''}`;
+                } else {
+                    sceneLabel = result.scene_path.split(/[/\\]/).pop();
+                }
+                details.textContent = `Scene: ${sceneLabel} — Saved: ${result.saved_at} — Progress: ${result.current_index}/${result.total_findings} findings`;
                 info.classList.remove('hidden');
             } else {
                 App.toast('No saved session found for this project.', 'info');
@@ -555,6 +662,20 @@ const App = {
             flagged.textContent = `Flagged by: ${f.flagged_by.join(', ')}`;
         } else {
             flagged.textContent = '';
+        }
+
+        // Source scene (multi-scene attribution)
+        const sourceSceneEl = document.getElementById('finding-source-scene');
+        if (sourceSceneEl) {
+            const scenePaths = App.sessionSummary?.scene_paths || [];
+            if (f.scene_path && scenePaths.length > 1) {
+                const sceneName = f.scene_path.split(/[/\\]/).pop();
+                sourceSceneEl.textContent = `📄 ${sceneName}`;
+                sourceSceneEl.title = f.scene_path;
+                sourceSceneEl.classList.remove('hidden');
+            } else {
+                sourceSceneEl.classList.add('hidden');
+            }
         }
 
         // Body fields
@@ -917,7 +1038,12 @@ const App = {
     backToSetup() {
         App.sessionSummary = null;
         App.currentFinding = null;
+        App.extraScenePaths = [];
         App.showView('setup-view');
+
+        // Reset multi-scene list
+        const sceneListContainer = document.getElementById('scene-paths-list');
+        if (sceneListContainer) sceneListContainer.classList.add('hidden');
 
         // Reset review view state
         document.getElementById('finding-card').classList.remove('hidden');

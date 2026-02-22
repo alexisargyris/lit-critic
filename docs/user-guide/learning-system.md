@@ -84,7 +84,7 @@ AI: "Understood. I'll note that in your learning profile."
 
 When you start a new review:
 
-1. The tool loads **LEARNING.md** from your project
+1. The tool loads learning data from the project database (`.lit-critic.db`)
 2. All five lenses receive the learning content as context
 3. Lenses are instructed to respect your documented preferences
 
@@ -132,7 +132,7 @@ Navigate to http://localhost:8000/learning and click **Export to LEARNING.md**.
 
 ### VS Code
 
-Command Palette → `lit-critic: Export Learning`
+Command Palette → `lit-critic: Export Learning to LEARNING.md`
 
 ### What Happens
 
@@ -213,9 +213,9 @@ Stronger preferences have more influence on future analyses.
 
 LEARNING.md is project-specific. Don't copy it between projects—each novel has its own style.
 
-### 2. Save Learning Regularly
+### 2. Export Learning Snapshots Regularly
 
-After every 2–3 scene reviews, run `save learning` to capture your preferences. Don't wait until the end of the project.
+After every 2–3 scene reviews, run `export learning` to snapshot your preferences into `LEARNING.md`. Don't wait until the end of the project.
 
 ### 3. Review LEARNING.md Periodically
 
@@ -264,7 +264,7 @@ You review your first scene. No LEARNING.md exists yet.
 
 - Findings reflect general editorial standards
 - You accept some, reject others
-- You save learning at the end
+- You export a learning snapshot at the end
 
 ### Session 2: Second Scene
 
@@ -273,7 +273,7 @@ You review a second scene. LEARNING.md now exists.
 - Lenses read your preferences
 - Fewer findings on rejected patterns
 - You continue to refine preferences
-- You save learning again
+- You export learning again
 
 ### Session 10: Mature Profile
 
@@ -358,9 +358,9 @@ Generally not recommended—each project has its own style. But if you have stro
 
 To start fresh:
 
-1. **Delete LEARNING.md** from your project
-2. **Run a new review** without the learning file
-3. **Save learning** to create a new profile
+1. **Reset learning data** (Web learning page, VS Code learning command, or CLI `python lit-critic.py learning reset --project <path>`)
+2. **Run a new review** to build fresh signals
+3. **Export learning** when you want a new `LEARNING.md` snapshot
 
 ---
 

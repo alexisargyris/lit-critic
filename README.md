@@ -47,6 +47,8 @@ You're writing a novel and want AI-powered editorial feedback that respects your
 lit-critic is an **editorial assistant, not a content generator**. It will never write prose for you, rewrite your sentences, or impose external standards. It reads your scenes, checks them against rules *you* define in your index files, and presents findings for you to accept, reject, or discuss. When it suggests specific wording (rarely), it's minimal — a couple of example words to illustrate a concept, never a rewritten paragraph. Your novel, your voice.
 
 - ✅ **Five editorial lenses** — Prose, Structure, Logic, Clarity, Continuity
+- ✅ **Cross-scene analysis (consecutive scenes)** — analyze scene sets in one session for arc-level structure, logic, and continuity checks
+- ✅ **Batch-style scene-set workflow** — run one review session across multiple consecutive scene files instead of one file at a time
 - ✅ **Three interfaces** — CLI, Web UI, VS Code Extension (all use the same workflow)
 - ✅ **Auto-reveal in VS Code** — when a `CANON.md` project opens and extension auto-start runs, the lit-critic activity view is shown automatically
 - ✅ **Status-first Findings tree in VS Code** — pending findings are visually prioritized with severity tokens for quick triage
@@ -102,8 +104,10 @@ Use the **[templates](docs/user-guide/templates/)** to get started quickly.
 **4. Run your first review**
 
 ```bash
-python lit-critic.py --scene ~/my-novel/text/01.01.01_scene.txt --project ~/my-novel/
+python lit-critic.py analyze --scene ~/my-novel/text/01.01.01_scene.txt --project ~/my-novel/
 ```
+
+For multi-scene/cross-scene reviews, use the Web UI or VS Code extension selection flow.
 
 All your work is auto-saved to a `.lit-critic.db` file in your project folder — you never need to manually save.
 
@@ -113,9 +117,9 @@ See the **[Getting Started Guide](docs/user-guide/getting-started.md)** for a de
 
 | Interface | Best For | How to Launch |
 |-----------|----------|---------------|
-| **CLI** | Keyboard-driven workflow | `python lit-critic.py --scene scene.txt --project ~/novel/` |
+| **CLI** | Keyboard-driven workflow (single-scene) | `python lit-critic.py analyze --scene scene.txt --project ~/novel/` |
 | **Web UI** | Visual interface | `python lit-critic-web.py` → http://localhost:8000 |
-| **VS Code Extension** | Native editor integration | `Ctrl+Shift+L` or Command Palette → "Analyze Current Scene" |
+| **VS Code Extension** | Native editor integration (multi-scene selection UI, also used for single-scene runs) | `Ctrl+Shift+L` or Command Palette → "Analyze Current Scene" |
 
 All three run through the same Platform-managed workflow and project database (`.lit-critic.db`) — start a review in one, resume in another, even after moving projects across machines (you can relink moved scene paths at resume time).
 
@@ -224,11 +228,12 @@ See the **[Installation Guide](docs/technical/installation.md)** for full develo
 - **SQLite persistence** — Auto-save with WAL mode, foreign keys, schema versioning; session/finding/learning stores with full CRUD
 - **Streaming responses** — Token-by-token discussion via SSE
 - **Structured output** — LLM tool use for reliable parsing
-- **Line-number tracking** — Findings include precise line ranges for editor integration
+- **Line-number + source-scene tracking** — Findings include precise local line ranges and source `scene_path` for multi-scene navigation
+- **Consecutive multi-scene analysis** — Scene sets are analyzed in one session with cross-scene continuity/logic reasoning
 - **Interoperable sessions** — Same project database works across CLI, Web UI, and VS Code
 - **Management API** — Platform endpoints for session history, learning data, and cleanup
 - **SemVer governance (no-CI)** — Component versions + compatibility matrix with local validator and pre-push hook support
-- **Release-intent guard** — Detects component changes without matching `versioning/compatibility.json` update
+- **Release-intent guard** — Detects component changes without matching `versioning/compatibility.json` update (including pre-push ref-aware checks)
 - **Comprehensive tests** — Python (pytest) and TypeScript (mocha)
 
 ### 📖 Full Technical Docs
@@ -273,9 +278,7 @@ This roadmap reflects **personal priorities** based on my novel-writing needs. F
 
 ### Potential Future Features
 - Configurable lenses (enable/disable per session)
-- Cross-scene analysis for arc-level structure
 - Custom lens definitions
-- Batch mode (multiple scenes in sequence)
 - Confidence tracking for learned preferences
 - Git integration (auto-commit LEARNING.md, tag reviewed scenes)
 - MCP server for integration with AI development tools

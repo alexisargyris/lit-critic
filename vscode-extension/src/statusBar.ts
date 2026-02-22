@@ -29,8 +29,9 @@ export class StatusBar implements vscode.Disposable {
 
     /** Analysis is running. */
     setAnalyzing(message?: string): void {
-        this.item.text = `$(sync~spin) ${message || 'Analyzing...'}`;
-        this.item.tooltip = message || 'Analysis in progress...';
+        const busyMessage = message || 'Analyzing...';
+        this.item.text = `$(sync~spin) lit-critic: ${busyMessage}`;
+        this.item.tooltip = `${busyMessage} · lit-critic is busy — please wait.`;
         this.item.command = undefined;
     }
 

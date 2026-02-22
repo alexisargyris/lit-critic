@@ -11,7 +11,7 @@ The terminal-based interface. Fast, keyboard-driven, and scriptable.
 ### Basic Usage
 
 ```bash
-python lit-critic.py --scene path/to/scene.txt --project path/to/project/
+python lit-critic.py analyze --scene path/to/scene.txt --project path/to/project/
 ```
 
 ### Model Selection
@@ -19,12 +19,14 @@ python lit-critic.py --scene path/to/scene.txt --project path/to/project/
 Choose which model to use:
 
 ```bash
-python lit-critic.py --scene scene.txt --project ~/novel/ --model opus        # Claude: Deepest
-python lit-critic.py --scene scene.txt --project ~/novel/ --model sonnet      # Claude: Default
-python lit-critic.py --scene scene.txt --project ~/novel/ --model haiku       # Claude: Fastest
-python lit-critic.py --scene scene.txt --project ~/novel/ --model gpt-4o      # OpenAI: Balanced
-python lit-critic.py --scene scene.txt --project ~/novel/ --model gpt-4o-mini # OpenAI: Fast & cheap
+python lit-critic.py analyze --scene scene.txt --project ~/novel/ --model opus        # Claude: Deepest
+python lit-critic.py analyze --scene scene.txt --project ~/novel/ --model sonnet      # Claude: Default
+python lit-critic.py analyze --scene scene.txt --project ~/novel/ --model haiku       # Claude: Fastest
+python lit-critic.py analyze --scene scene.txt --project ~/novel/ --model gpt-4o      # OpenAI: Balanced
+python lit-critic.py analyze --scene scene.txt --project ~/novel/ --model gpt-4o-mini # OpenAI: Fast & cheap
 ```
+
+CLI analysis is single-scene per run. For consecutive multi-scene analysis in one session, use the Web UI or VS Code extension selector.
 
 ### Interactive Commands
 
@@ -37,7 +39,7 @@ During review:
 | `skip to structure` | Jump to Structure lens |
 | `skip to coherence` | Jump to Coherence lens |
 | `quit` (or `q`) | End session |
-| `clear session` | Delete saved session |
+| `export learning` | Export `LEARNING.md` from current DB-backed learning |
 | `help` | Show commands |
 | **Type anything else** | Discuss the current finding |
 
@@ -70,18 +72,20 @@ python lit-critic-web.py --reload            # Auto-reload for development
 
 ### Features
 
-- **Setup screen** Select scene file, project directory, and model
+- **Setup screen** Select scene file(s), project directory, and model
+- **Multi-scene analysis** Use "Add another scene" to select consecutive scenes for cross-boundary analysis
 - **Live progress** Watch each lens complete in real-time
 - **Chat interface** Discuss findings naturally
 - **Action buttons** Accept, Reject, Next, Skip Minor
+- **Source scene badges** In multi-scene sessions, each finding shows which scene it belongs to
 - **Session persistence** Your model choice and paths are remembered
 
 ### Workflow
 
-1. **Select files** on the setup screen
+1. **Select files** on the setup screen (use "Add another scene" for consecutive multi-scene analysis)
 2. **Choose model** (Claude: Opus/Sonnet/Haiku, or OpenAI: GPT-4o/GPT-4o-mini)
 3. **Start analysis** progress bars show each lens
-4. **Review findings** one at a time
+4. **Review findings** one at a time — source scene is shown for multi-scene sessions
 5. **Save learning** to capture your preferences
 
 ---
@@ -96,7 +100,7 @@ Native editor integration with squiggly underlines, sidebar tree, and discussion
 cd vscode-extension
 npm install
 npm run package
-code --install-extension lit-critic-0.2.0.vsix --force
+code --install-extension lit-critic-2.4.0.vsix --force
 ```
 
 Or press **F5** in the `vscode-extension` folder for development mode.
@@ -108,13 +112,19 @@ Or press **F5** in the `vscode-extension` folder for development mode.
    - Open Settings (`Ctrl+,`)
    - Search for `literaryCritic.repoPath`
    - Set to the absolute path of the lit-critic directory
+3. **Optional: reduce diagnostic color noise**
+   - Enable `literaryCritic.disableProblemDecorationColors` to suppress diagnostic-based tab/file tinting in this workspace
+   - Enable `literaryCritic.disableProblemDecorationBadges` to hide problem badges in this workspace
+
+> These options update VS Code workspace settings under `workbench.editor.decorations.*` and therefore affect **all** diagnostics in that workspace (not only lit-critic).
 
 ### Usage
 
-1. **Open a scene file** (`.txt` in your `text/` folder)
-2. **Press `Ctrl+Shift+L`** (or Command Palette → "lit-critic: Analyze Current Scene")
-3. **Wait for analysis** (status bar shows progress)
-4. **Review findings** in the Discussion Panel
+1. **Press `Ctrl+Shift+L`** (or Command Palette → "lit-critic: Analyze Current Scene")
+2. **If no scene file is open**, pick one from the file dialog that appears
+3. **Use the scene-set selector** to choose one or more consecutive scenes (same UI is used for single-scene runs)
+4. **Wait for analysis** (status bar shows progress)
+5. **Review findings** in the Discussion Panel
 
 ### Features
 
@@ -123,6 +133,8 @@ Findings appear as diagnostics in the editor:
 - **Red** (Error) — Critical severity
 - **Yellow** (Warning) — Major severity
 - **Blue** (Info) — Minor severity
+
+Depending on your VS Code theme/settings, diagnostics may also tint the scene file label/tab color. This is VS Code behavior from problem decorations (not a custom color set by lit-critic).
 
 Hover over the underline to see evidence, impact, and suggestions.
 
@@ -147,19 +159,34 @@ Shows progress:
 | Command | Keybinding | Action |
 |---------|-----------|--------|
 | Analyze Current Scene | `Ctrl+Shift+L` | Start new analysis |
+| Re-run Analysis with Updated Indexes | — | Re-run after CANON/CAST/GLOSSARY/STYLE/THREADS/TIMELINE/LEARNING changes |
 | Resume Session | — | Continue saved session |
 | Next Finding | `Ctrl+Shift+]` | Skip to next |
 | Accept Finding | — | Accept current finding |
 | Reject Finding | — | Reject with reason |
+| Review Current Finding | — | Re-check finding against scene edits |
 | Skip Minor | — | Skip minor findings |
 | Clear Session | — | Delete saved session |
-| Export Learning | — | Export LEARNING.md |
+| Export Learning to LEARNING.md | — | Export LEARNING.md |
 | Select Model | — | Choose your model |
-| Stop Local API Process | — | Stop the local API process |
+| Stop Server | — | Stop the local API process |
 
 ### Interoperability
 
 The extension shares the same SQLite database (`.lit-critic.db`) with the CLI and Web UI. Start a review in one interface, close it, and resume in another — everything is automatically saved.
+
+### Index context changes and re-run recommendation
+
+If you edit index context files during an active session (`CANON.md`, `CAST.md`, `GLOSSARY.md`, `STYLE.md`, `THREADS.md`, `TIMELINE.md`, or `LEARNING.md`), lit-critic marks findings as potentially stale and recommends a full re-run.
+
+- lit-critic **does not auto-rerun** on save.
+- The stale prompt is shown **once per analysis snapshot** (to avoid repetitive nagging).
+- The Discussion Panel shows a stale-context banner with:
+  - **Re-run Analysis** (recommended)
+  - **Dismiss** (hide banner until next prompt cycle)
+- You can also run the Command Palette action: **lit-critic: Re-run Analysis with Updated Indexes**.
+
+Use this rerun when project context changed globally. Keep using **Review Current Finding** for local scene-line edits.
 
 ---
 
@@ -320,7 +347,7 @@ The tool tracks your preferences and saves them to the project database. You can
 
 **CLI:**
 ```
-Type: save learning
+Type: export learning
 ```
 
 **Web UI:**
@@ -330,7 +357,7 @@ Click: Save Learning button
 
 **VS Code:**
 ```
-Command Palette → lit-critic: Save Learning
+Command Palette → lit-critic: Export Learning to LEARNING.md
 ```
 
 This writes (or updates) `LEARNING.md` in your project root.

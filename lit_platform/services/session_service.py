@@ -1,10 +1,12 @@
 """Platform-owned session workflow service."""
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Optional
 
 from lit_platform.persistence import FindingStore, SessionStore, get_connection
+from lit_platform.runtime.config import CONTEXT_FILES
 from lit_platform.session_state_machine import (
     all_findings_considered as platform_all_findings_considered,
     first_unresolved_index,
@@ -12,12 +14,118 @@ from lit_platform.session_state_machine import (
     learning_session_payload,
 )
 from lit_platform.runtime.models import Finding, SessionState
-from lit_platform.runtime.utils import apply_scene_change
+from lit_platform.runtime.utils import apply_scene_change, concatenate_scenes
+from lit_platform.services.learning_service import generate_learning_markdown, load_learning_from_db
 
 
 def compute_scene_hash(scene_content: str) -> str:
     """Compute a hash of the scene content for change detection."""
     return hashlib.sha256(scene_content.encode("utf-8")).hexdigest()[:16]
+
+
+def compute_index_context_hash(indexes: dict[str, str]) -> str:
+    """Compute a stable hash for context-bearing index inputs."""
+    normalized_payload = {
+        name: indexes.get(name, "")
+        for name in CONTEXT_FILES
+    }
+    payload = json.dumps(normalized_payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _load_current_index_context(state: SessionState) -> dict[str, str]:
+    """Load latest index context from disk (+ synthetic LEARNING.md from DB)."""
+    current: dict[str, str] = {}
+    for filename in CONTEXT_FILES:
+        if filename == "LEARNING.md":
+            continue
+        path = state.project_path / filename
+        try:
+            current[filename] = path.read_text(encoding="utf-8") if path.exists() else ""
+        except OSError:
+            current[filename] = ""
+
+    if state.db_conn:
+        learning = load_learning_from_db(state.db_conn)
+    else:
+        learning = state.learning
+    current["LEARNING.md"] = generate_learning_markdown(learning)
+
+    return current
+
+
+def detect_index_context_changes(state: SessionState) -> Optional[dict]:
+    """Detect index context drift and apply prompt-once stale semantics."""
+    current_indexes = _load_current_index_context(state)
+    current_hash = compute_index_context_hash(current_indexes)
+
+    if not state.index_context_hash:
+        state.index_context_hash = current_hash
+        state.index_context_stale = False
+        state.index_rerun_prompted = False
+        state.index_changed_files = []
+        state.indexes.update(current_indexes)
+        if state.db_conn and state.session_id:
+            SessionStore.update_index_context(
+                state.db_conn,
+                state.session_id,
+                index_context_hash=state.index_context_hash,
+                index_context_stale=False,
+                index_rerun_prompted=False,
+                index_changed_files=[],
+            )
+        return None
+
+    if current_hash == state.index_context_hash:
+        return None
+
+    baseline_indexes = {name: state.indexes.get(name, "") for name in CONTEXT_FILES}
+    changed_files = [
+        filename for filename in CONTEXT_FILES
+        if filename != "LEARNING.md"
+        and current_indexes.get(filename, "") != baseline_indexes.get(filename, "")
+    ]
+
+    # LEARNING.md is session-to-session memory and should not trigger stale/rerun
+    # prompts for the current review session. If only LEARNING changed, silently
+    # re-baseline the hash and keep stale flags cleared.
+    if not changed_files:
+        state.index_context_hash = current_hash
+        state.index_context_stale = False
+        state.index_rerun_prompted = False
+        state.index_changed_files = []
+        state.indexes.update(current_indexes)
+        if state.db_conn and state.session_id:
+            SessionStore.update_index_context(
+                state.db_conn,
+                state.session_id,
+                index_context_hash=state.index_context_hash,
+                index_context_stale=False,
+                index_rerun_prompted=False,
+                index_changed_files=[],
+            )
+        return None
+
+    should_prompt = not state.index_rerun_prompted
+    state.index_context_stale = True
+    state.index_changed_files = changed_files
+    if should_prompt:
+        state.index_rerun_prompted = True
+
+    if state.db_conn and state.session_id:
+        SessionStore.mark_index_context_stale(
+            state.db_conn,
+            state.session_id,
+            changed_files=changed_files,
+            prompted=state.index_rerun_prompted,
+        )
+
+    return {
+        "changed": True,
+        "stale": True,
+        "changed_files": changed_files,
+        "prompt": should_prompt,
+    }
 
 
 def is_terminal_finding_status(status: str) -> bool:
@@ -41,14 +149,23 @@ def create_session(state: SessionState, glossary_issues: list[str] | None = None
     state.db_conn = conn
 
     scene_hash = compute_scene_hash(state.scene_content)
+    if not state.index_context_hash:
+        baseline_indexes = _load_current_index_context(state)
+        state.indexes.update(baseline_indexes)
+        state.index_context_hash = compute_index_context_hash(state.indexes)
     session_id = SessionStore.create(
         conn,
         scene_path=state.scene_path,
         scene_hash=scene_hash,
         model=state.model,
+        scene_paths=state.scene_paths or [state.scene_path],
         glossary_issues=glossary_issues or state.glossary_issues,
         discussion_model=state.discussion_model,
         lens_preferences=state.lens_preferences,
+        index_context_hash=state.index_context_hash,
+        index_context_stale=state.index_context_stale,
+        index_rerun_prompted=state.index_rerun_prompted,
+        index_changed_files=state.index_changed_files,
     )
     state.session_id = session_id
 
@@ -78,6 +195,7 @@ def check_active_session(project_path: Path) -> Optional[dict]:
             "exists": True,
             "session_id": session_data["id"],
             "scene_path": session_data.get("scene_path", ""),
+            "scene_paths": session_data.get("scene_paths", []),
             "created_at": session_data.get("created_at", ""),
             "current_index": session_data.get("current_index", 0),
             "total_findings": len(findings),
@@ -105,6 +223,7 @@ def load_active_session(project_path: Path) -> Optional[dict]:
         "_conn": conn,
         "session_id": session_data["id"],
         "scene_path": session_data.get("scene_path", ""),
+        "scene_paths": session_data.get("scene_paths", []),
         "scene_hash": session_data.get("scene_hash", ""),
         "model": session_data.get("model", ""),
         "discussion_model": session_data.get("discussion_model"),
@@ -113,6 +232,10 @@ def load_active_session(project_path: Path) -> Optional[dict]:
         "glossary_issues": session_data.get("glossary_issues", []),
         "discussion_history": session_data.get("discussion_history", []),
         "learning_session": session_data.get("learning_session", {}),
+        "index_context_hash": session_data.get("index_context_hash", ""),
+        "index_context_stale": session_data.get("index_context_stale", False),
+        "index_rerun_prompted": session_data.get("index_rerun_prompted", False),
+        "index_changed_files": session_data.get("index_changed_files", []),
         "findings": findings,
         "created_at": session_data.get("created_at", ""),
         "accepted_count": session_data.get("accepted_count", 0),
@@ -139,6 +262,7 @@ def load_session_by_id(project_path: Path, session_id: int) -> Optional[dict]:
         "_conn": conn,
         "session_id": session_data["id"],
         "scene_path": session_data.get("scene_path", ""),
+        "scene_paths": session_data.get("scene_paths", []),
         "scene_hash": session_data.get("scene_hash", ""),
         "model": session_data.get("model", ""),
         "discussion_model": session_data.get("discussion_model"),
@@ -147,6 +271,10 @@ def load_session_by_id(project_path: Path, session_id: int) -> Optional[dict]:
         "glossary_issues": session_data.get("glossary_issues", []),
         "discussion_history": session_data.get("discussion_history", []),
         "learning_session": session_data.get("learning_session", {}),
+        "index_context_hash": session_data.get("index_context_hash", ""),
+        "index_context_stale": session_data.get("index_context_stale", False),
+        "index_rerun_prompted": session_data.get("index_rerun_prompted", False),
+        "index_changed_files": session_data.get("index_changed_files", []),
         "findings": findings,
         "created_at": session_data.get("created_at", ""),
         "status": session_data.get("status", "active"),
@@ -256,15 +384,22 @@ def get_session_detail(project_path: Path, session_id: int) -> Optional[dict]:
         conn.close()
 
 
-def validate_session(session_data: dict, scene_content: str,
-                     scene_path: str) -> tuple[bool, str]:
+def validate_session(
+    session_data: dict,
+    scene_content: str,
+    scene_path: str,
+    scene_paths: list[str] | None = None,
+) -> tuple[bool, str]:
     """Validate that a saved session matches the current scene."""
     if not session_data:
         return False, "No session data"
 
-    saved_scene_path = session_data.get("scene_path", "")
-    if Path(saved_scene_path).resolve() != Path(scene_path).resolve():
-        return False, f"Session is for different scene: {saved_scene_path}"
+    saved_scene_paths = session_data.get("scene_paths") or [session_data.get("scene_path", "")]
+    requested_scene_paths = scene_paths or [scene_path]
+    if {str(Path(p).resolve()) for p in saved_scene_paths if p} != {
+        str(Path(p).resolve()) for p in requested_scene_paths if p
+    }:
+        return False, f"Session is for different scene set: {saved_scene_paths}"
 
     saved_hash = session_data.get("scene_hash", "")
     current_hash = compute_scene_hash(scene_content)
@@ -286,6 +421,7 @@ def persist_finding(state: SessionState, finding: Finding) -> None:
         location=finding.location,
         line_start=finding.line_start,
         line_end=finding.line_end,
+        scene_path=finding.scene_path,
         evidence=finding.evidence,
         impact=finding.impact,
         options=finding.options,
@@ -347,16 +483,49 @@ def persist_session_learning(state: SessionState) -> None:
         commit_pending_learning_entries(state.learning, state.db_conn)
 
 
-async def detect_and_apply_scene_changes(state: SessionState,
-                                         current_index: int) -> Optional[dict]:
-    """Check if the scene file has been modified and handle the change."""
+def _read_current_scene_content(state: SessionState) -> Optional[str]:
+    """Read and (re-)concatenate scene content from disk.
+
+    For multi-scene sessions, reads all scene files and concatenates them
+    with boundary markers (matching the original analysis layout).
+    For single-scene sessions, reads the single file directly.
+
+    Returns the new content string, or *None* if any file is missing / unreadable.
+    """
+    scene_paths = getattr(state, "scene_paths", None) or [state.scene_path]
+
+    if len(scene_paths) > 1:
+        scene_docs: list[tuple[str, str]] = []
+        for sp in scene_paths:
+            p = Path(sp)
+            if not p.exists():
+                return None
+            try:
+                scene_docs.append((sp, p.read_text(encoding="utf-8")))
+            except IOError:
+                return None
+        new_content, _line_map = concatenate_scenes(scene_docs)
+        return new_content
+
+    # Single-scene fast path
     scene_path = Path(state.scene_path)
     if not scene_path.exists():
         return None
-
     try:
-        new_content = scene_path.read_text(encoding="utf-8")
+        return scene_path.read_text(encoding="utf-8")
     except IOError:
+        return None
+
+
+async def detect_and_apply_scene_changes(state: SessionState,
+                                         current_index: int) -> Optional[dict]:
+    """Check if any scene file has been modified and handle the change.
+
+    Supports both single-scene and multi-scene sessions.  For multi-scene
+    sessions all scene files are re-read and re-concatenated before hashing.
+    """
+    new_content = _read_current_scene_content(state)
+    if new_content is None:
         return None
 
     old_hash = compute_scene_hash(state.scene_content)
@@ -406,7 +575,11 @@ async def review_current_finding_against_scene_edits(
     state: SessionState,
     current_index: int,
 ) -> dict:
-    """Re-check only the current finding against scene edits."""
+    """Re-check only the current finding against scene edits.
+
+    Supports both single-scene and multi-scene sessions via
+    ``_read_current_scene_content()``.
+    """
     if current_index < 0 or current_index >= len(state.findings):
         return {
             "changed": False,
@@ -417,27 +590,15 @@ async def review_current_finding_against_scene_edits(
             "message": "No active finding to review.",
         }
 
-    scene_path = Path(state.scene_path)
-    if not scene_path.exists():
+    new_content = _read_current_scene_content(state)
+    if new_content is None:
         return {
             "changed": False,
             "adjusted": 0,
             "stale": 0,
             "no_lines": 0,
             "re_evaluated": [],
-            "message": "Scene file not found.",
-        }
-
-    try:
-        new_content = scene_path.read_text(encoding="utf-8")
-    except IOError:
-        return {
-            "changed": False,
-            "adjusted": 0,
-            "stale": 0,
-            "no_lines": 0,
-            "re_evaluated": [],
-            "message": "Could not read scene file.",
+            "message": "Scene file not found or unreadable.",
         }
 
     old_hash = compute_scene_hash(state.scene_content)

@@ -29,6 +29,7 @@ from lit_platform.services import (
     export_learning_markdown,
 )
 from lit_platform.models import SessionState, Finding
+from lit_platform.runtime.utils import remap_location_line_range
 
 from .interface import (
     print_finding,
@@ -70,6 +71,12 @@ async def run_interactive_session(
             )
             for i, f in enumerate(findings_data)
         ]
+        for finding in state.findings:
+            finding.location = remap_location_line_range(
+                finding.location,
+                finding.line_start,
+                finding.line_end,
+            )
         state.glossary_issues = results.get("glossary_issues", [])
 
         # Create session in DB (auto-save from this point on)

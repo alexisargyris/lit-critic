@@ -122,6 +122,11 @@ Owned by Platform for:
 - findings
 - learning
 
+Key persisted multi-scene fields include:
+
+- session scene set (`scene_paths`)
+- per-finding source scene (`finding.scene_path`)
+
 Persistence is auto-applied on each mutation (accept/reject/discuss/navigate).
 
 ---
@@ -131,16 +136,19 @@ Persistence is auto-applied on each mutation (accept/reject/discuss/navigate).
 ### Analysis
 
 1. Client starts analysis via `/api/analyze`
-2. Platform loads scene + indexes
-3. Platform calls Core `/v1/analyze`
-4. Results are persisted and returned to client
+2. Platform loads one or more consecutive scenes + indexes
+3. Platform concatenates selected scenes and tracks line/source mapping
+4. Platform calls Core `/v1/analyze`
+5. Results are mapped back to scene-local lines with per-finding `scene_path`
+6. Results are persisted and returned to client
 
 ### Discussion
 
 1. Client posts message via `/api/finding/discuss` (or streaming variant)
 2. Platform builds condensed context + current finding state
-3. Platform calls Core `/v1/discuss`
-4. Outcome (revised/withdrawn/etc.) is persisted and broadcast to client
+3. In multi-scene sessions, discussion scope is constrained to the finding's source scene
+4. Platform calls Core `/v1/discuss`
+5. Outcome (revised/withdrawn/etc.) is persisted and broadcast to client
 
 ### Resume
 

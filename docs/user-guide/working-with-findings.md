@@ -121,6 +121,19 @@ Move to the next finding without acting.
 - You'll address it later
 - You're just surveying all findings first
 
+### 5. Review Current Finding vs Re-run Analysis
+
+These two actions solve different problems:
+
+- **Review Current Finding**: re-checks the *current* finding after you edit scene text.
+  - Use this when you've changed wording, line order, or nearby context in the current scene.
+  - It updates that finding in-place (or marks it resolved) without starting a full new run.
+
+- **Re-run Analysis with Updated Indexes**: runs a *full analysis* again when index context changes
+  (`CANON.md`, `CAST.md`, `GLOSSARY.md`, `STYLE.md`, `THREADS.md`, `TIMELINE.md`, `LEARNING.md`).
+  - Use this when the world/context references changed and findings may be stale across the whole set.
+  - In VS Code, the Discussion Panel can show a stale-context banner with a **Re-run Analysis** action.
+
 ---
 
 ## Discussion Outcomes
@@ -230,7 +243,7 @@ The tool tracks patterns in your accept/reject decisions:
 
 ### How It's Used
 
-Run `save learning` (CLI), click **Save Learning** (Web UI), or use Command Palette (VS Code) to write patterns to `LEARNING.md`.
+Run `export learning` (CLI), click **Save Learning** (Web UI), or use Command Palette (VS Code) to write patterns to `LEARNING.md`.
 
 Future reviews load `LEARNING.md` and lenses are instructed to respect your preferences.
 
@@ -331,8 +344,10 @@ The AI can explain or show specific examples that help you decide.
 | **Enter** | Next finding |
 | `skip minor` | Skip all minor findings |
 | `skip to structure` | Jump to Structure lens |
+| `skip to coherence` | Jump to Coherence lens |
+| `review` | Re-check current finding against scene edits |
 | `quit` | End session |
-| `save session` | Save progress |
+| `export learning` | Export `LEARNING.md` |
 | `intentional` | Mark ambiguity as intentional |
 | `accidental` | Mark ambiguity as accidental |
 | **Type anything else** | Discuss |
@@ -350,7 +365,9 @@ The AI can explain or show specific examples that help you decide.
 - **Accept Finding** (Command Palette) — Accept
 - **Reject Finding** (Command Palette) — Reject
 - **Next Finding** (`Ctrl+Shift+]`) — Skip
+- **Review Current Finding** (Command Palette) — Re-check against scene edits
 - **Skip Minor** (Command Palette) — Skip all minor
+- **Export Learning to LEARNING.md** (Command Palette) — Export learning markdown
 - **Type in Discussion Panel** Discuss
 
 ---
@@ -377,9 +394,10 @@ Each finding has a status:
 - **Accepted** You agreed and will address it
 - **Rejected** You disagreed or won't change it
 - **Withdrawn** The AI retracted it during discussion
+- **Revised** The AI updated the finding during discussion
 - **Escalated** Severity increased during discussion
 
-Status is tracked in session files and affects learning.
+Status is tracked in the project database (`.lit-critic.db`) and affects learning.
 
 ---
 

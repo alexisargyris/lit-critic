@@ -12,6 +12,11 @@ from typing import Optional
 from lit_platform.facade import PlatformFacade
 from lit_platform.models import SessionState, Finding, LearningData, LensResult, CoordinatorError
 from lit_platform.persistence import SessionStore
+from lit_platform.runtime.utils import (
+    concatenate_scenes,
+    map_global_range_to_scene,
+    remap_location_line_range,
+)
 from lit_platform.services.analysis_service import (
     AVAILABLE_MODELS,
     DEFAULT_MODEL,
@@ -28,6 +33,8 @@ from lit_platform.persistence import LearningStore
 from lit_platform.services import (
     load_learning,
     load_learning_from_db,
+    compute_index_context_hash,
+    detect_index_context_changes,
     generate_learning_markdown,
     export_learning_markdown,
     check_active_session,
@@ -128,13 +135,20 @@ class WebSessionManager:
             raise FileNotFoundError(f"Scene file not found: {scene_path}")
         return PlatformFacade.load_scene_text(scene_path)
 
+    def _load_scenes(self, scene_paths: list[Path]) -> tuple[str, list[dict]]:
+        """Load and concatenate scenes into analysis text and line map."""
+        scene_docs = [(str(scene), self._load_scene(scene)) for scene in scene_paths]
+        return concatenate_scenes(scene_docs)
+
     async def start_analysis(self, scene_path: str, project_path: str, api_key: str,
                              model: str = DEFAULT_MODEL, discussion_model: str = None,
                              discussion_api_key: str | None = None,
+                             scene_paths: list[str] | None = None,
                              lens_preferences: dict | None = None) -> dict:
         """Start a new analysis. Returns summary info. Populates self.state."""
         project = Path(project_path)
-        scene = Path(scene_path)
+        requested_scene_paths = scene_paths or [scene_path]
+        scenes = [Path(p) for p in requested_scene_paths]
 
         if not project.exists():
             raise FileNotFoundError(f"Project directory not found: {project}")
@@ -155,7 +169,7 @@ class WebSessionManager:
 
         # Load files
         indexes, loaded_files, missing_files = self._load_project_files(project)
-        scene_content = self._load_scene(scene)
+        scene_content, scene_line_map = self._load_scenes(scenes)
 
         # Load learning and inject directly into indexes so that analysis prompts
         # always reflect the current DB state (no need for a LEARNING.md file on disk).
@@ -181,14 +195,20 @@ class WebSessionManager:
         self.state = SessionState(
             client=client,
             scene_content=scene_content,
-            scene_path=str(scene),
+            scene_path=str(scenes[0]),
             project_path=project,
             indexes=indexes,
+            scene_paths=[str(s) for s in scenes],
+            scene_line_map=scene_line_map,
             learning=learning,
             lens_preferences=normalize_lens_preferences(lens_preferences),
             model=model,
             discussion_model=discussion_model,
             discussion_client=discussion_client,
+            index_context_hash=compute_index_context_hash(indexes),
+            index_context_stale=False,
+            index_rerun_prompted=False,
+            index_changed_files=[],
         )
 
         # Set up progress tracking
@@ -268,6 +288,21 @@ class WebSessionManager:
             )
             for i, f in enumerate(findings_data)
         ]
+
+        for finding in self.state.findings:
+            mapped_scene_path, local_start, local_end = map_global_range_to_scene(
+                self.state.scene_line_map,
+                finding.line_start,
+                finding.line_end,
+            )
+            finding.scene_path = mapped_scene_path or self.state.scene_path
+            finding.line_start = local_start
+            finding.line_end = local_end
+            finding.location = remap_location_line_range(
+                finding.location,
+                finding.line_start,
+                finding.line_end,
+            )
         self.state.glossary_issues = coordinated.get("glossary_issues", [])
         self.current_index = 0
 
@@ -315,13 +350,18 @@ class WebSessionManager:
         # Extract the DB connection (caller takes ownership)
         conn = session_data.pop("_conn")
 
-        scene_path_str = session_data.get("scene_path", "")
+        scene_paths = session_data.get("scene_paths") or []
+        scene_path_str = scene_paths[0] if scene_paths else session_data.get("scene_path", "")
         if not scene_path_str:
             conn.close()
             raise ValueError("Session data is corrupted (missing scene path)")
 
         saved_scene_path = Path(scene_path_str)
-        scene_path = Path(scene_path_override) if scene_path_override else saved_scene_path
+        if scene_path_override:
+            resolved_scene_paths = [Path(scene_path_override)]
+        else:
+            resolved_scene_paths = [Path(p) for p in (scene_paths or [scene_path_str])]
+        scene_path = resolved_scene_paths[0]
 
         if not scene_path.exists():
             conn.close()
@@ -348,10 +388,15 @@ class WebSessionManager:
 
         # Load files
         indexes, loaded_files, missing_files = self._load_project_files(project)
-        scene_content = self._load_scene(scene_path)
+        scene_content, scene_line_map = self._load_scenes(resolved_scene_paths)
 
         # Validate (warn but don't block — scene changes will be detected)
-        is_valid, error_msg = validate_session(session_data, scene_content, str(scene_path))
+        is_valid, error_msg = validate_session(
+            session_data,
+            scene_content,
+            str(scene_path),
+            [str(p) for p in resolved_scene_paths],
+        )
 
         # Load learning from DB
         learning = load_learning_from_db(conn)
@@ -389,6 +434,8 @@ class WebSessionManager:
             scene_path=str(scene_path),
             project_path=project,
             indexes=indexes,
+            scene_paths=[str(p) for p in resolved_scene_paths],
+            scene_line_map=scene_line_map,
             learning=learning,
             findings=[Finding.from_dict(f) for f in session_data.get("findings", [])],
             glossary_issues=session_data.get("glossary_issues", []),
@@ -397,6 +444,10 @@ class WebSessionManager:
             model=saved_model,
             discussion_model=saved_discussion_model,
             discussion_client=discussion_client,
+            index_context_hash=session_data.get("index_context_hash", ""),
+            index_context_stale=session_data.get("index_context_stale", False),
+            index_rerun_prompted=session_data.get("index_rerun_prompted", False),
+            index_changed_files=session_data.get("index_changed_files", []),
             db_conn=conn,
             session_id=session_data["session_id"],
         )
@@ -433,13 +484,64 @@ class WebSessionManager:
         # Extract the DB connection (caller takes ownership)
         conn = session_data.pop("_conn")
 
-        scene_path_str = session_data.get("scene_path", "")
+        return await self._load_session_into_state(
+            project,
+            session_data,
+            conn,
+            api_key,
+            discussion_api_key=discussion_api_key,
+            scene_path_override=scene_path_override,
+        )
+
+    async def load_session_for_viewing(
+        self,
+        project_path: str,
+        session_id: int,
+        api_key: str | None,
+        discussion_api_key: str | None = None,
+        scene_path_override: str | None = None,
+    ) -> dict:
+        """Load any session (active, completed, or abandoned) for viewing/interactions."""
+        project = Path(project_path)
+
+        session_data = load_session_by_id(project, session_id)
+        if not session_data:
+            raise FileNotFoundError(f"Session {session_id} not found in project directory.")
+
+        conn = session_data.pop("_conn")
+
+        return await self._load_session_into_state(
+            project,
+            session_data,
+            conn,
+            api_key,
+            discussion_api_key=discussion_api_key,
+            scene_path_override=scene_path_override,
+        )
+
+    async def _load_session_into_state(
+        self,
+        project: Path,
+        session_data: dict,
+        conn,
+        api_key: str | None,
+        discussion_api_key: str | None = None,
+        scene_path_override: str | None = None,
+    ) -> dict:
+        """Shared logic for loading a persisted session into manager state."""
+
+        scene_paths = session_data.get("scene_paths") or []
+        scene_path_str = scene_paths[0] if scene_paths else session_data.get("scene_path", "")
         if not scene_path_str:
             conn.close()
             raise ValueError("Session data is corrupted (missing scene path)")
 
         saved_scene_path = Path(scene_path_str)
-        scene_path = Path(scene_path_override) if scene_path_override else saved_scene_path
+        if scene_path_override:
+            resolved_scene_paths = [Path(scene_path_override)]
+        else:
+            resolved_scene_paths = [Path(p) for p in (scene_paths or [scene_path_str])]
+        scene_path = resolved_scene_paths[0]
 
         if not scene_path.exists():
             conn.close()
@@ -466,10 +568,15 @@ class WebSessionManager:
 
         # Load files
         indexes, loaded_files, missing_files = self._load_project_files(project)
-        scene_content = self._load_scene(scene_path)
+        scene_content, scene_line_map = self._load_scenes(resolved_scene_paths)
 
         # Validate (warn but don't block — scene changes will be detected)
-        is_valid, error_msg = validate_session(session_data, scene_content, str(scene_path))
+        is_valid, error_msg = validate_session(
+            session_data,
+            scene_content,
+            str(scene_path),
+            [str(p) for p in resolved_scene_paths],
+        )
 
         # Load learning from DB
         learning = load_learning_from_db(conn)
@@ -507,6 +614,8 @@ class WebSessionManager:
             scene_path=str(scene_path),
             project_path=project,
             indexes=indexes,
+            scene_paths=[str(p) for p in resolved_scene_paths],
+            scene_line_map=scene_line_map,
             learning=learning,
             findings=[Finding.from_dict(f) for f in session_data.get("findings", [])],
             glossary_issues=session_data.get("glossary_issues", []),
@@ -515,6 +624,10 @@ class WebSessionManager:
             model=saved_model,
             discussion_model=saved_discussion_model,
             discussion_client=discussion_client,
+            index_context_hash=session_data.get("index_context_hash", ""),
+            index_context_stale=session_data.get("index_context_stale", False),
+            index_rerun_prompted=session_data.get("index_rerun_prompted", False),
+            index_changed_files=session_data.get("index_changed_files", []),
             db_conn=conn,
             session_id=session_data["session_id"],
         )
@@ -530,6 +643,7 @@ class WebSessionManager:
 
         summary = {
             "scene_path": self.state.scene_path,
+            "scene_paths": self.state.scene_paths or [self.state.scene_path],
             "scene_name": Path(self.state.scene_path).name,
             "project_path": str(self.state.project_path),
             "total_findings": len(self.state.findings),
@@ -578,6 +692,16 @@ class WebSessionManager:
         if self.state.session_id:
             summary["session_id"] = self.state.session_id
 
+        summary["index_context_stale"] = self.state.index_context_stale
+        summary["index_changed_files"] = self.state.index_changed_files
+        summary["rerun_recommended"] = self.state.index_context_stale
+        summary["index_change"] = {
+            "changed": self.state.index_context_stale,
+            "stale": self.state.index_context_stale,
+            "changed_files": self.state.index_changed_files,
+            "prompt": False,
+        }
+
         # Include findings_status for direct population of findings tree in VS Code extension
         # This eliminates the need for a fragile second HTTP call to GET /api/session
         summary["findings_status"] = [
@@ -590,6 +714,7 @@ class WebSessionManager:
                 "evidence": f.evidence,
                 "line_start": f.line_start,
                 "line_end": f.line_end,
+                "scene_path": f.scene_path,
             }
             for f in self.state.findings
         ]
@@ -601,6 +726,12 @@ class WebSessionManager:
         if not self.state:
             return None
         return await detect_and_apply_scene_changes(self.state, self.current_index)
+
+    async def check_index_changes(self) -> Optional[dict]:
+        """Check for index-context changes and apply stale/prompt semantics."""
+        if not self.state:
+            return None
+        return detect_index_context_changes(self.state)
 
     def get_current_finding(self) -> Optional[dict]:
         """Get the current finding."""
@@ -625,9 +756,10 @@ class WebSessionManager:
         self.current_index += 1
         persist_session_index(self.state, self.current_index)
         change_report = await self.check_scene_changes()
+        index_change = await self.check_index_changes()
         finding = self.get_current_finding()
 
-        result = {"scene_change": change_report}
+        result = {"scene_change": change_report, "index_change": index_change}
         if finding is None:
             if complete_session(self.state):
                 # Increment review_count once per completed session.
@@ -682,6 +814,7 @@ class WebSessionManager:
             self.state,
             self.current_index,
         )
+        index_change = await self.check_index_changes()
         finding = self.get_current_finding()
 
         if finding is None:
@@ -694,6 +827,7 @@ class WebSessionManager:
                     "complete": True,
                     "message": "All findings have been considered.",
                     "review": review,
+                    "index_change": index_change,
                 }
 
             unresolved = self._jump_to_first_unresolved_finding()
@@ -702,32 +836,41 @@ class WebSessionManager:
                     "complete": True,
                     "message": "No available finding, but session is not yet complete.",
                     "review": review,
+                    "index_change": index_change,
                 }
 
             return {
                 "complete": False,
                 "message": "There are still pending findings to review.",
                 "review": review,
+                "index_change": index_change,
                 **unresolved,
             }
 
         return {
             "complete": False,
             "review": review,
+            "index_change": index_change,
             **finding,
         }
 
     def goto_finding(self, index: int) -> Optional[dict]:
-        """Jump to a specific finding by index."""
+        """Jump to a specific finding by index.
+
+        API behavior cleanup:
+        - Any in-range finding is navigable, including terminal findings
+          such as ``withdrawn``.
+        - Returned payload always includes full persisted finding state via
+          ``to_dict(include_state=True)`` so clients can rehydrate discussion
+          history (``discussion_turns``) when revisiting completed findings.
+        - ``None`` now means strictly "index out of range" (or missing state).
+        """
         if not self.state or not self.state.findings:
             return None
         if index < 0 or index >= len(self.state.findings):
             return None
 
         finding = self.state.findings[index]
-        if finding.status == 'withdrawn':
-            return None
-
         self.current_index = index
         persist_session_index(self.state, self.current_index)
         return {
@@ -739,14 +882,20 @@ class WebSessionManager:
         }
 
     async def goto_finding_with_scene_check(self, index: int) -> dict:
-        """Jump to a specific finding, checking for scene changes first."""
+        """Jump to a specific finding, checking for scene changes first.
+
+        API behavior cleanup:
+        ``complete=True`` here now indicates an invalid/out-of-range target,
+        not a terminal finding status.
+        """
         change_report = await self.check_scene_changes()
+        index_change = await self.check_index_changes()
         finding = self.goto_finding(index)
 
-        result = {"scene_change": change_report}
+        result = {"scene_change": change_report, "index_change": index_change}
         if finding is None:
             result["complete"] = True
-            result["message"] = "Finding not available (withdrawn or out of range)."
+            result["message"] = "Finding not available (out of range)."
         else:
             result["complete"] = False
             result.update(finding)
@@ -828,6 +977,7 @@ class WebSessionManager:
             return {"error": "No active finding"}
 
         change_report = await self.check_scene_changes()
+        index_change = await self.check_index_changes()
         scene_changed = change_report is not None
 
         finding = self.state.findings[self.current_index]
@@ -847,6 +997,7 @@ class WebSessionManager:
             "status": status,
             "finding_status": finding.status,
             "scene_change": change_report,
+            "index_change": index_change,
         }
 
         if status in ('revised', 'escalated', 'withdrawn') or scene_changed:
@@ -863,6 +1014,7 @@ class WebSessionManager:
             return
 
         change_report = await self.check_scene_changes()
+        index_change = await self.check_index_changes()
         scene_changed = change_report is not None
 
         if change_report:
@@ -891,6 +1043,7 @@ class WebSessionManager:
                     "status": status,
                     "finding_status": finding.status,
                     "scene_change": change_report,
+                    "index_change": index_change,
                 }
 
                 if status in ('revised', 'escalated', 'withdrawn') or scene_changed:
@@ -934,6 +1087,7 @@ class WebSessionManager:
                     "evidence": f.evidence,
                     "line_start": f.line_start,
                     "line_end": f.line_end,
+                    "scene_path": f.scene_path,
                 }
                 for f in self.state.findings
             ]

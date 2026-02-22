@@ -37,3 +37,6 @@ build/
 
 # Sync scripts (local-only, not tracked)
 scripts/
+
+# Implementation specs (local-only, not tracked)
+specs/

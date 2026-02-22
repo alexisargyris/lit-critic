@@ -176,6 +176,42 @@ class TestGetDiscussionSystemPrompt:
 
         assert "PRIOR DISCUSSION OUTCOMES" not in prompt
 
+    def test_uses_canonical_line_range_in_location_when_location_contains_stale_l_range(self):
+        """Location text should be normalized from canonical numeric line fields."""
+        finding = Finding(
+            number=1,
+            severity="major",
+            lens="prose",
+            location="L120-L124, starting 'She moved...'",
+            line_start=12,
+            line_end=16,
+            evidence="Test evidence",
+            impact="Test impact",
+            options=["Test option"],
+        )
+
+        prompt = get_discussion_system_prompt(finding, "Scene text")
+        assert "Location: L12-L16, starting 'She moved...'" in prompt
+        assert "Line range: L12-L16" in prompt
+
+    def test_uses_canonical_line_range_even_when_location_has_no_l_range(self):
+        """Line range display should always be derived from numeric line fields."""
+        finding = Finding(
+            number=1,
+            severity="major",
+            lens="prose",
+            location="Paragraph 3 near midpoint",
+            line_start=8,
+            line_end=10,
+            evidence="Test evidence",
+            impact="Test impact",
+            options=["Test option"],
+        )
+
+        prompt = get_discussion_system_prompt(finding, "Scene text")
+        assert "Location: Paragraph 3 near midpoint" in prompt
+        assert "Line range: L8-L10" in prompt
+
 
 class TestBuildDiscussionMessages:
     """Tests for build_discussion_messages (Phase 1: proper message list)."""

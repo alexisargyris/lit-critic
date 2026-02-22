@@ -5,13 +5,13 @@
  *   - Current finding details (severity, lens, location, evidence, impact, options)
  *   - Chat-style interface for discussion with the critic
  *   - Streaming responses via SSE
- *   - Action buttons: Accept, Reject, Review, Export Learning
+ *   - Action buttons: Accept, Reject, Review
  *   - Ambiguity buttons for ambiguity findings
  */
 
 import * as vscode from 'vscode';
 import { ApiClient } from './apiClient';
-import { Finding, DiscussResponse, DiscussionContextTransition } from './types';
+import { Finding, DiscussResponse, DiscussionContextTransition, IndexChangeReport } from './types';
 
 type PanelMessage =
     | { type: 'discuss'; message: string }
@@ -20,7 +20,8 @@ type PanelMessage =
     | { type: 'continue' }
     | { type: 'reviewFinding' }
     | { type: 'ambiguity'; intentional: boolean }
-    | { type: 'exportLearning' };
+    | { type: 'rerunAnalysis' }
+    | { type: 'dismissIndexChange' };
 
 export class DiscussionPanel implements vscode.Disposable {
     private panel: vscode.WebviewPanel | null = null;
@@ -45,6 +46,7 @@ export class DiscussionPanel implements vscode.Disposable {
         total: number,
         isAmbiguity: boolean,
         discussionTransition?: DiscussionContextTransition,
+        readOnlyNotice?: string,
     ): void {
         if (!this.panel) {
             this.panel = vscode.window.createWebviewPanel(
@@ -73,6 +75,7 @@ export class DiscussionPanel implements vscode.Disposable {
             total,
             isAmbiguity,
             discussionTransition,
+            readOnlyNotice,
         );
 
         // Only reveal if the panel isn't already showing — calling reveal()
@@ -96,6 +99,17 @@ export class DiscussionPanel implements vscode.Disposable {
             stale: report.stale,
             reEvaluated: report.re_evaluated,
         });
+    }
+
+    notifyIndexChange(report: IndexChangeReport): void {
+        this.postMessage({
+            type: 'indexChange',
+            report,
+        });
+    }
+
+    clearIndexChangeNotice(): void {
+        this.postMessage({ type: 'indexChangeClear' });
     }
 
     /**
@@ -136,8 +150,11 @@ export class DiscussionPanel implements vscode.Disposable {
                 case 'ambiguity':
                     this.onFindingAction?.('ambiguity', msg.intentional);
                     break;
-                case 'exportLearning':
-                    this.onFindingAction?.('exportLearning');
+                case 'rerunAnalysis':
+                    this.onFindingAction?.('rerunAnalysis');
+                    break;
+                case 'dismissIndexChange':
+                    this.onFindingAction?.('dismissIndexChange');
                     break;
             }
         } catch (err) {
@@ -225,6 +242,7 @@ export class DiscussionPanel implements vscode.Disposable {
         total: number,
         isAmbiguity: boolean,
         discussionTransition?: DiscussionContextTransition,
+        readOnlyNotice?: string,
     ): string {
         const severityColor: Record<string, string> = {
             'critical': '#f44336',
@@ -304,6 +322,10 @@ export class DiscussionPanel implements vscode.Disposable {
             <div class="message system">📝 ${escapeHtml(
                 discussionTransition.note || 'Finding re-evaluated after scene edits. Starting a new discussion context.'
             )}</div>`
+            : '';
+
+        const noticeHtml = readOnlyNotice
+            ? `<div class="session-notice">${escapeHtml(readOnlyNotice)}</div>`
             : '';
 
         return `<!DOCTYPE html>
@@ -520,9 +542,47 @@ export class DiscussionPanel implements vscode.Disposable {
         margin-top: 4px;
         flex-shrink: 0;
     }
+    .session-notice {
+        border: 1px solid var(--vscode-editorInfo-foreground);
+        background: color-mix(in srgb, var(--vscode-editorInfo-foreground) 12%, transparent);
+        color: var(--vscode-editorInfo-foreground);
+        border-radius: 4px;
+        padding: 8px 10px;
+        margin-bottom: 8px;
+        font-size: 0.9em;
+        flex-shrink: 0;
+    }
+    .index-change-notice {
+        border: 1px solid var(--vscode-editorWarning-foreground);
+        background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 12%, transparent);
+        color: var(--vscode-editorWarning-foreground);
+        border-radius: 4px;
+        padding: 8px 10px;
+        margin-bottom: 8px;
+        font-size: 0.9em;
+        flex-shrink: 0;
+        display: none;
+    }
+    .index-change-notice.visible {
+        display: block;
+    }
+    .index-change-actions {
+        margin-top: 8px;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
 </style>
 </head>
 <body>
+    ${noticeHtml}
+    <div id="indexChangeNotice" class="index-change-notice">
+        <div id="indexChangeText"></div>
+        <div class="index-change-actions">
+            <button class="btn btn-warning" onclick="send({type:'rerunAnalysis'})">Re-run Analysis</button>
+            <button class="btn btn-secondary" onclick="send({type:'dismissIndexChange'})">Dismiss</button>
+        </div>
+    </div>
     <div class="finding-header">
         <div class="meta">
             Finding <strong>${current}/${total}</strong> •
@@ -550,7 +610,6 @@ export class DiscussionPanel implements vscode.Disposable {
         <button class="btn btn-success" onclick="send({type:'accept'})">✓ Accept</button>
         <button class="btn btn-danger" onclick="rejectWithReason()">✗ Reject</button>
         <button class="btn btn-secondary" onclick="send({type:'reviewFinding'})">Review</button>
-        <button class="btn btn-secondary" onclick="send({type:'exportLearning'})">Export Learning</button>
     </div>
 
     <div class="progress">Finding ${current} of ${total}</div>
@@ -656,6 +715,27 @@ export class DiscussionPanel implements vscode.Disposable {
                 }
                 addMessage('system', text);
                 break;
+
+            case 'indexChange': {
+                const report = msg.report || {};
+                const files = Array.isArray(report.changed_files) ? report.changed_files : [];
+                const fileText = files.length > 0 ? files.join(', ') : 'index files';
+                const notice = document.getElementById('indexChangeNotice');
+                const textEl = document.getElementById('indexChangeText');
+                if (notice && textEl) {
+                    textEl.textContent = 'Index context changed (' + fileText + '). Findings may be stale. Re-run analysis recommended.';
+                    notice.classList.add('visible');
+                }
+                break;
+            }
+
+            case 'indexChangeClear': {
+                const notice = document.getElementById('indexChangeNotice');
+                if (notice) {
+                    notice.classList.remove('visible');
+                }
+                break;
+            }
         }
     });
 

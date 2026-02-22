@@ -26,6 +26,8 @@ describe('SessionsTreeProvider', () => {
             scene_path: '/test/scene02.txt',
             status: 'active',
             model: 'opus',
+            index_context_stale: true,
+            index_changed_files: ['CANON.md', 'GLOSSARY.md'],
             created_at: '2026-02-11T09:00:00',
             completed_at: null,
             total_findings: 8,
@@ -73,10 +75,10 @@ describe('SessionsTreeProvider', () => {
     });
 
     describe('session items under scene', () => {
-        it('formats session label as Session #ID', () => {
+        it('formats session label as compact #ID', () => {
             const session = sampleSessions[0];
-            const label = `Session #${session.id}`;
-            assert.equal(label, 'Session #1');
+            const label = `#${session.id}`;
+            assert.equal(label, '#1');
         });
 
         it('keeps session node context/command compatibility', () => {
@@ -105,6 +107,20 @@ describe('SessionsTreeProvider', () => {
             assert.match(description, /total 5/);
             assert.match(description, /accepted 3/);
             assert.match(description, /pending 0/);
+        });
+
+        it('surfaces stale marker for active stale sessions in description', () => {
+            const session = sampleSessions[1] as any;
+            const pending = Math.max(
+                0,
+                session.total_findings - session.accepted_count - session.rejected_count - session.withdrawn_count,
+            );
+            const statusLabel = session.status === 'active' && session.index_context_stale
+                ? `${session.status} · stale`
+                : session.status;
+            const description = `${statusLabel} · total ${session.total_findings} · accepted ${session.accepted_count} · rejected ${session.rejected_count} · withdrawn ${session.withdrawn_count} · pending ${pending}`;
+
+            assert.match(description, /active · stale/);
         });
     });
 

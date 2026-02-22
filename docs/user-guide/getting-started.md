@@ -208,18 +208,20 @@ You can use lit-critic in three ways: **CLI (terminal)**, **Web UI (browser)**, 
 Open a terminal, navigate to the lit-critic installation directory, and run:
 
 ```bash
-python lit-critic.py --scene path/to/your-novel/text/01.01.01_opening.txt --project path/to/your-novel/
+python lit-critic.py analyze --scene path/to/your-novel/text/01.01.01_opening.txt --project path/to/your-novel/
 ```
 
 **Example (Windows):**
 ```bash
-python lit-critic.py --scene "C:\Users\YourName\my-novel\text\01.01.01_opening.txt" --project "C:\Users\YourName\my-novel\"
+python lit-critic.py analyze --scene "C:\Users\YourName\my-novel\text\01.01.01_opening.txt" --project "C:\Users\YourName\my-novel\"
 ```
 
 **Example (macOS/Linux):**
 ```bash
-python lit-critic.py --scene ~/my-novel/text/01.01.01_opening.txt --project ~/my-novel/
+python lit-critic.py analyze --scene ~/my-novel/text/01.01.01_opening.txt --project ~/my-novel/
 ```
+
+For consecutive multi-scene analysis in one session, use the Web UI or VS Code extension scene-set selector.
 
 ### What Happens Next
 
@@ -233,11 +235,11 @@ python lit-critic.py --scene ~/my-novel/text/01.01.01_opening.txt --project ~/my
 By default, lit-critic uses Sonnet (balanced speed and quality). You can choose a different model:
 
 ```bash
-python lit-critic.py --scene scene.txt --project ~/my-novel/ --model opus        # Claude: Deepest analysis
-python lit-critic.py --scene scene.txt --project ~/my-novel/ --model sonnet      # Claude: Default
-python lit-critic.py --scene scene.txt --project ~/my-novel/ --model haiku       # Claude: Fastest & cheapest
-python lit-critic.py --scene scene.txt --project ~/my-novel/ --model gpt-4o      # OpenAI: Balanced
-python lit-critic.py --scene scene.txt --project ~/my-novel/ --model gpt-4o-mini # OpenAI: Fast & cheap
+python lit-critic.py analyze --scene scene.txt --project ~/my-novel/ --model opus        # Claude: Deepest analysis
+python lit-critic.py analyze --scene scene.txt --project ~/my-novel/ --model sonnet      # Claude: Default
+python lit-critic.py analyze --scene scene.txt --project ~/my-novel/ --model haiku       # Claude: Fastest & cheapest
+python lit-critic.py analyze --scene scene.txt --project ~/my-novel/ --model gpt-4o      # OpenAI: Balanced
+python lit-critic.py analyze --scene scene.txt --project ~/my-novel/ --model gpt-4o-mini # OpenAI: Fast & cheap
 ```
 
 ---

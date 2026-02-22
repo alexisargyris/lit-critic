@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -51,6 +52,11 @@ def _changed_files_from_head_commit() -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+def _changed_files_from_commit(commit: str) -> list[str]:
+    out = _run_git(["diff-tree", "--no-commit-id", "--name-only", "-r", commit])
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
 def _detect_outgoing_files() -> tuple[list[str], str]:
     # 1) Best: upstream tracking branch range.
     if _git_ok(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]):
@@ -65,6 +71,56 @@ def _detect_outgoing_files() -> tuple[list[str], str]:
 
     # 3) Last-resort fallback: only latest commit.
     return _changed_files_from_head_commit(), "HEAD (latest commit only fallback)"
+
+
+def _is_zero_sha(value: str) -> bool:
+    return len(value) == 40 and set(value) == {"0"}
+
+
+def _detect_outgoing_files_from_pre_push_stdin() -> tuple[list[str], str]:
+    """Detect outgoing files using refs provided by git pre-push hook stdin."""
+    lines = [line.strip() for line in sys.stdin.read().splitlines() if line.strip()]
+    if not lines:
+        # Safety fallback if called without stdin payload.
+        files, source = _detect_outgoing_files()
+        return files, f"{source} (fallback: no pre-push stdin refs)"
+
+    changed_files: set[str] = set()
+    source_ranges: list[str] = []
+
+    for line in lines:
+        parts = line.split()
+        if len(parts) != 4:
+            continue
+        local_ref, local_sha, remote_ref, remote_sha = parts
+
+        # Deletion push (local ref deleted): no outgoing local file changes to validate.
+        if _is_zero_sha(local_sha):
+            continue
+
+        if not _is_zero_sha(remote_sha):
+            diff_range = f"{remote_sha}..{local_sha}"
+            source_ranges.append(f"{remote_ref}:{diff_range}")
+            changed_files.update(_changed_files_from_range(diff_range))
+            continue
+
+        # New remote branch/tag: estimate outgoing range from merge-base with remote default branches.
+        merged = False
+        for remote_default in ("origin/main", "origin/master"):
+            if _git_ok(["rev-parse", "--verify", remote_default]):
+                base = _run_git(["merge-base", local_sha, remote_default])
+                diff_range = f"{base}..{local_sha}"
+                source_ranges.append(f"{local_ref}:{diff_range} (new remote ref)")
+                changed_files.update(_changed_files_from_range(diff_range))
+                merged = True
+                break
+
+        if not merged:
+            source_ranges.append(f"{local_ref}:{local_sha} (new remote ref fallback: single commit)")
+            changed_files.update(_changed_files_from_commit(local_sha))
+
+    source = "; ".join(source_ranges) if source_ranges else "pre-push stdin (no applicable ref updates)"
+    return sorted(changed_files), source
 
 
 def _component_for_path(path: str) -> str | None:
@@ -87,7 +143,10 @@ def main() -> int:
         return 1
 
     try:
-        changed_files, source_range = _detect_outgoing_files()
+        if "--pre-push" in sys.argv[1:]:
+            changed_files, source_range = _detect_outgoing_files_from_pre_push_stdin()
+        else:
+            changed_files, source_range = _detect_outgoing_files()
     except RuntimeError as exc:
         print(f"[ERROR] Release-intent check failed while inspecting git state: {exc}")
         return 1

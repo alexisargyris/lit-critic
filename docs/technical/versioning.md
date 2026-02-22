@@ -89,6 +89,9 @@ Until CI is introduced, SemVer is enforced through local automation:
    - `python versioning/check_release_intent.py`
    - Detects changed component areas in outgoing commits and fails if
      `versioning/compatibility.json` was not updated.
+   - In pre-push hooks, `.githooks/pre-push` runs `python versioning/check_release_intent.py --pre-push`
+     so outgoing commit detection uses Git's pre-push ref payload (`<local_sha>..<remote_sha>` logic)
+     instead of relying only on branch-tracking heuristics.
 
 2. **Validator script**
    - `python versioning/validate_semver.py`

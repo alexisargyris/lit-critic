@@ -10,6 +10,9 @@ Covers:
 
 import pytest
 from lit_platform.runtime.utils import (
+    concatenate_scenes,
+    map_global_range_to_scene,
+    remap_location_line_range,
     number_lines,
     compute_line_mapping,
     adjust_finding_lines,
@@ -64,6 +67,55 @@ class TestNumberLines:
         lines = result.split('\n')
         assert lines[1] == "L002:   two spaces"
         assert lines[2] == "L003:     four spaces"
+
+
+class TestMultiSceneUtilities:
+    """Tests for multi-scene concatenation + line mapping utilities."""
+
+    def test_concatenate_scenes_builds_boundaries_and_map(self):
+        text, line_map = concatenate_scenes([
+            ("/book/01_scene.txt", "A1\nA2"),
+            ("/book/02_scene.txt", "B1"),
+        ])
+
+        assert "===== SCENE BOUNDARY: 01_scene.txt =====" in text
+        assert "===== SCENE BOUNDARY: 02_scene.txt =====" in text
+        assert len(line_map) == 2
+        assert line_map[0]["scene_path"] == "/book/01_scene.txt"
+        assert line_map[0]["global_start"] == 2
+        assert line_map[0]["global_end"] == 3
+        assert line_map[1]["scene_path"] == "/book/02_scene.txt"
+
+    def test_map_global_range_to_scene_returns_local_lines(self):
+        _, line_map = concatenate_scenes([
+            ("/book/01_scene.txt", "A1\nA2"),
+            ("/book/02_scene.txt", "B1\nB2"),
+        ])
+
+        scene_path, local_start, local_end = map_global_range_to_scene(line_map, 6, 7)
+        assert scene_path == "/book/02_scene.txt"
+        assert local_start == 1
+        assert local_end == 2
+
+    def test_remap_location_line_range_updates_first_range(self):
+        location = "L120-L124, starting 'She moved...'"
+        remapped = remap_location_line_range(location, 12, 16)
+        assert remapped == "L12-L16, starting 'She moved...'"
+
+    def test_remap_location_line_range_updates_single_line(self):
+        location = "L120, unclear beat"
+        remapped = remap_location_line_range(location, 7, None)
+        assert remapped == "L7, unclear beat"
+
+    def test_remap_location_line_range_leaves_text_without_l_range(self):
+        location = "Paragraph 3 near midpoint"
+        remapped = remap_location_line_range(location, 7, 9)
+        assert remapped == location
+
+    def test_remap_location_line_range_requires_line_start(self):
+        location = "L120-L124, starting 'She moved...'"
+        remapped = remap_location_line_range(location, None, None)
+        assert remapped == location
 
 
 class TestComputeLineMapping:

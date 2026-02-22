@@ -8,9 +8,114 @@ Provides:
 """
 
 import difflib
+import re
+from pathlib import Path
 from typing import Optional
 
 from .models import Finding
+
+
+SCENE_BOUNDARY_PREFIX = "===== SCENE BOUNDARY: "
+
+
+def concatenate_scenes(scene_docs: list[tuple[str, str]]) -> tuple[str, list[dict]]:
+    """Concatenate ordered scene docs into one analysis text with line mapping.
+
+    Returns ``(concatenated_text, line_map)`` where ``line_map`` entries contain
+    global/local line boundaries for each scene region in the concatenated text.
+    """
+    concatenated_lines: list[str] = []
+    line_map: list[dict] = []
+    global_line = 1
+
+    for idx, (scene_path, scene_text) in enumerate(scene_docs):
+        scene_name = Path(scene_path).name
+        marker = f"{SCENE_BOUNDARY_PREFIX}{scene_name} ====="
+        concatenated_lines.append(marker)
+        marker_line = global_line
+        global_line += 1
+
+        scene_lines = scene_text.splitlines()
+        local_start = 1 if scene_lines else None
+        local_end = len(scene_lines) if scene_lines else None
+        global_start = global_line if scene_lines else None
+        global_end = global_line + len(scene_lines) - 1 if scene_lines else None
+
+        if scene_lines:
+            concatenated_lines.extend(scene_lines)
+            global_line = global_end + 1
+
+        line_map.append(
+            {
+                "scene_path": scene_path,
+                "scene_name": scene_name,
+                "marker_line": marker_line,
+                "global_start": global_start,
+                "global_end": global_end,
+                "local_start": local_start,
+                "local_end": local_end,
+            }
+        )
+
+        if idx < len(scene_docs) - 1:
+            concatenated_lines.append("")
+            global_line += 1
+
+    return "\n".join(concatenated_lines), line_map
+
+
+def map_global_range_to_scene(
+    line_map: list[dict], line_start: Optional[int], line_end: Optional[int]
+) -> tuple[Optional[str], Optional[int], Optional[int]]:
+    """Map concatenated/global line range back to owning scene/local lines."""
+    if not line_map:
+        return None, line_start, line_end
+
+    if line_start is None:
+        return line_map[0].get("scene_path"), None, None
+
+    end = line_end if line_end is not None else line_start
+
+    for entry in line_map:
+        start = entry.get("global_start")
+        finish = entry.get("global_end")
+        if start is None or finish is None:
+            continue
+        if start <= line_start <= finish:
+            local_start = line_start - start + 1
+            local_end = end - start + 1
+            if local_end < local_start:
+                local_end = local_start
+            return entry.get("scene_path"), local_start, local_end if line_end is not None else None
+
+    return line_map[-1].get("scene_path"), line_start, line_end
+
+
+def remap_location_line_range(
+    location: str,
+    line_start: Optional[int],
+    line_end: Optional[int],
+) -> str:
+    """Rewrite the first ``Lx`` / ``Lx-Ly`` range in *location* to canonical lines.
+
+    This keeps any descriptive suffix intact, e.g.::
+
+        "L120-L124, starting '... '" -> "L12-L16, starting '... '"
+
+    If no line numbers are available, or no ``L``-prefixed range is present,
+    returns *location* unchanged.
+    """
+    if not location or line_start is None:
+        return location
+
+    target = f"L{line_start}"
+    if line_end is not None and line_end != line_start:
+        target = f"L{line_start}-L{line_end}"
+
+    pattern = re.compile(r"L\d+(?:\s*-\s*L?\d+)?")
+    if not pattern.search(location):
+        return location
+    return pattern.sub(target, location, count=1)
 
 
 def number_lines(text: str) -> str:

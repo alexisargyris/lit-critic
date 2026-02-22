@@ -168,7 +168,9 @@ class LearningCategoryItem extends vscode.TreeItem {
     ) {
         super(label, vscode.TreeItemCollapsibleState.Collapsed);
         this.contextValue = 'learningCategory';
-        this.description = `${count}`;
+        this.resourceUri = vscode.Uri.parse(
+            `lit-critic-count://learning-category/${encodeURIComponent(category)}?count=${count}`,
+        );
         this.iconPath = new vscode.ThemeIcon(iconName);
     }
 }

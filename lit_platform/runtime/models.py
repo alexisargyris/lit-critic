@@ -49,6 +49,7 @@ class Finding:
     location: str
     line_start: Optional[int] = None   # First line of the issue (1-based), from lens output
     line_end: Optional[int] = None     # Last line of the issue (1-based), from lens output
+    scene_path: Optional[str] = None   # Source scene file path (for multi-scene sessions)
     evidence: str = ""
     impact: str = ""
     options: list[str] = field(default_factory=list)
@@ -72,6 +73,7 @@ class Finding:
             "location": self.location,
             "line_start": self.line_start,
             "line_end": self.line_end,
+            "scene_path": self.scene_path,
             "evidence": self.evidence,
             "impact": self.impact,
             "options": self.options,
@@ -97,6 +99,7 @@ class Finding:
             location=data.get("location", ""),
             line_start=data.get("line_start"),
             line_end=data.get("line_end"),
+            scene_path=data.get("scene_path"),
             evidence=data.get("evidence", ""),
             impact=data.get("impact", ""),
             options=data.get("options", []),
@@ -139,6 +142,8 @@ class SessionState:
     scene_path: str
     project_path: Path
     indexes: dict[str, str]
+    scene_paths: list[str] = field(default_factory=list)
+    scene_line_map: list[dict] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     glossary_issues: list[str] = field(default_factory=list)
     learning: LearningData = field(default_factory=LearningData)
@@ -147,6 +152,10 @@ class SessionState:
     model: str = field(default_factory=lambda: DEFAULT_MODEL)
     discussion_model: Optional[str] = None  # None = use analysis model
     discussion_client: Optional["LLMClient"] = None  # None = use analysis client
+    index_context_hash: str = ""
+    index_context_stale: bool = False
+    index_rerun_prompted: bool = False
+    index_changed_files: list[str] = field(default_factory=list)
     db_conn: Optional[sqlite3.Connection] = field(default=None, repr=False)
     session_id: Optional[int] = None
 

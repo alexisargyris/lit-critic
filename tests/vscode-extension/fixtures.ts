@@ -200,6 +200,7 @@ export class MockTreeItem {
     iconPath?: any;
     command?: any;
     contextValue?: string;
+    resourceUri?: any;
 
     constructor(label: string, collapsibleState: number = 0) {
         this.label = label;
@@ -319,6 +320,9 @@ export function createFreshMockVscode() {
             dispose: () => {},
             visible: true,
         }),
+        registerFileDecorationProvider: (provider: any) => ({
+            dispose: () => {},
+        }),
         setStatusBarMessage: (text: string, hideAfterTimeoutOrThenable?: any) => ({
             dispose: () => {},
         }),
@@ -362,6 +366,17 @@ export function createFreshMockVscode() {
     },
     Uri: {
         file: (path: string) => ({ fsPath: path, toString: () => path }),
+        parse: (value: string) => {
+            const url = new URL(value);
+            const path = url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname;
+            return {
+                scheme: url.protocol.replace(':', ''),
+                authority: url.host,
+                path: `/${path}`,
+                query: url.search.startsWith('?') ? url.search.slice(1) : url.search,
+                toString: () => value,
+            };
+        },
     },
     Range: class {
         start: any;
@@ -410,6 +425,7 @@ export function createFreshMockVscode() {
         iconPath?: any;
         command?: any;
         contextValue?: string;
+        resourceUri?: any;
         
         constructor(label: string, collapsibleState?: number) {
             this.label = label;

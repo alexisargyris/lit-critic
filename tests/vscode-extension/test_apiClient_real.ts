@@ -304,6 +304,59 @@ describe('ApiClient (Real)', () => {
             assert.equal(capturedBody.scene_path_override, '/test/project/scenes/ch01.md');
         });
 
+        it('should send POST to /api/view-session with session_id', async () => {
+            let capturedBody: any;
+
+            mockHttp.request = (options: any, callback?: any) => {
+                assert.equal(options.method, 'POST');
+                assert.equal(options.path, '/api/view-session');
+
+                const req = new MockHttpRequest(new MockHttpResponse(200, sampleAnalysisSummary));
+                const originalWrite = req.write.bind(req);
+                req.write = (data: any) => {
+                    capturedBody = JSON.parse(data);
+                    originalWrite(data);
+                };
+                if (callback) {
+                    req.on('response', callback);
+                }
+                return req;
+            };
+
+            client = createClient();
+            await client.viewSession('/test/project', 7);
+
+            assert.equal(capturedBody.project_path, '/test/project');
+            assert.equal(capturedBody.session_id, 7);
+        });
+
+        it('should send POST to /api/view-session with scene_path_override', async () => {
+            let capturedBody: any;
+
+            mockHttp.request = (options: any, callback?: any) => {
+                assert.equal(options.method, 'POST');
+                assert.equal(options.path, '/api/view-session');
+
+                const req = new MockHttpRequest(new MockHttpResponse(200, sampleAnalysisSummary));
+                const originalWrite = req.write.bind(req);
+                req.write = (data: any) => {
+                    capturedBody = JSON.parse(data);
+                    originalWrite(data);
+                };
+                if (callback) {
+                    req.on('response', callback);
+                }
+                return req;
+            };
+
+            client = createClient();
+            await client.viewSession('/test/project', 7, undefined, '/test/project/scenes/ch01.md');
+
+            assert.equal(capturedBody.project_path, '/test/project');
+            assert.equal(capturedBody.session_id, 7);
+            assert.equal(capturedBody.scene_path_override, '/test/project/scenes/ch01.md');
+        });
+
         it('should recover from scene_path_not_found in resumeWithRecovery', async () => {
             const capturedBodies: any[] = [];
             let callCount = 0;
@@ -383,6 +436,54 @@ describe('ApiClient (Real)', () => {
 
             client = createClient();
             const result = await client.resumeSessionByIdWithRecovery(
+                '/test/project',
+                7,
+                undefined,
+                async () => '/new/path/ch01.md'
+            );
+
+            assert.equal(callCount, 2);
+            assert.equal(capturedBodies[0].project_path, '/test/project');
+            assert.equal(capturedBodies[0].session_id, 7);
+            assert.equal(capturedBodies[1].session_id, 7);
+            assert.equal(capturedBodies[1].scene_path_override, '/new/path/ch01.md');
+            assert.equal(result.scene_name, sampleAnalysisSummary.scene_name);
+        });
+
+        it('should recover from scene_path_not_found in viewSessionWithRecovery', async () => {
+            const capturedBodies: any[] = [];
+            let callCount = 0;
+
+            mockHttp.request = (options: any, callback?: any) => {
+                callCount += 1;
+                assert.equal(options.method, 'POST');
+                assert.equal(options.path, '/api/view-session');
+
+                const response = callCount === 1
+                    ? new MockHttpResponse(409, {
+                        detail: {
+                            code: 'scene_path_not_found',
+                            saved_scene_path: '/old/path/ch01.md',
+                            attempted_scene_path: '/old/path/ch01.md',
+                        },
+                    })
+                    : new MockHttpResponse(200, sampleAnalysisSummary);
+
+                const req = new MockHttpRequest(response);
+                const originalWrite = req.write.bind(req);
+                req.write = (data: any) => {
+                    capturedBodies.push(JSON.parse(data));
+                    originalWrite(data);
+                };
+
+                if (callback) {
+                    req.on('response', callback);
+                }
+                return req;
+            };
+
+            client = createClient();
+            const result = await client.viewSessionWithRecovery(
                 '/test/project',
                 7,
                 undefined,

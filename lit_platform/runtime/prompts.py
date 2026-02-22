@@ -2,7 +2,7 @@
 Prompt templates for the lit-critic lenses and coordinator.
 """
 
-from .utils import number_lines
+from .utils import number_lines, remap_location_line_range
 
 
 def get_lens_prompt(lens_name: str, scene: str, indexes: dict[str, str]) -> str:
@@ -435,6 +435,22 @@ def get_discussion_system_prompt(finding, scene_content: str, prior_outcomes: st
 Take these into account. Do not repeat arguments the author has already addressed in prior findings.
 """
 
+    canonical_location = remap_location_line_range(
+        finding.location,
+        finding.line_start,
+        finding.line_end,
+    )
+    if not canonical_location and finding.line_start is not None:
+        canonical_location = f"L{finding.line_start}"
+        if finding.line_end is not None and finding.line_end != finding.line_start:
+            canonical_location = f"L{finding.line_start}-L{finding.line_end}"
+
+    line_range = "not specified"
+    if finding.line_start is not None:
+        line_range = f"L{finding.line_start}"
+        if finding.line_end and finding.line_end != finding.line_start:
+            line_range += f"-L{finding.line_end}"
+
     return f"""You are an editorial critic in a multi-turn discussion with the author about a specific finding from your review.
 
 ## THE FINDING BEING DISCUSSED
@@ -442,8 +458,8 @@ Take these into account. Do not repeat arguments the author has already addresse
 Number: {finding.number}
 Severity: {finding.severity}
 Lens: {finding.lens}
-Location: {finding.location}
-Line range: {f"L{finding.line_start}" + (f"-L{finding.line_end}" if finding.line_end and finding.line_end != finding.line_start else "") if finding.line_start else "not specified"}
+Location: {canonical_location}
+Line range: {line_range}
 Evidence: {finding.evidence}
 Impact: {finding.impact}
 Options: {', '.join(finding.options)}

@@ -21,10 +21,16 @@ const SEVERITY_MAP: Record<string, vscode.DiagnosticSeverity> = {
 export class DiagnosticsProvider implements vscode.Disposable {
     private collection: vscode.DiagnosticCollection;
     private _scenePath: string | null = null;
+    private _scenePaths: string[] = [];
 
-    /** The scene file path currently being reviewed (read-only). */
+    /** The primary scene file path currently being reviewed (read-only). */
     get scenePath(): string | null {
         return this._scenePath;
+    }
+
+    /** All scene file paths in the current multi-scene session. */
+    get scenePaths(): string[] {
+        return this._scenePaths;
     }
 
     constructor() {
@@ -32,10 +38,13 @@ export class DiagnosticsProvider implements vscode.Disposable {
     }
 
     /**
-     * Set the scene file being reviewed. Diagnostics will be attached to this URI.
+     * Set the scene file(s) being reviewed.
+     * For multi-scene sessions, pass all scene paths so diagnostics can be
+     * distributed across the correct URIs.
      */
-    setScenePath(scenePath: string): void {
+    setScenePath(scenePath: string, scenePaths?: string[]): void {
         this._scenePath = scenePath;
+        this._scenePaths = scenePaths && scenePaths.length > 0 ? scenePaths : [scenePath];
     }
 
     /**
@@ -53,6 +62,7 @@ export class DiagnosticsProvider implements vscode.Disposable {
 
     /**
      * Update diagnostics from a full list of findings.
+     * Groups findings by their scene_path and sets diagnostics per URI.
      * Call this after analysis completes or after any finding status change.
      */
     updateFromFindings(findings: Finding[]): void {
@@ -60,8 +70,8 @@ export class DiagnosticsProvider implements vscode.Disposable {
             return;
         }
 
-        const uri = vscode.Uri.file(this.scenePath);
-        const diagnostics: vscode.Diagnostic[] = [];
+        // Group findings by scene_path (multi-scene support)
+        const grouped = new Map<string, vscode.Diagnostic[]>();
 
         for (const finding of findings) {
             // Skip findings that have been resolved
@@ -70,11 +80,21 @@ export class DiagnosticsProvider implements vscode.Disposable {
                 continue;
             }
 
-            const diagnostic = this.findingToDiagnostic(finding);
-            diagnostics.push(diagnostic);
+            const targetPath = finding.scene_path || this.scenePath;
+            if (!grouped.has(targetPath)) {
+                grouped.set(targetPath, []);
+            }
+            grouped.get(targetPath)!.push(this.findingToDiagnostic(finding));
         }
 
-        this.collection.set(uri, diagnostics);
+        // Clear previous diagnostics for all known scene paths
+        this.collection.clear();
+
+        // Set diagnostics per URI
+        for (const [filePath, diagnostics] of grouped) {
+            const uri = vscode.Uri.file(filePath);
+            this.collection.set(uri, diagnostics);
+        }
     }
 
     /**
@@ -85,7 +105,8 @@ export class DiagnosticsProvider implements vscode.Disposable {
             return;
         }
 
-        const uri = vscode.Uri.file(this.scenePath);
+        const targetPath = finding.scene_path || this.scenePath;
+        const uri = vscode.Uri.file(targetPath);
         const existing = this.collection.get(uri) || [];
         const updated: vscode.Diagnostic[] = [];
 
@@ -109,16 +130,32 @@ export class DiagnosticsProvider implements vscode.Disposable {
 
     /**
      * Remove the diagnostic for a specific finding (when accepted/rejected/withdrawn).
+     * Searches all tracked scene URIs for the finding.
      */
-    removeFinding(findingNumber: number): void {
+    removeFinding(findingNumber: number, findingScenePath?: string | null): void {
         if (!this.scenePath) {
             return;
         }
 
-        const uri = vscode.Uri.file(this.scenePath);
-        const existing = this.collection.get(uri) || [];
-        const filtered = [...existing].filter(d => d.code !== findingNumber);
-        this.collection.set(uri, filtered);
+        // If we know which file the finding belongs to, target that URI directly
+        if (findingScenePath) {
+            const uri = vscode.Uri.file(findingScenePath);
+            const existing = this.collection.get(uri) || [];
+            const filtered = [...existing].filter(d => d.code !== findingNumber);
+            this.collection.set(uri, filtered);
+            return;
+        }
+
+        // Otherwise search all scene paths
+        for (const scenePath of this._scenePaths) {
+            const uri = vscode.Uri.file(scenePath);
+            const existing = this.collection.get(uri) || [];
+            const filtered = [...existing].filter(d => d.code !== findingNumber);
+            if (filtered.length !== existing.length) {
+                this.collection.set(uri, filtered);
+                break;
+            }
+        }
     }
 
     /**
@@ -127,6 +164,7 @@ export class DiagnosticsProvider implements vscode.Disposable {
     clear(): void {
         this.collection.clear();
         this._scenePath = null;
+        this._scenePaths = [];
     }
 
     dispose(): void {

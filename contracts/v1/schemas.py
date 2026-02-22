@@ -33,6 +33,7 @@ class FindingContract(_StrictModel):
     location: str
     line_start: int | None = None
     line_end: int | None = None
+    scene_path: str | None = None
     evidence: str
     impact: str
     options: list[str] = Field(default_factory=list)

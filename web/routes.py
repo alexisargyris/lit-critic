@@ -44,13 +44,20 @@ session_mgr = WebSessionManager()
 # --- Request models ---
 
 class AnalyzeRequest(BaseModel):
-    scene_path: str
+    scene_path: Optional[str] = None
+    scene_paths: Optional[list[str]] = None
     project_path: str
     api_key: Optional[str] = None
     discussion_api_key: Optional[str] = None
     model: Optional[str] = None
     discussion_model: Optional[str] = None
     lens_preferences: Optional[dict] = None
+
+
+class RerunAnalyzeRequest(BaseModel):
+    project_path: str
+    api_key: Optional[str] = None
+    discussion_api_key: Optional[str] = None
 
 
 class ResumeRequest(BaseModel):
@@ -61,6 +68,14 @@ class ResumeRequest(BaseModel):
 
 
 class ResumeSessionByIdRequest(BaseModel):
+    project_path: str
+    session_id: int
+    api_key: Optional[str] = None
+    discussion_api_key: Optional[str] = None
+    scene_path_override: Optional[str] = None
+
+
+class ViewSessionRequest(BaseModel):
     project_path: str
     session_id: int
     api_key: Optional[str] = None
@@ -312,14 +327,62 @@ async def start_analysis(req: AnalyzeRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
+    selected_scene_paths = req.scene_paths or ([req.scene_path] if req.scene_path else [])
+    if not selected_scene_paths:
+        raise HTTPException(status_code=400, detail="scene_path or scene_paths is required")
+
     try:
         result = await session_mgr.start_analysis(
-            req.scene_path,
+            selected_scene_paths[0],
             req.project_path,
             analysis_key,
             model=model,
             discussion_model=discussion_model,
             discussion_api_key=discussion_key,
+            scene_paths=selected_scene_paths,
+            lens_preferences=lens_preferences,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    return result
+
+
+@router.post("/analyze/rerun")
+async def rerun_analysis(req: RerunAnalyzeRequest):
+    """Re-run analysis for the active session's scene set with current settings."""
+    _ensure_repo_preflight_ready()
+
+    if not session_mgr.state:
+        raise HTTPException(status_code=404, detail="No active session")
+
+    model = _normalise_model_name(session_mgr.state.model)
+    discussion_model = _normalise_optional_model_name(session_mgr.state.discussion_model)
+
+    analysis_key, discussion_key = _resolve_analysis_and_discussion_keys(
+        model,
+        discussion_model,
+        req.api_key,
+        req.discussion_api_key,
+    )
+
+    scene_paths = session_mgr.state.scene_paths or [session_mgr.state.scene_path]
+    lens_preferences = session_mgr.state.lens_preferences
+
+    try:
+        result = await session_mgr.start_analysis(
+            scene_paths[0],
+            req.project_path,
+            analysis_key,
+            model=model,
+            discussion_model=discussion_model,
+            discussion_api_key=discussion_key,
+            scene_paths=scene_paths,
             lens_preferences=lens_preferences,
         )
     except FileNotFoundError as e:
@@ -484,6 +547,57 @@ async def resume_session_by_id(req: ResumeSessionByIdRequest):
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return result
+
+
+@router.post("/view-session")
+async def view_session(req: ViewSessionRequest):
+    """Load any session (active, completed, or abandoned) for viewing/interaction."""
+    _ensure_repo_preflight_ready()
+
+    project = Path(req.project_path)
+    if not project.exists():
+        raise HTTPException(status_code=404, detail="Project directory not found")
+
+    detail = get_session_detail(project, req.session_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail=f"Session {req.session_id} not found")
+
+    saved_model = _normalise_model_name(detail.get("model"), default=DEFAULT_MODEL)
+    saved_discussion_model = _normalise_optional_model_name(detail.get("discussion_model"))
+
+    analysis_key, discussion_key = _resolve_analysis_and_discussion_keys(
+        saved_model,
+        saved_discussion_model,
+        req.api_key,
+        req.discussion_api_key,
+    )
+
+    try:
+        result = await session_mgr.load_session_for_viewing(
+            req.project_path,
+            req.session_id,
+            analysis_key,
+            discussion_api_key=discussion_key,
+            scene_path_override=req.scene_path_override,
+        )
+    except ResumeScenePathError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "scene_path_not_found",
+                "message": str(e),
+                "saved_scene_path": e.saved_scene_path,
+                "attempted_scene_path": e.attempted_scene_path,
+                "project_path": e.project_path,
+                "override_provided": e.override_provided,
+            },
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

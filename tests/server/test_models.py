@@ -147,7 +147,23 @@ class TestFinding:
         result = finding.to_dict(include_state=False)
         assert result["line_start"] == 5
         assert result["line_end"] == 10
+        assert result["scene_path"] is None
         assert result["stale"] is False
+
+    def test_scene_path_roundtrip(self):
+        """to_dict/from_dict should preserve finding.scene_path."""
+        original = Finding(
+            number=1,
+            severity="major",
+            lens="prose",
+            location="P1",
+            scene_path="/book/ch01-scene02.md",
+        )
+
+        exported = original.to_dict(include_state=True)
+        restored = Finding.from_dict(exported)
+
+        assert restored.scene_path == "/book/ch01-scene02.md"
 
     def test_line_fields_from_dict(self):
         """from_dict should restore line_start, line_end, and stale."""
@@ -240,6 +256,8 @@ class TestSessionState:
         assert state.findings == []
         assert state.glossary_issues == []
         assert state.discussion_history == []
+        assert state.scene_paths == []
+        assert state.scene_line_map == []
         assert isinstance(state.learning, LearningData)
     
     def test_custom_learning(self, mock_anthropic_client, temp_project_dir, sample_indexes, sample_learning_data):
@@ -255,3 +273,21 @@ class TestSessionState:
         
         assert state.learning.project_name == "Test Novel"
         assert state.learning.review_count == 3
+
+    def test_scene_paths_and_line_map_custom_values(self, mock_anthropic_client, temp_project_dir, sample_indexes):
+        """SessionState should accept precomputed multi-scene metadata."""
+        state = SessionState(
+            client=mock_anthropic_client,
+            scene_content="combined",
+            scene_path="/test/scene01.md",
+            project_path=temp_project_dir,
+            indexes=sample_indexes,
+            scene_paths=["/test/scene01.md", "/test/scene02.md"],
+            scene_line_map=[
+                {"scene_path": "/test/scene01.md", "global_start": 2, "global_end": 10},
+                {"scene_path": "/test/scene02.md", "global_start": 12, "global_end": 20},
+            ],
+        )
+
+        assert state.scene_paths == ["/test/scene01.md", "/test/scene02.md"]
+        assert len(state.scene_line_map) == 2

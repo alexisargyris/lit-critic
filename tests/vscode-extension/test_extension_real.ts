@@ -17,6 +17,7 @@ describe('Extension (Real)', () => {
     let mockServerManager: any;
     let mockApiClient: any;
     let mockFindingsTreeProvider: any;
+    let mockFindingsDecorationProvider: any;
     let mockSessionsTreeProvider: any;
     let mockLearningTreeProvider: any;
     let mockDiagnosticsProvider: any;
@@ -30,6 +31,9 @@ describe('Extension (Real)', () => {
 
     beforeEach(() => {
         mockVscode = createFreshMockVscode();
+        if (!mockVscode.workspace.onDidChangeConfiguration) {
+            mockVscode.workspace.onDidChangeConfiguration = () => ({ dispose: () => {} });
+        }
         
         // Mock all internal modules with spy classes
         mockServerManager = class MockServerManager {
@@ -62,18 +66,38 @@ describe('Extension (Real)', () => {
         };
         
         mockFindingsTreeProvider = class MockFindingsTreeProvider {
-            setFindings() {}
-            setCurrentIndex() {}
+            currentFindingItem: any;
+            setFindings(_findings: any[], _scenePath: string, currentIndex: number = -1) {
+                this.currentFindingItem = currentIndex >= 0 ? { id: `finding:${currentIndex + 1}` } : undefined;
+            }
+            setCurrentIndex(index: number) {
+                this.currentFindingItem = { id: `finding:${index + 1}` };
+            }
             clear() {}
             updateFinding() {}
+            getCurrentFindingItem() {
+                return this.currentFindingItem;
+            }
+        };
+
+        mockFindingsDecorationProvider = class MockFindingsDecorationProvider {
+            fireChange() {}
         };
         
         mockSessionsTreeProvider = class MockSessionsTreeProvider {
+            currentSessionItem: any;
             setApiClient() {}
             setProjectPath() {}
             async refresh() {}
-            setCurrentSession() {}
-            setCurrentSessionByScenePath() {}
+            setCurrentSession(sessionId: number | null) {
+                this.currentSessionItem = sessionId === null ? undefined : { id: `session:${sessionId}` };
+            }
+            setCurrentSessionByScenePath(scenePath?: string) {
+                this.currentSessionItem = scenePath ? { id: 'session:auto' } : undefined;
+            }
+            getCurrentSessionItem() {
+                return this.currentSessionItem;
+            }
         };
         
         mockLearningTreeProvider = class MockLearningTreeProvider {
@@ -137,7 +161,10 @@ describe('Extension (Real)', () => {
             'vscode': mockVscode,
             './serverManager': { ServerManager: mockServerManager },
             './apiClient': { ApiClient: mockApiClient },
-            './findingsTreeProvider': { FindingsTreeProvider: mockFindingsTreeProvider },
+            './findingsTreeProvider': {
+                FindingsTreeProvider: mockFindingsTreeProvider,
+                FindingsDecorationProvider: mockFindingsDecorationProvider,
+            },
             './sessionsTreeProvider': { SessionsTreeProvider: mockSessionsTreeProvider },
             './learningTreeProvider': { LearningTreeProvider: mockLearningTreeProvider },
             './diagnosticsProvider': { DiagnosticsProvider: mockDiagnosticsProvider },
@@ -153,7 +180,7 @@ describe('Extension (Real)', () => {
     }
 
     describe('activation', () => {
-        it('should register all 19 commands', async () => {
+        it('should register all commands', async () => {
             const registeredCommands: string[] = [];
             
             mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
@@ -179,6 +206,7 @@ describe('Extension (Real)', () => {
             assert.ok(registeredCommands.includes('literaryCritic.selectFinding'));
             assert.ok(registeredCommands.includes('literaryCritic.reviewFinding'));
             assert.ok(registeredCommands.includes('literaryCritic.clearSession'));
+            assert.ok(registeredCommands.includes('literaryCritic.rerunAnalysisWithUpdatedIndexes'));
             assert.ok(registeredCommands.includes('literaryCritic.selectModel'));
             assert.ok(registeredCommands.includes('literaryCritic.stopServer'));
             assert.ok(registeredCommands.includes('literaryCritic.refreshSessions'));
@@ -189,8 +217,7 @@ describe('Extension (Real)', () => {
             assert.ok(registeredCommands.includes('literaryCritic.resetLearning'));
             assert.ok(registeredCommands.includes('literaryCritic.deleteLearningEntry'));
             
-            // Expect 18 commands - the extension.ts file may have 18 not 19
-            assert.ok(registeredCommands.length >= 18, `Expected at least 18 commands, got ${registeredCommands.length}`);
+            assert.ok(registeredCommands.length >= 19, `Expected at least 19 commands, got ${registeredCommands.length}`);
         });
 
         it('should create all UI components', async () => {
@@ -230,6 +257,216 @@ describe('Extension (Real)', () => {
     });
 
     describe('auto-start behavior', () => {
+        it('should use native TreeView reveal selection for current session and finding during auto-load', async () => {
+            const sessionRevealCalls: Array<{ item: any; options: any }> = [];
+            const findingRevealCalls: Array<{ item: any; options: any }> = [];
+
+            mockVscode.window.createTreeView = (viewId: string, _options: any) => {
+                const reveal = async (item: any, options: any) => {
+                    if (viewId === 'literaryCritic.sessions') {
+                        sessionRevealCalls.push({ item, options });
+                    }
+                    if (viewId === 'literaryCritic.findings') {
+                        findingRevealCalls.push({ item, options });
+                    }
+                };
+                return { dispose: () => {}, reveal, visible: true };
+            };
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) {
+                    return { ok: true };
+                }
+                async getSession() {
+                    return { active: true, scene_path: '/test/repo/scene-a.txt' };
+                }
+                async resumeWithRecovery() {
+                    return {
+                        scene_path: '/test/repo/scene-a.txt',
+                        scene_name: 'scene-a.txt',
+                        project_path: '/test/repo',
+                        total_findings: 1,
+                        current_index: 0,
+                        glossary_issues: [],
+                        counts: { critical: 0, major: 1, minor: 0 },
+                        lens_counts: { prose: { critical: 0, major: 1, minor: 0 } },
+                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
+                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
+                        findings_status: [
+                            {
+                                number: 1,
+                                severity: 'major',
+                                lens: 'prose',
+                                status: 'pending',
+                                location: 'L1',
+                                evidence: 'example',
+                                line_start: 1,
+                                line_end: 1,
+                            },
+                        ],
+                    };
+                }
+                async getCurrentFinding() {
+                    return { complete: true };
+                }
+            };
+
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
+            mockVscode.workspace.workspaceFolders = [
+                { uri: { fsPath: '/test/repo' } },
+            ];
+
+            mockFs.existsSync = (filePath: string) => {
+                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+            };
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+
+            assert.ok(sessionRevealCalls.length > 0, 'Expected native session TreeView reveal call');
+            assert.ok(findingRevealCalls.length > 0, 'Expected native finding TreeView reveal call');
+            assert.equal(sessionRevealCalls[0].options?.select, true);
+            assert.equal(findingRevealCalls[0].options?.select, true);
+            assert.equal(sessionRevealCalls[0].options?.focus, false);
+            assert.equal(findingRevealCalls[0].options?.focus, false);
+        });
+
+        it('should show an immediate startup hint before startup progress notification', async () => {
+            const timeline: string[] = [];
+
+            mockVscode.window.setStatusBarMessage = (text: string) => {
+                timeline.push(`status:${text}`);
+                return { dispose: () => {} };
+            };
+            mockVscode.window.withProgress = async (options: any, task: any) => {
+                timeline.push(`progress:${options?.title || ''}`);
+                return task(
+                    { report: (_value: any) => {} },
+                    {
+                        isCancellationRequested: false,
+                        onCancellationRequested: (_listener: any) => ({ dispose: () => {} }),
+                    },
+                );
+            };
+
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
+            mockVscode.workspace.workspaceFolders = [
+                { uri: { fsPath: '/test/repo' } },
+            ];
+
+            mockFs.existsSync = (filePath: string) => {
+                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+            };
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+
+            const hintIndex = timeline.indexOf('status:lit-critic: Preparing startup...');
+            const progressIndex = timeline.indexOf('progress:lit-critic: Starting server');
+
+            assert.ok(hintIndex >= 0, 'Expected an immediate startup hint status message');
+            assert.ok(progressIndex >= 0, 'Expected startup progress notification to be shown');
+            assert.ok(
+                hintIndex < progressIndex,
+                'Expected startup hint to appear before startup progress notification',
+            );
+        });
+
+        it('should reset status bar to ready after startup completes', async () => {
+            const statusTransitions: string[] = [];
+
+            mockStatusBar = class MockStatusBar {
+                setReady() { statusTransitions.push('ready'); }
+                setAnalyzing(message?: string) { statusTransitions.push(`analyzing:${message || ''}`); }
+                setProgress() {}
+                setComplete() {}
+                setError() {}
+                dispose() {}
+            };
+
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
+            mockVscode.workspace.workspaceFolders = [
+                { uri: { fsPath: '/test/repo' } },
+            ];
+
+            mockFs.existsSync = (filePath: string) => {
+                return filePath.includes('lit-critic-web.py');
+            };
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+
+            assert.ok(
+                statusTransitions.includes('analyzing:Starting server...'),
+                'Expected startup to set analyzing state',
+            );
+            assert.equal(
+                statusTransitions[statusTransitions.length - 1],
+                'ready',
+                'Expected status bar to return to ready after startup',
+            );
+        });
+
+        it('should show startup progress notification when auto-starting server', async () => {
+            const progressTitles: string[] = [];
+
+            mockVscode.window.withProgress = async (options: any, task: any) => {
+                progressTitles.push(options?.title || '');
+                return task(
+                    { report: (_value: any) => {} },
+                    {
+                        isCancellationRequested: false,
+                        onCancellationRequested: (_listener: any) => ({ dispose: () => {} }),
+                    },
+                );
+            };
+
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
+            mockVscode.workspace.workspaceFolders = [
+                { uri: { fsPath: '/test/repo' } },
+            ];
+
+            mockFs.existsSync = (filePath: string) => {
+                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+            };
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+
+            assert.ok(
+                progressTitles.includes('lit-critic: Starting server'),
+                'Expected startup notification progress to be shown during auto-start',
+            );
+        });
+
         it('should run repo-path recovery prompt during activation when configured repoPath is invalid', async () => {
             let serverStarted = false;
             let openedFolderDialog = false;
@@ -573,6 +810,204 @@ describe('Extension (Real)', () => {
     });
 
     describe('command handlers', () => {
+        it('should show immediate startup hint when analyze triggers lazy server start', async () => {
+            let analyzeCallback: any;
+            const statusMessages: string[] = [];
+
+            mockVscode.window.setStatusBarMessage = (text: string) => {
+                statusMessages.push(text);
+                return { dispose: () => {} };
+            };
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) {
+                    return { ok: true };
+                }
+                async getSession() {
+                    return { active: false };
+                }
+                async checkSession() {
+                    return { exists: false };
+                }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                        lens_presets: {
+                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1 },
+                        },
+                    };
+                }
+                async analyze() {
+                    return {
+                        scene_path: '/test/repo/scene-a.txt',
+                        scene_name: 'scene-a.txt',
+                        project_path: '/test/repo',
+                        total_findings: 0,
+                        current_index: 0,
+                        glossary_issues: [],
+                        counts: { critical: 0, major: 0, minor: 0 },
+                        lens_counts: {},
+                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
+                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
+                        findings_status: [],
+                    };
+                }
+                streamAnalysisProgress(_onEvent: any, onDone: any, _onError: any) {
+                    setTimeout(() => onDone(), 0);
+                    return () => {};
+                }
+                async getCurrentFinding() {
+                    return { complete: true };
+                }
+            };
+
+            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
+                if (cmd === 'literaryCritic.analyze') {
+                    analyzeCallback = callback;
+                }
+                return { dispose: () => {} };
+            };
+
+            mockVscode.window.activeTextEditor = undefined;
+            mockVscode.window.visibleTextEditors = [];
+            mockVscode.window.showOpenDialog = async () => [{ fsPath: '/test/repo/scene-a.txt' }];
+            mockVscode.window.showTextDocument = async () => ({
+                document: { uri: { fsPath: '/test/repo/scene-a.txt' } },
+                viewColumn: 1,
+            });
+
+            mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/repo' } }];
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return false;
+                    if (key === 'lensPreset') return 'balanced';
+                    return defaultValue;
+                },
+                update: async () => {},
+                inspect: () => ({ workspaceValue: undefined, globalValue: undefined, workspaceFolderValue: undefined }),
+            });
+
+            mockFs.existsSync = (filePath: string) => {
+                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+            };
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+            await analyzeCallback();
+
+            assert.ok(
+                statusMessages.includes('lit-critic: Preparing startup...'),
+                'Expected analyze-triggered startup to show immediate startup hint',
+            );
+        });
+
+        it('should show analysis startup progress notification during analyze handoff', async () => {
+            let analyzeCallback: any;
+            const progressTitles: string[] = [];
+
+            mockVscode.window.withProgress = async (options: any, task: any) => {
+                progressTitles.push(options?.title || '');
+                return task(
+                    { report: (_value: any) => {} },
+                    {
+                        isCancellationRequested: false,
+                        onCancellationRequested: (_listener: any) => ({ dispose: () => {} }),
+                    },
+                );
+            };
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) {
+                    return { ok: true };
+                }
+                async getSession() {
+                    return { active: false };
+                }
+                async checkSession() {
+                    return { exists: false };
+                }
+                async listSessions() {
+                    return { sessions: [] };
+                }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                        lens_presets: {
+                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1 },
+                        },
+                    };
+                }
+                async analyze() {
+                    return {
+                        scene_path: '/test/repo/scene-a.txt',
+                        scene_name: 'scene-a.txt',
+                        project_path: '/test/repo',
+                        total_findings: 0,
+                        current_index: 0,
+                        glossary_issues: [],
+                        counts: { critical: 0, major: 0, minor: 0 },
+                        lens_counts: {},
+                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
+                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
+                        findings_status: [],
+                    };
+                }
+                streamAnalysisProgress(onEvent: any, onDone: any, _onError: any) {
+                    setTimeout(() => {
+                        onEvent({ type: 'status', message: 'Starting analysis...' });
+                        onDone();
+                    }, 0);
+                    return () => {};
+                }
+                async getCurrentFinding() {
+                    return { complete: true };
+                }
+            };
+
+            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
+                if (cmd === 'literaryCritic.analyze') {
+                    analyzeCallback = callback;
+                }
+                return { dispose: () => {} };
+            };
+
+            mockVscode.window.activeTextEditor = undefined;
+            mockVscode.window.visibleTextEditors = [];
+            mockVscode.window.showOpenDialog = async () => [{ fsPath: '/test/repo/scene-a.txt' }];
+            mockVscode.window.showTextDocument = async () => ({
+                document: { uri: { fsPath: '/test/repo/scene-a.txt' } },
+                viewColumn: 1,
+            });
+
+            mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/repo' } }];
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    if (key === 'lensPreset') return 'balanced';
+                    return defaultValue;
+                },
+                update: async () => {},
+                inspect: () => ({ workspaceValue: undefined, globalValue: undefined, workspaceFolderValue: undefined }),
+            });
+
+            mockFs.existsSync = (filePath: string) => {
+                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+            };
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+            await analyzeCallback();
+
+            assert.ok(
+                progressTitles.includes('lit-critic: Starting analysis'),
+                'Expected analysis startup notification progress to be shown',
+            );
+        });
+
         it('should disambiguate resume choices when multiple active sessions exist', async () => {
             let analyzeCallback: any;
             const quickPickCalls: Array<{ items: any[]; options: any }> = [];
@@ -937,9 +1372,10 @@ describe('Extension (Real)', () => {
             fs.rmSync(validRepo, { recursive: true, force: true });
         });
 
-        it('should show a clear error when analyze runs with no open file-backed editor', async () => {
+        it('should show cancellation error when analyze picker is dismissed', async () => {
             let analyzeCallback: any;
             const errorMessages: string[] = [];
+            let openDialogCalls = 0;
             const validRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'lit-critic-analyze-repo-'));
             fs.writeFileSync(path.join(validRepo, 'lit-critic-web.py'), 'print("ok")', 'utf8');
 
@@ -954,6 +1390,10 @@ describe('Extension (Real)', () => {
                 errorMessages.push(message);
                 return undefined;
             };
+            mockVscode.window.showOpenDialog = async () => {
+                openDialogCalls += 1;
+                return [];
+            };
 
             mockVscode.workspace.workspaceFolders = [
                 { uri: { fsPath: '/test/repo' } },
@@ -966,6 +1406,7 @@ describe('Extension (Real)', () => {
                     return defaultValue;
                 },
                 update: async () => {},
+                inspect: () => ({ workspaceValue: undefined, globalValue: undefined, workspaceFolderValue: undefined }),
             });
 
             // No active editor and no visible editors.
@@ -982,18 +1423,66 @@ describe('Extension (Real)', () => {
             await analyzeCallback();
 
             assert.ok(
-                errorMessages.includes('lit-critic: No open file found to analyze. Open your scene file and try again.'),
-                'Expected analyze command to show the no-open-file message',
+                errorMessages.includes('lit-critic: No scene file selected.'),
+                'Expected analyze command to show picker-cancel message',
             );
+            assert.equal(openDialogCalls, 1, 'Expected analyze to show file picker when no editor is available');
 
             fs.rmSync(validRepo, { recursive: true, force: true });
         });
 
-        it('should activate a visible file-backed editor when no active editor exists', async () => {
+        it('should open all selected files from picker for multi-scene analysis', async () => {
             let analyzeCallback: any;
             const showTextDocumentCalls: Array<{ docOrUri: any; options: any }> = [];
+            let showOpenDialogCalls = 0;
+            let analyzedScenePaths: string[] | undefined;
             const validRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'lit-critic-analyze-repo-'));
             fs.writeFileSync(path.join(validRepo, 'lit-critic-web.py'), 'print("ok")', 'utf8');
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) {
+                    return { ok: true };
+                }
+                async getSession() {
+                    return { active: false };
+                }
+                async checkSession() {
+                    return { exists: false };
+                }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                        lens_presets: {
+                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1 },
+                        },
+                    };
+                }
+                async analyze(_scenePath: string, _projectPath: string, _model: string, _discussionModel: string | undefined, _apiKey: string | undefined, _lensPrefs: any, scenePaths?: string[]) {
+                    analyzedScenePaths = scenePaths;
+                    return {
+                        scene_path: '/test/repo/scene-picked.md',
+                        scene_name: 'scene-picked.md',
+                        project_path: '/test/repo',
+                        total_findings: 0,
+                        current_index: 0,
+                        glossary_issues: [],
+                        counts: { critical: 0, major: 0, minor: 0 },
+                        lens_counts: {},
+                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
+                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
+                        findings_status: [],
+                    };
+                }
+                streamAnalysisProgress(_onEvent: any, onDone: any, _onError: any) {
+                    setTimeout(() => onDone(), 0);
+                    return () => {};
+                }
+                async getCurrentFinding() {
+                    return { complete: true };
+                }
+            };
 
             mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
                 if (cmd === 'literaryCritic.analyze') {
@@ -1002,21 +1491,32 @@ describe('Extension (Real)', () => {
                 return { dispose: () => {} };
             };
 
-            const fallbackEditor = {
-                document: {
-                    uri: {
-                        scheme: 'file',
-                        fsPath: '/test/repo/scene01.md',
-                    },
-                },
-                viewColumn: 1,
+            const selectedFileUri = {
+                scheme: 'file',
+                fsPath: '/test/repo/scene-picked.md',
+            };
+            const selectedFileUri2 = {
+                scheme: 'file',
+                fsPath: '/test/repo/scene-picked-2.md',
             };
 
             mockVscode.window.activeTextEditor = undefined;
-            mockVscode.window.visibleTextEditors = [fallbackEditor];
+            mockVscode.window.visibleTextEditors = [];
+            mockVscode.window.showOpenDialog = async (options?: any) => {
+                showOpenDialogCalls += 1;
+                assert.equal(options?.canSelectFiles, true);
+                assert.equal(options?.canSelectFolders, false);
+                assert.equal(options?.canSelectMany, true);
+                return [selectedFileUri, selectedFileUri2];
+            };
             mockVscode.window.showTextDocument = async (docOrUri: any, options?: any) => {
                 showTextDocumentCalls.push({ docOrUri, options });
-                return fallbackEditor;
+                return {
+                    document: {
+                        uri: selectedFileUri,
+                    },
+                    viewColumn: 1,
+                };
             };
 
             mockVscode.workspace.workspaceFolders = [
@@ -1030,11 +1530,12 @@ describe('Extension (Real)', () => {
                     return defaultValue;
                 },
                 update: async () => {},
+                inspect: () => ({ workspaceValue: undefined, globalValue: undefined, workspaceFolderValue: undefined }),
             });
 
-            // Repo exists, but CANON.md does not — cmdAnalyze should stop after editor resolution.
+            // Repo and project marker exist so cmdAnalyze can proceed to scene picker.
             mockFs.existsSync = (filePath: string) => {
-                return filePath.includes('lit-critic-web.py');
+                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
             };
 
             loadExtension();
@@ -1042,8 +1543,157 @@ describe('Extension (Real)', () => {
 
             await analyzeCallback();
 
-            assert.ok(showTextDocumentCalls.length > 0, 'Expected a visible editor to be activated');
-            assert.equal(showTextDocumentCalls[0].docOrUri, fallbackEditor.document);
+            assert.equal(showOpenDialogCalls, 1, 'Expected a single picker invocation');
+            assert.equal(showTextDocumentCalls.length, 2, 'Expected all selected picker files to be opened');
+            assert.equal(showTextDocumentCalls[0].docOrUri, selectedFileUri);
+            assert.equal(showTextDocumentCalls[1].docOrUri, selectedFileUri2);
+            assert.deepEqual(
+                analyzedScenePaths,
+                ['/test/repo/scene-picked.md', '/test/repo/scene-picked-2.md'],
+                'Expected all selected scene paths to be sent to analyze()',
+            );
+
+            fs.rmSync(validRepo, { recursive: true, force: true });
+        });
+
+        it('should show file picker even when an active editor exists if user starts a new analysis', async () => {
+            let analyzeCallback: any;
+            let showOpenDialogCalls = 0;
+            let analyzedScenePath: string | undefined;
+            let analyzedScenePaths: string[] | undefined;
+            const validRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'lit-critic-analyze-repo-'));
+            fs.writeFileSync(path.join(validRepo, 'lit-critic-web.py'), 'print("ok")', 'utf8');
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) {
+                    return { ok: true };
+                }
+                async getSession() {
+                    return { active: false };
+                }
+                async checkSession() {
+                    return { exists: true, total_findings: 1, scene_path: '/test/repo/focused.md' };
+                }
+                async listSessions() {
+                    return {
+                        sessions: [
+                            {
+                                id: 99,
+                                status: 'active',
+                                scene_path: '/test/repo/focused.md',
+                                model: 'sonnet',
+                                created_at: '2026-02-17T18:00:00',
+                                total_findings: 1,
+                                accepted_count: 0,
+                                rejected_count: 0,
+                                withdrawn_count: 0,
+                            },
+                        ],
+                    };
+                }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                        lens_presets: {
+                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1 },
+                        },
+                    };
+                }
+                async analyze(scenePath: string, _projectPath: string, _model: string, _discussionModel: string | undefined, _apiKey: string | undefined, _lensPrefs: any, scenePaths?: string[]) {
+                    analyzedScenePath = scenePath;
+                    analyzedScenePaths = scenePaths;
+                    return {
+                        scene_path: scenePath,
+                        scene_name: 'picked.md',
+                        project_path: '/test/repo',
+                        total_findings: 0,
+                        current_index: 0,
+                        glossary_issues: [],
+                        counts: { critical: 0, major: 0, minor: 0 },
+                        lens_counts: {},
+                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
+                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
+                        findings_status: [],
+                    };
+                }
+                streamAnalysisProgress(_onEvent: any, onDone: any, _onError: any) {
+                    setTimeout(() => onDone(), 0);
+                    return () => {};
+                }
+                async getCurrentFinding() {
+                    return { complete: true };
+                }
+            };
+
+            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
+                if (cmd === 'literaryCritic.analyze') {
+                    analyzeCallback = callback;
+                }
+                return { dispose: () => {} };
+            };
+
+            const fallbackEditor = {
+                document: {
+                    uri: {
+                        scheme: 'file',
+                        fsPath: '/test/repo/focused.md',
+                    },
+                },
+                viewColumn: 1,
+            };
+
+            const selectedFileUri = {
+                scheme: 'file',
+                fsPath: '/test/repo/picked.md',
+            };
+
+            mockVscode.window.activeTextEditor = fallbackEditor;
+            mockVscode.window.visibleTextEditors = [fallbackEditor];
+            mockVscode.window.showQuickPick = async (items: any[]) => {
+                return items.find((item: any) => item?.label === 'Start new analysis') || items[1];
+            };
+            mockVscode.window.showOpenDialog = async () => {
+                showOpenDialogCalls += 1;
+                return [selectedFileUri];
+            };
+            mockVscode.window.showTextDocument = async (_docOrUri: any) => {
+                return {
+                    document: {
+                        uri: selectedFileUri,
+                    },
+                    viewColumn: 1,
+                };
+            };
+
+            mockVscode.workspace.workspaceFolders = [
+                { uri: { fsPath: '/test/repo' } },
+            ];
+
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'repoPath') return validRepo;
+                    if (key === 'autoStartServer') return false;
+                    return defaultValue;
+                },
+                update: async () => {},
+                inspect: () => ({ workspaceValue: undefined, globalValue: undefined, workspaceFolderValue: undefined }),
+            });
+
+            // Repo and project marker exist so cmdAnalyze reaches start-new picker flow.
+            mockFs.existsSync = (filePath: string) => {
+                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+            };
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+
+            await analyzeCallback();
+
+            assert.equal(showOpenDialogCalls, 1, 'Expected Start new flow to always show picker');
+            assert.equal(analyzedScenePath, '/test/repo/picked.md');
+            assert.deepEqual(analyzedScenePaths, undefined);
 
             fs.rmSync(validRepo, { recursive: true, force: true });
         });
@@ -1356,6 +2006,69 @@ describe('Extension (Real)', () => {
                         ],
                     };
                 }
+                async viewSessionWithRecovery() {
+                    return {
+                        scene_path: '/test/repo/scene01.txt',
+                        scene_name: 'scene01.txt',
+                        project_path: '/test/repo',
+                        total_findings: 2,
+                        current_index: 1,
+                        glossary_issues: [],
+                        counts: { critical: 0, major: 1, minor: 1 },
+                        lens_counts: {
+                            prose: { critical: 0, major: 1, minor: 0 },
+                            structure: { critical: 0, major: 0, minor: 1 },
+                        },
+                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
+                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
+                        findings_status: [
+                            {
+                                number: 1,
+                                severity: 'major',
+                                lens: 'prose',
+                                status: 'accepted',
+                                location: 'L1',
+                                evidence: 'first',
+                                line_start: 1,
+                                line_end: 1,
+                            },
+                            {
+                                number: 2,
+                                severity: 'minor',
+                                lens: 'structure',
+                                status: 'rejected',
+                                location: 'L2',
+                                evidence: 'second',
+                                line_start: 2,
+                                line_end: 2,
+                            },
+                        ],
+                    };
+                }
+                async getCurrentFinding() {
+                    return {
+                        complete: false,
+                        finding: {
+                            number: 2,
+                            severity: 'minor',
+                            lens: 'structure',
+                            location: 'L2',
+                            line_start: 2,
+                            line_end: 2,
+                            evidence: 'second',
+                            impact: '',
+                            options: [],
+                            flagged_by: [],
+                            ambiguity_type: null,
+                            stale: false,
+                            status: 'rejected',
+                        },
+                        index: 1,
+                        current: 2,
+                        total: 2,
+                        is_ambiguity: false,
+                    };
+                }
             };
 
             mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
@@ -1391,6 +2104,12 @@ describe('Extension (Real)', () => {
                 'Expected selected historical session to become current in sessions tree',
             );
             assert.ok(showCalls.length > 0, 'Expected discussion panel to be updated on historical session switch');
+            const readOnlyNotice = showCalls[showCalls.length - 1][5];
+            assert.equal(
+                readOnlyNotice,
+                'Viewing completed session — actions will reopen it.',
+                'Expected closed-session read-only notice to be passed to discussion panel',
+            );
         });
 
         it('should update discussion panel when switching to another active session', async () => {
@@ -1528,6 +2247,312 @@ describe('Extension (Real)', () => {
 
             assert.ok(setCurrentSessionCalls.includes(7), 'Expected selected active session to become current');
             assert.ok(showCalls.length > 0, 'Expected discussion panel to be updated on active session switch');
+        });
+
+        it('should select finding returned by getCurrentFinding when index is missing', async () => {
+            let viewSessionCallback: any;
+            const findingRevealCalls: Array<{ item: any; options: any }> = [];
+            let getCurrentFindingCalls = 0;
+
+            mockVscode.window.createTreeView = (viewId: string, _options: any) => {
+                const reveal = async (item: any, options: any) => {
+                    if (viewId === 'literaryCritic.findings') {
+                        findingRevealCalls.push({ item, options });
+                    }
+                };
+                return { dispose: () => {}, reveal, visible: true };
+            };
+
+            mockDiscussionPanel = class MockDiscussionPanel {
+                onFindingAction: any;
+                onDiscussionResult: any;
+                show() {}
+                close() {}
+                dispose() {}
+                notifySceneChange() {}
+            };
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) {
+                    return { ok: true };
+                }
+                async getSession() {
+                    return { active: false, findings_status: [] };
+                }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                    };
+                }
+                async getSessionDetail() {
+                    return {
+                        id: 7,
+                        status: 'active',
+                        scene_path: '/test/repo/scene01.txt',
+                        model: 'sonnet',
+                        created_at: '2026-02-10T10:00:00',
+                        completed_at: undefined,
+                        total_findings: 2,
+                        accepted_count: 0,
+                        rejected_count: 0,
+                        withdrawn_count: 0,
+                        scene_hash: 'hash',
+                        current_index: 1,
+                        glossary_issues: [],
+                        findings: [],
+                    };
+                }
+                async resumeSessionByIdWithRecovery() {
+                    return {
+                        scene_path: '/test/repo/scene01.txt',
+                        scene_name: 'scene01.txt',
+                        project_path: '/test/repo',
+                        total_findings: 2,
+                        current_index: 1,
+                        glossary_issues: [],
+                        counts: { critical: 0, major: 1, minor: 1 },
+                        lens_counts: {
+                            prose: { critical: 0, major: 1, minor: 0 },
+                            structure: { critical: 0, major: 0, minor: 1 },
+                        },
+                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
+                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
+                        findings_status: [
+                            {
+                                number: 1,
+                                severity: 'major',
+                                lens: 'prose',
+                                status: 'pending',
+                                location: 'L1',
+                                evidence: 'first',
+                                line_start: 1,
+                                line_end: 1,
+                            },
+                            {
+                                number: 2,
+                                severity: 'minor',
+                                lens: 'structure',
+                                status: 'pending',
+                                location: 'L2',
+                                evidence: 'second',
+                                line_start: 2,
+                                line_end: 2,
+                            },
+                        ],
+                    };
+                }
+                async getCurrentFinding() {
+                    getCurrentFindingCalls += 1;
+                    if (getCurrentFindingCalls === 1) {
+                        return {
+                            complete: false,
+                            finding: {
+                                number: 2,
+                                severity: 'minor',
+                                lens: 'structure',
+                                location: 'L2',
+                                line_start: 2,
+                                line_end: 2,
+                                evidence: 'second',
+                                impact: '',
+                                options: [],
+                                flagged_by: [],
+                                ambiguity_type: null,
+                                stale: false,
+                                status: 'pending',
+                            },
+                            index: 1,
+                            current: 2,
+                            total: 2,
+                            is_ambiguity: false,
+                        };
+                    }
+
+                    return {
+                        complete: false,
+                        finding: {
+                            number: 1,
+                            severity: 'major',
+                            lens: 'prose',
+                            location: 'L1',
+                            line_start: 1,
+                            line_end: 1,
+                            evidence: 'first',
+                            impact: '',
+                            options: [],
+                            flagged_by: [],
+                            ambiguity_type: null,
+                            stale: false,
+                            status: 'pending',
+                        },
+                        // Intentionally omit index to verify fallback by finding number
+                        current: 1,
+                        total: 2,
+                        is_ambiguity: false,
+                    };
+                }
+            };
+
+            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
+                if (cmd === 'literaryCritic.viewSession') {
+                    viewSessionCallback = callback;
+                }
+                return { dispose: () => {} };
+            };
+
+            mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/repo' } }];
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+            mockVscode.window.setStatusBarMessage = () => ({ dispose: () => {} });
+
+            mockFs.existsSync = (filePath: string) => {
+                return filePath.includes('lit-critic-web.py')
+                    || filePath.includes('CANON.md')
+                    || filePath.includes('scene01.txt');
+            };
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+
+            // First selection sets the extension's current index to #2 (index 1).
+            await viewSessionCallback({ session: { id: 7 } });
+            // Second selection returns finding #1 without index.
+            await viewSessionCallback({ session: { id: 7 } });
+
+            const lastFindingReveal = findingRevealCalls[findingRevealCalls.length - 1];
+            assert.ok(lastFindingReveal, 'Expected findings tree selection to be revealed');
+            assert.equal(
+                lastFindingReveal.item?.id,
+                'finding:1',
+                'Expected findings tree to select finding #1 when getCurrentFinding omits index',
+            );
+            assert.equal(lastFindingReveal.options?.select, true);
+        });
+
+        it('should close discussion panel before presenting refreshed findings on rerun analysis', async () => {
+            let rerunCallback: any;
+            let discussCallback: any;
+            const callOrder: string[] = [];
+
+            mockDiscussionPanel = class MockDiscussionPanel {
+                onFindingAction: any;
+                onDiscussionResult: any;
+                show() { callOrder.push('show'); }
+                close() { callOrder.push('close'); }
+                dispose() {}
+                notifySceneChange() {}
+                clearIndexChangeNotice() {}
+                notifyIndexChange() {}
+            };
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) {
+                    return { ok: true };
+                }
+                async getSession() {
+                    return { active: false, findings_status: [] };
+                }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                    };
+                }
+                async rerunAnalysis() {
+                    return {
+                        scene_path: '/test/repo/scene-a.txt',
+                        scene_name: 'scene-a.txt',
+                        project_path: '/test/repo',
+                        total_findings: 1,
+                        current_index: 0,
+                        glossary_issues: [],
+                        counts: { critical: 0, major: 1, minor: 0 },
+                        lens_counts: { prose: { critical: 0, major: 1, minor: 0 } },
+                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
+                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
+                        findings_status: [
+                            {
+                                number: 1,
+                                severity: 'major',
+                                lens: 'prose',
+                                status: 'pending',
+                                location: 'L1',
+                                evidence: 'example',
+                                line_start: 1,
+                                line_end: 1,
+                            },
+                        ],
+                    };
+                }
+                async getCurrentFinding() {
+                    return {
+                        complete: false,
+                        finding: {
+                            number: 1,
+                            severity: 'major',
+                            lens: 'prose',
+                            location: 'L1',
+                            line_start: 1,
+                            line_end: 1,
+                            evidence: 'example',
+                            impact: '',
+                            options: [],
+                            flagged_by: [],
+                            ambiguity_type: null,
+                            stale: false,
+                            status: 'pending',
+                        },
+                        index: 0,
+                        current: 1,
+                        total: 1,
+                        is_ambiguity: false,
+                    };
+                }
+            };
+
+            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
+                if (cmd === 'literaryCritic.rerunAnalysisWithUpdatedIndexes') {
+                    rerunCallback = callback;
+                }
+                if (cmd === 'literaryCritic.discuss') {
+                    discussCallback = callback;
+                }
+                return { dispose: () => {} };
+            };
+
+            mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/repo' } }];
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
+            mockFs.existsSync = (filePath: string) => {
+                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+            };
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+
+            // Ensure panel exists before rerun.
+            await discussCallback();
+            await rerunCallback();
+
+            const closeIndex = callOrder.indexOf('close');
+            const lastShowIndex = callOrder.lastIndexOf('show');
+
+            assert.ok(closeIndex >= 0, 'Expected rerun to close the discussion panel');
+            assert.ok(lastShowIndex > closeIndex, 'Expected refreshed finding UI to show after panel close');
         });
 
         it('should handle stopServer command', async () => {

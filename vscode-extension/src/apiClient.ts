@@ -238,7 +238,7 @@ export class ApiClient {
         });
     }
 
-    /** POST /api/analyze — start a new analysis. */
+    /** POST /api/analyze — start a new analysis (single or multi-scene). */
     async analyze(
         scenePath: string,
         projectPath: string,
@@ -246,14 +246,25 @@ export class ApiClient {
         discussionModel?: string,
         apiKey?: string,
         lensPreferences?: { preset: string; weights?: Record<string, number> },
+        scenePaths?: string[],
     ): Promise<AnalysisSummary> {
+        const effectivePaths = scenePaths && scenePaths.length > 0 ? scenePaths : [scenePath];
         return this.request<AnalysisSummary>('POST', '/api/analyze', {
-            scene_path: scenePath,
+            scene_path: effectivePaths[0],
+            scene_paths: effectivePaths,
             project_path: projectPath,
             ...(model ? { model } : {}),
             ...(discussionModel ? { discussion_model: discussionModel } : {}),
             ...(apiKey ? { api_key: apiKey } : {}),
             ...(lensPreferences ? { lens_preferences: lensPreferences } : {}),
+        });
+    }
+
+    /** POST /api/analyze/rerun — re-run analysis for current active session context. */
+    async rerunAnalysis(projectPath: string, apiKey?: string): Promise<AnalysisSummary> {
+        return this.request<AnalysisSummary>('POST', '/api/analyze/rerun', {
+            project_path: projectPath,
+            ...(apiKey ? { api_key: apiKey } : {}),
         });
     }
 
@@ -285,6 +296,21 @@ export class ApiClient {
         scenePathOverride?: string,
     ): Promise<AnalysisSummary> {
         return this.request<AnalysisSummary>('POST', '/api/resume-session', {
+            project_path: projectPath,
+            session_id: sessionId,
+            ...(apiKey ? { api_key: apiKey } : {}),
+            ...(scenePathOverride ? { scene_path_override: scenePathOverride } : {}),
+        });
+    }
+
+    /** POST /api/view-session — load any session for viewing/interaction. */
+    async viewSession(
+        projectPath: string,
+        sessionId: number,
+        apiKey?: string,
+        scenePathOverride?: string,
+    ): Promise<AnalysisSummary> {
+        return this.request<AnalysisSummary>('POST', '/api/view-session', {
             project_path: projectPath,
             session_id: sessionId,
             ...(apiKey ? { api_key: apiKey } : {}),
@@ -355,6 +381,30 @@ export class ApiClient {
             }
 
             return this.resumeSessionById(projectPath, sessionId, apiKey, override.trim());
+        }
+    }
+
+    async viewSessionWithRecovery(
+        projectPath: string,
+        sessionId: number,
+        apiKey: string | undefined,
+        getScenePathOverride: (detail: ResumeErrorDetail) => Promise<string | undefined>,
+    ): Promise<AnalysisSummary> {
+        try {
+            return await this.viewSession(projectPath, sessionId, apiKey);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            const detail = this.extractResumeErrorDetail(message);
+            if (!detail) {
+                throw err;
+            }
+
+            const override = await getScenePathOverride(detail);
+            if (!override || !override.trim()) {
+                throw new Error('View session cancelled by user.');
+            }
+
+            return this.viewSession(projectPath, sessionId, apiKey, override.trim());
         }
     }
 

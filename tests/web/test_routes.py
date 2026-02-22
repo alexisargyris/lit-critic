@@ -168,6 +168,7 @@ class TestWithActiveSession:
             scene_path="/test/scene.txt",
             project_path=Path("/test/project"),
             indexes={},
+            scene_paths=["/test/scene.txt", "/test/scene-2.txt"],
             learning=learning,
             findings=findings,
         )
@@ -179,6 +180,7 @@ class TestWithActiveSession:
         data = response.json()
         assert data["active"] is True
         assert data["total_findings"] == 3
+        assert data["scene_paths"] == ["/test/scene.txt", "/test/scene-2.txt"]
 
     def test_session_includes_model_info(self, client, active_session):
         """Session summary includes model name, id, and label."""
@@ -326,12 +328,21 @@ class TestWithActiveSession:
         assert data["complete"] is True
 
     def test_goto_withdrawn_finding(self, client, active_session):
-        """Goto a withdrawn finding returns complete (not available)."""
+        """Goto a withdrawn finding is still navigable and returns full state."""
         session_mgr.state.findings[1].status = 'withdrawn'
+        session_mgr.state.findings[1].discussion_turns = [
+            {"role": "user", "content": "This is intentional."},
+            {"role": "assistant", "content": "Understood; withdrawing."},
+        ]
+
         response = client.post("/api/finding/goto", json={"index": 1})
         assert response.status_code == 200
         data = response.json()
-        assert data["complete"] is True
+        assert data["complete"] is False
+        assert data["finding"]["number"] == 2
+        assert data["finding"]["status"] == "withdrawn"
+        assert len(data["finding"]["discussion_turns"]) == 2
+        assert data["finding"]["discussion_turns"][0]["role"] == "user"
 
     def test_goto_then_accept(self, client, active_session):
         """After goto, accept operates on the correct finding."""
@@ -732,6 +743,29 @@ class TestAnalyzeEndpoint:
         assert response.status_code == 404
 
     @patch.object(session_mgr, "start_analysis", new_callable=AsyncMock)
+    def test_analyze_accepts_scene_paths_payload(self, mock_start, client, reset_session):
+        mock_start.return_value = {"ok": True}
+
+        response = client.post("/api/analyze", json={
+            "scene_paths": ["/any/scene1.txt", "/any/scene2.txt"],
+            "project_path": "/any/project",
+            "api_key": "sk-ant-explicit",
+        })
+
+        assert response.status_code == 200
+        _, kwargs = mock_start.await_args
+        assert kwargs["scene_paths"] == ["/any/scene1.txt", "/any/scene2.txt"]
+
+    def test_analyze_requires_scene_path_or_scene_paths(self, client, reset_session):
+        response = client.post("/api/analyze", json={
+            "project_path": "/any/project",
+            "api_key": "sk-ant-explicit",
+        })
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "scene_path or scene_paths is required"
+
+    @patch.object(session_mgr, "start_analysis", new_callable=AsyncMock)
     def test_analyze_cross_provider_uses_separate_keys(self, mock_start, client, reset_session):
         """Cross-provider analyze should resolve and pass separate provider keys."""
         mock_start.return_value = {"ok": True}
@@ -987,6 +1021,108 @@ class TestAnalyzeEndpoint:
         assert response.status_code == 400
         assert "cannot be resumed" in response.json()["detail"]
 
+    @patch("web.routes._resolve_analysis_and_discussion_keys")
+    @patch("web.routes.get_session_detail")
+    @patch.object(session_mgr, "load_session_for_viewing", new_callable=AsyncMock)
+    def test_view_session_by_id_loads_completed_session_and_returns_summary(
+        self,
+        mock_view_session,
+        mock_get_session_detail,
+        mock_resolve_keys,
+        client,
+        reset_session,
+        tmp_path,
+    ):
+        """POST /api/view-session should load a closed session for viewing/actions."""
+        mock_get_session_detail.return_value = {
+            "id": 42,
+            "status": "completed",
+            "model": "sonnet",
+            "discussion_model": None,
+        }
+        mock_resolve_keys.return_value = ("sk-ant-env", None)
+        mock_view_session.return_value = {"scene_name": "chapter-01.txt", "total_findings": 5}
+
+        response = client.post("/api/view-session", json={
+            "project_path": str(tmp_path),
+            "session_id": 42,
+        })
+
+        assert response.status_code == 200
+        mock_get_session_detail.assert_called_once_with(Path(str(tmp_path)), 42)
+        mock_view_session.assert_awaited_once_with(
+            str(tmp_path),
+            42,
+            "sk-ant-env",
+            discussion_api_key=None,
+            scene_path_override=None,
+        )
+
+    def test_view_session_by_id_nonexistent_project_404(self, client, reset_session):
+        response = client.post("/api/view-session", json={
+            "project_path": "/nonexistent/path/that/does/not/exist",
+            "session_id": 1,
+        })
+        assert response.status_code == 404
+
+    @patch("web.routes.get_session_detail")
+    def test_view_session_by_id_not_found_404(
+        self,
+        mock_get_session_detail,
+        client,
+        reset_session,
+        tmp_path,
+    ):
+        mock_get_session_detail.return_value = None
+
+        response = client.post("/api/view-session", json={
+            "project_path": str(tmp_path),
+            "session_id": 999,
+        })
+        assert response.status_code == 404
+
+    @patch("web.routes._resolve_analysis_and_discussion_keys")
+    @patch("web.routes.get_session_detail")
+    @patch.object(session_mgr, "load_session_for_viewing", new_callable=AsyncMock)
+    def test_view_session_returns_409_with_structured_detail_for_missing_scene_path(
+        self,
+        mock_view_session,
+        mock_get_session_detail,
+        mock_resolve_keys,
+        client,
+        reset_session,
+        tmp_path,
+    ):
+        """View-session route should preserve structured path-relink errors for recovery UI."""
+        mock_get_session_detail.return_value = {
+            "id": 21,
+            "status": "abandoned",
+            "model": "sonnet",
+            "discussion_model": None,
+        }
+        mock_resolve_keys.return_value = ("sk-ant-explicit", None)
+        mock_view_session.side_effect = ResumeScenePathError(
+            "Saved scene file was not found.",
+            saved_scene_path="D:/old-machine/project/ch01.md",
+            attempted_scene_path="D:/old-machine/project/ch01.md",
+            project_path=str(tmp_path),
+            override_provided=False,
+        )
+
+        response = client.post("/api/view-session", json={
+            "project_path": str(tmp_path),
+            "session_id": 21,
+            "api_key": "sk-ant-explicit",
+        })
+
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert detail["code"] == "scene_path_not_found"
+        assert detail["saved_scene_path"] == "D:/old-machine/project/ch01.md"
+        assert detail["attempted_scene_path"] == "D:/old-machine/project/ch01.md"
+        assert detail["project_path"] == str(tmp_path)
+        assert detail["override_provided"] is False
+
 
 class TestStaticFiles:
     """Test that static files are served."""
@@ -1050,6 +1186,80 @@ class TestSessionManager:
     def test_goto_finding_out_of_range(self, reset_session):
         result = session_mgr.goto_finding(99)
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_start_analysis_maps_global_lines_and_location_to_local_scene(self, reset_session, tmp_path):
+        """Multi-scene analysis should remap global lines and location labels to local values."""
+        scene1 = tmp_path / "scene1.txt"
+        scene2 = tmp_path / "scene2.txt"
+        scene1.write_text("A1\nA2", encoding="utf-8")
+        scene2.write_text("B1\nB2", encoding="utf-8")
+
+        line_map = [
+            {
+                "scene_path": str(scene1),
+                "scene_name": scene1.name,
+                "marker_line": 1,
+                "global_start": 2,
+                "global_end": 3,
+                "local_start": 1,
+                "local_end": 2,
+            },
+            {
+                "scene_path": str(scene2),
+                "scene_name": scene2.name,
+                "marker_line": 5,
+                "global_start": 6,
+                "global_end": 7,
+                "local_start": 1,
+                "local_end": 2,
+            },
+        ]
+
+        async def _fake_lens(*args, **kwargs):
+            lens_name = args[1]
+            return MagicMock(lens_name=lens_name, error=None)
+
+        coordinated = {
+            "findings": [
+                {
+                    "number": 1,
+                    "severity": "major",
+                    "lens": "prose",
+                    "location": "L006-L007, second scene issue",
+                    "line_start": 6,
+                    "line_end": 7,
+                    "evidence": "Test evidence",
+                    "impact": "Test impact",
+                    "options": ["Fix"],
+                    "flagged_by": ["prose"],
+                    "ambiguity_type": None,
+                }
+            ],
+            "glossary_issues": [],
+        }
+
+        with patch("web.session_manager.check_active_session", return_value={"exists": False}), \
+             patch.object(session_mgr, "_load_project_files", return_value=({}, [], [])), \
+             patch.object(session_mgr, "_load_scenes", return_value=("combined", line_map)), \
+             patch("web.session_manager.load_learning", return_value=LearningData()), \
+             patch("web.session_manager.generate_learning_markdown", return_value=""), \
+             patch("web.session_manager.create_client", return_value=MagicMock()), \
+             patch.object(session_mgr, "_run_lens_with_progress", side_effect=_fake_lens), \
+             patch("web.session_manager.run_coordinator_chunked", new=AsyncMock(return_value=coordinated)), \
+             patch("web.session_manager.create_session", return_value=1):
+            await session_mgr.start_analysis(
+                scene_path=str(scene1),
+                project_path=str(tmp_path),
+                api_key="sk-ant-explicit",
+                scene_paths=[str(scene1), str(scene2)],
+            )
+
+        finding = session_mgr.state.findings[0]
+        assert finding.scene_path == str(scene2)
+        assert finding.line_start == 1
+        assert finding.line_end == 2
+        assert finding.location == "L1-L2, second scene issue"
 
 
 class TestManagementEndpoints:

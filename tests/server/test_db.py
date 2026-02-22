@@ -20,7 +20,34 @@ class TestSessionStore:
         active = SessionStore.load_active(db_conn)
         assert active is not None
         assert active["scene_path"] == "/path/scene.md"
+        assert active["scene_paths"] == ["/path/scene.md"]
         assert active["status"] == "active"
+
+    def test_create_with_scene_paths_roundtrip(self, db_conn):
+        sid = SessionStore.create(
+            db_conn,
+            "/path/scene1.md",
+            "abc",
+            "sonnet",
+            scene_paths=["/path/scene1.md", "/path/scene2.md"],
+        )
+        session = SessionStore.get(db_conn, sid)
+        assert session["scene_paths"] == ["/path/scene1.md", "/path/scene2.md"]
+        assert session["scene_path"] == "/path/scene1.md"
+
+    def test_load_active_decodes_legacy_plain_scene_path(self, db_conn):
+        db_conn.execute(
+            """INSERT INTO session (
+                   scene_path, scene_hash, model, created_at
+               ) VALUES (?, ?, ?, datetime('now'))""",
+            ("/legacy/scene.md", "legacy-hash", "sonnet"),
+        )
+        db_conn.commit()
+
+        active = SessionStore.load_active(db_conn)
+        assert active is not None
+        assert active["scene_path"] == "/legacy/scene.md"
+        assert active["scene_paths"] == ["/legacy/scene.md"]
 
     def test_load_active_returns_none_when_empty(self, db_conn):
         assert SessionStore.load_active(db_conn) is None
@@ -100,6 +127,29 @@ class TestSessionStore:
         assert ok is False
         assert "modified" in msg.lower()
 
+    def test_validate_scene_set_accepts_member(self, db_conn):
+        ok, msg = SessionStore.validate(
+            {
+                "scene_paths": ["/a/scene1.md", "/a/scene2.md"],
+                "scene_hash": "xyz",
+            },
+            scene_content_hash="xyz",
+            scene_path="/a/scene2.md",
+        )
+        assert ok is True
+
+    def test_validate_scene_set_rejects_non_member(self, db_conn):
+        ok, msg = SessionStore.validate(
+            {
+                "scene_paths": ["/a/scene1.md", "/a/scene2.md"],
+                "scene_hash": "xyz",
+            },
+            scene_content_hash="xyz",
+            scene_path="/a/scene3.md",
+        )
+        assert ok is False
+        assert "different scene set" in msg.lower()
+
 
 class TestFindingStore:
     """Tests for FindingStore CRUD operations."""
@@ -108,13 +158,14 @@ class TestFindingStore:
         sid = SessionStore.create(db_conn, "/s.md", "h", "sonnet")
         FindingStore.save_all(db_conn, sid, [
             {"number": 1, "severity": "major", "lens": "prose",
-             "evidence": "Test", "options": ["Fix"]},
+             "evidence": "Test", "options": ["Fix"], "scene_path": "/s.md"},
             {"number": 2, "severity": "minor", "lens": "clarity"},
         ])
         findings = FindingStore.load_all(db_conn, sid)
         assert len(findings) == 2
         assert findings[0]["number"] == 1
         assert findings[0]["options"] == ["Fix"]
+        assert findings[0]["scene_path"] == "/s.md"
         assert findings[1]["severity"] == "minor"
 
     def test_get_single(self, db_conn):

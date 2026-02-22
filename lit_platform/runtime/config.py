@@ -89,5 +89,7 @@ OPTIONAL_FILES = [
     "LEARNING.md",
 ]
 
+CONTEXT_FILES = INDEX_FILES + OPTIONAL_FILES
+
 SESSION_FILE = ".lit-critic-session.json"  # Legacy — kept for reference only
 DB_FILE = ".lit-critic.db"

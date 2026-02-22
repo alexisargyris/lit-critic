@@ -11,18 +11,60 @@ class SessionStore:
     """CRUD operations for review sessions."""
 
     @staticmethod
+    def _encode_scene_paths(scene_paths: list[str]) -> str:
+        """Encode scene paths list for persistence in the legacy scene_path column."""
+        return json.dumps(scene_paths)
+
+    @staticmethod
+    def _decode_scene_paths(raw_scene_path: str | None) -> list[str]:
+        """Decode persisted scene_path payload into a normalized path list."""
+        if not raw_scene_path:
+            return []
+        try:
+            parsed = json.loads(raw_scene_path)
+            if isinstance(parsed, list):
+                return [str(p) for p in parsed if p]
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return [raw_scene_path]
+
+    @staticmethod
+    def _normalize_scene_paths(
+        scene_path: str | None = None,
+        scene_paths: list[str] | None = None,
+    ) -> list[str]:
+        """Normalize single/multi scene path inputs into a non-empty list when possible."""
+        if scene_paths:
+            return [str(p) for p in scene_paths if p]
+        if scene_path:
+            return [scene_path]
+        return []
+
+    @staticmethod
     def create(conn: sqlite3.Connection, scene_path: str, scene_hash: str,
                model: str, glossary_issues: list[str] | None = None,
                discussion_model: str | None = None,
-               lens_preferences: dict | None = None) -> int:
+               lens_preferences: dict | None = None,
+               scene_paths: list[str] | None = None,
+               index_context_hash: str = "",
+               index_context_stale: bool = False,
+               index_rerun_prompted: bool = False,
+               index_changed_files: list[str] | None = None) -> int:
         """Insert a new active session. Returns the session id."""
+        normalized_scene_paths = SessionStore._normalize_scene_paths(scene_path, scene_paths)
+        if not normalized_scene_paths:
+            raise ValueError("create() requires at least one scene path")
+
         now = datetime.now().isoformat()
         cursor = conn.execute(
             """INSERT INTO session
-               (scene_path, scene_hash, model, discussion_model, lens_preferences, glossary_issues, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (scene_path, scene_hash, model, discussion_model,
-             json.dumps(lens_preferences or {}), json.dumps(glossary_issues or []), now),
+               (scene_path, scene_hash, model, discussion_model, lens_preferences, glossary_issues, created_at,
+                index_context_hash, index_context_stale, index_rerun_prompted, index_changed_files)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (SessionStore._encode_scene_paths(normalized_scene_paths), scene_hash, model, discussion_model,
+             json.dumps(lens_preferences or {}), json.dumps(glossary_issues or []), now,
+             index_context_hash, int(index_context_stale), int(index_rerun_prompted),
+             json.dumps(index_changed_files or [])),
         )
         conn.commit()
         return cursor.lastrowid
@@ -119,7 +161,82 @@ class SessionStore:
         """Update the persisted scene path for a session."""
         conn.execute(
             "UPDATE session SET scene_path = ? WHERE id = ?",
-            (scene_path, session_id),
+            (SessionStore._encode_scene_paths([scene_path]), session_id),
+        )
+        conn.commit()
+
+    @staticmethod
+    def update_index_context(
+        conn: sqlite3.Connection,
+        session_id: int,
+        *,
+        index_context_hash: str,
+        index_context_stale: bool,
+        index_rerun_prompted: bool,
+        index_changed_files: list[str],
+    ) -> None:
+        """Update all index-context tracking fields at once."""
+        conn.execute(
+            """UPDATE session SET
+                   index_context_hash = ?,
+                   index_context_stale = ?,
+                   index_rerun_prompted = ?,
+                   index_changed_files = ?
+               WHERE id = ?""",
+            (
+                index_context_hash,
+                int(index_context_stale),
+                int(index_rerun_prompted),
+                json.dumps(index_changed_files),
+                session_id,
+            ),
+        )
+        conn.commit()
+
+    @staticmethod
+    def mark_index_context_stale(
+        conn: sqlite3.Connection,
+        session_id: int,
+        *,
+        changed_files: list[str],
+        prompted: bool | None = None,
+    ) -> None:
+        """Mark index context stale and persist changed file names."""
+        if prompted is None:
+            conn.execute(
+                """UPDATE session SET
+                       index_context_stale = 1,
+                       index_changed_files = ?
+                   WHERE id = ?""",
+                (json.dumps(changed_files), session_id),
+            )
+        else:
+            conn.execute(
+                """UPDATE session SET
+                       index_context_stale = 1,
+                       index_rerun_prompted = ?,
+                       index_changed_files = ?
+                   WHERE id = ?""",
+                (int(prompted), json.dumps(changed_files), session_id),
+            )
+        conn.commit()
+
+    @staticmethod
+    def clear_index_context_stale(
+        conn: sqlite3.Connection,
+        session_id: int,
+        *,
+        index_context_hash: str,
+    ) -> None:
+        """Clear stale state after re-run and set a fresh context hash."""
+        conn.execute(
+            """UPDATE session SET
+                   index_context_hash = ?,
+                   index_context_stale = 0,
+                   index_rerun_prompted = 0,
+                   index_changed_files = '[]'
+               WHERE id = ?""",
+            (index_context_hash, session_id),
         )
         conn.commit()
 
@@ -207,9 +324,15 @@ class SessionStore:
         if not session_data:
             return False, "No session data"
 
-        saved_scene_path = session_data.get("scene_path", "")
-        if Path(saved_scene_path).resolve() != Path(scene_path).resolve():
-            return False, f"Session is for different scene: {saved_scene_path}"
+        scene_paths = session_data.get("scene_paths") or []
+        if scene_paths:
+            resolved_saved = {str(Path(p).resolve()) for p in scene_paths}
+            if str(Path(scene_path).resolve()) not in resolved_saved:
+                return False, f"Session is for different scene set: {scene_paths}"
+        else:
+            saved_scene_path = session_data.get("scene_path", "")
+            if Path(saved_scene_path).resolve() != Path(scene_path).resolve():
+                return False, f"Session is for different scene: {saved_scene_path}"
 
         saved_hash = session_data.get("scene_hash", "")
         if saved_hash != scene_content_hash:
@@ -221,7 +344,10 @@ class SessionStore:
     def _row_to_dict(row: sqlite3.Row) -> dict:
         """Convert a sqlite3.Row to a plain dict, deserialising JSON columns."""
         d = dict(row)
-        for key in ("glossary_issues", "discussion_history", "lens_preferences"):
+        scene_paths = SessionStore._decode_scene_paths(d.get("scene_path"))
+        d["scene_paths"] = scene_paths
+        d["scene_path"] = scene_paths[0] if scene_paths else ""
+        for key in ("glossary_issues", "discussion_history", "lens_preferences", "index_changed_files"):
             if key in d and isinstance(d[key], str):
                 try:
                     d[key] = json.loads(d[key])
@@ -234,6 +360,10 @@ class SessionStore:
                 d["learning_session"] = {}
         if "stale" in d:
             d["stale"] = bool(d["stale"])
+        if "index_context_stale" in d:
+            d["index_context_stale"] = bool(d["index_context_stale"])
+        if "index_rerun_prompted" in d:
+            d["index_rerun_prompted"] = bool(d["index_rerun_prompted"])
         return d
 
 

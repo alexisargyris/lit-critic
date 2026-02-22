@@ -2,6 +2,7 @@
 
 import json
 import re
+from pathlib import Path
 
 from lit_platform.session_state_machine import (
     apply_discussion_outcome_reason,
@@ -15,6 +16,21 @@ from lit_platform.session_state_machine import (
 from lit_platform.runtime.llm import LLMResponse
 from lit_platform.runtime.models import Finding, SessionState
 from lit_platform.runtime.prompts import build_discussion_messages, get_discussion_system_prompt
+
+
+def _resolve_finding_scene_content(state: SessionState, finding: Finding) -> str:
+    """Resolve scene text to use for discussion, scoped to the finding source scene."""
+    if not finding.scene_path:
+        return state.scene_content
+
+    candidate = Path(finding.scene_path)
+    if candidate.exists():
+        try:
+            return candidate.read_text(encoding="utf-8")
+        except OSError:
+            return state.scene_content
+
+    return state.scene_content
 
 
 def build_prior_outcomes_summary(state: SessionState, current_finding: Finding) -> str:
@@ -152,7 +168,8 @@ async def discuss_finding(state: SessionState, finding: Finding, user_message: s
                           scene_changed: bool = False) -> tuple[str, str]:
     """Process discussion input and return ``(response_text, status)``."""
     prior_outcomes = build_prior_outcomes_summary(state, finding)
-    system_prompt = get_discussion_system_prompt(finding, state.scene_content, prior_outcomes)
+    discussion_scene_content = _resolve_finding_scene_content(state, finding)
+    system_prompt = get_discussion_system_prompt(finding, discussion_scene_content, prior_outcomes)
 
     api_message = user_message
     if scene_changed:
@@ -181,7 +198,8 @@ async def discuss_finding_stream(state: SessionState, finding: Finding, user_mes
                                  scene_changed: bool = False):
     """Streaming discussion variant yielding ``(chunk_type, data)`` tuples."""
     prior_outcomes = build_prior_outcomes_summary(state, finding)
-    system_prompt = get_discussion_system_prompt(finding, state.scene_content, prior_outcomes)
+    discussion_scene_content = _resolve_finding_scene_content(state, finding)
+    system_prompt = get_discussion_system_prompt(finding, discussion_scene_content, prior_outcomes)
 
     api_message = user_message
     if scene_changed:

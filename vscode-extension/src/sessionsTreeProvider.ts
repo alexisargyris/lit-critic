@@ -18,6 +18,10 @@ import { SessionSummary } from './types';
 
 type SessionTreeElement = SceneGroupItem | SessionTreeItem | EmptyStateItem;
 
+function isSessionStale(session: SessionSummary): boolean {
+    return session.status === 'active' && Boolean(session.index_context_stale || session.rerun_recommended);
+}
+
 export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTreeElement> {
     private _onDidChangeTreeData = new vscode.EventEmitter<SessionTreeElement | undefined | null | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -26,6 +30,10 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTree
     private projectPath: string | null = null;
     private apiClient: ApiClient | null = null;
     private currentSessionId: number | null = null;
+    private cacheDirty = true;
+    private sceneGroupItems: SceneGroupItem[] = [];
+    private sessionItemsByGroup: Map<string, SessionTreeItem[]> = new Map();
+    private sessionItemsById: Map<number, SessionTreeItem> = new Map();
 
     constructor() {}
 
@@ -41,6 +49,7 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTree
         if (!this.apiClient || !this.projectPath) {
             this.sessions = [];
             this.currentSessionId = null;
+            this.cacheDirty = true;
             this._onDidChangeTreeData.fire();
             return;
         }
@@ -51,11 +60,13 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTree
             if (this.currentSessionId !== null && !this.sessions.some((s) => s.id === this.currentSessionId)) {
                 this.currentSessionId = null;
             }
+            this.cacheDirty = true;
             this._onDidChangeTreeData.fire();
         } catch (err) {
             console.error('Failed to load sessions:', err);
             this.sessions = [];
             this.currentSessionId = null;
+            this.cacheDirty = true;
             this._onDidChangeTreeData.fire();
         }
     }
@@ -63,12 +74,22 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTree
     clear(): void {
         this.sessions = [];
         this.currentSessionId = null;
+        this.cacheDirty = true;
         this._onDidChangeTreeData.fire();
     }
 
     setCurrentSession(sessionId: number | null): void {
         this.currentSessionId = sessionId;
+        this.cacheDirty = true;
         this._onDidChangeTreeData.fire();
+    }
+
+    getCurrentSessionItem(): SessionTreeItem | undefined {
+        this.ensureCache();
+        if (this.currentSessionId === null) {
+            return undefined;
+        }
+        return this.sessionItemsById.get(this.currentSessionId);
     }
 
     setCurrentSessionByScenePath(scenePath: string | undefined): void {
@@ -78,9 +99,14 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTree
         }
 
         const target = scenePath.toLowerCase();
-        const activeMatch = this.sessions.find(
-            (s) => s.status === 'active' && s.scene_path.toLowerCase() === target,
-        );
+        const activeMatch = this.sessions.find((s) => {
+            if (s.status !== 'active') {
+                return false;
+            }
+            // Check scene_paths first (multi-scene), fall back to scene_path
+            const paths = s.scene_paths ?? [s.scene_path];
+            return paths.some((p) => p.toLowerCase() === target);
+        });
         this.setCurrentSession(activeMatch?.id ?? null);
     }
 
@@ -93,43 +119,79 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTree
             return [];
         }
 
+        this.ensureCache();
+
         if (!element) {
-            // Root level — group by scene file name
-            const sceneGroups = this.buildSceneGroups();
-            if (sceneGroups.length === 0) {
+            if (this.sceneGroupItems.length === 0) {
                 return [new EmptyStateItem('No sessions found')];
             }
 
-            return sceneGroups;
+            return this.sceneGroupItems;
         }
 
         if (element instanceof SceneGroupItem) {
-            return this.sortSessions(element.sessions).map((session) => new SessionTreeItem(
-                this.formatSessionLabel(session),
-                this.formatSessionDescription(session),
-                vscode.TreeItemCollapsibleState.None,
-                session,
-                session.id === this.currentSessionId,
-            ));
+            return this.sessionItemsByGroup.get(element.label) || [];
         }
 
         return [];
     }
 
+    private ensureCache(): void {
+        if (!this.cacheDirty) {
+            return;
+        }
+
+        this.rebuildCache();
+    }
+
+    private rebuildCache(): void {
+        const sceneGroupItems = this.buildSceneGroups();
+        const sessionItemsByGroup = new Map<string, SessionTreeItem[]>();
+        const sessionItemsById = new Map<number, SessionTreeItem>();
+
+        for (const group of sceneGroupItems) {
+            const children = this.sortSessions(group.sessions).map((session) => {
+                const item = new SessionTreeItem(
+                    this.formatSessionLabel(session),
+                    this.formatSessionDescription(session),
+                    vscode.TreeItemCollapsibleState.None,
+                    session,
+                    session.id === this.currentSessionId,
+                );
+                sessionItemsById.set(session.id, item);
+                return item;
+            });
+
+            sessionItemsByGroup.set(group.label, children);
+        }
+
+        this.sceneGroupItems = sceneGroupItems;
+        this.sessionItemsByGroup = sessionItemsByGroup;
+        this.sessionItemsById = sessionItemsById;
+        this.cacheDirty = false;
+    }
+
     private buildSceneGroups(): SceneGroupItem[] {
-        const grouped = new Map<string, SessionSummary[]>();
+        const grouped = new Map<string, { sessions: SessionSummary[]; representative: SessionSummary }>();
 
         for (const session of this.sessions) {
-            const sceneName = path.basename(session.scene_path);
-            if (!grouped.has(sceneName)) {
-                grouped.set(sceneName, []);
+            const sceneLabel = formatSceneSetLabel(session);
+            if (!grouped.has(sceneLabel)) {
+                grouped.set(sceneLabel, {
+                    sessions: [],
+                    representative: session,
+                });
             }
-            grouped.get(sceneName)!.push(session);
+            grouped.get(sceneLabel)!.sessions.push(session);
         }
 
         return Array.from(grouped.entries())
             .sort(([sceneA], [sceneB]) => sceneA.localeCompare(sceneB))
-            .map(([sceneName, sessions]) => new SceneGroupItem(sceneName, sessions));
+            .map(([sceneLabel, group]) => new SceneGroupItem(
+                sceneLabel,
+                group.sessions,
+                formatSceneSetTooltip(group.representative),
+            ));
     }
 
     private sortSessions(sessions: SessionSummary[]): SessionSummary[] {
@@ -150,7 +212,7 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTree
     }
 
     private formatSessionLabel(session: SessionSummary): string {
-        return `Session #${session.id}`;
+        return `#${session.id}`;
     }
 
     private formatSessionDescription(session: SessionSummary): string {
@@ -158,19 +220,50 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTree
             0,
             session.total_findings - session.accepted_count - session.rejected_count - session.withdrawn_count,
         );
-        return `${session.status} · total ${session.total_findings} · accepted ${session.accepted_count} · rejected ${session.rejected_count} · withdrawn ${session.withdrawn_count} · pending ${pendingCount}`;
+        const statusLabel = isSessionStale(session) ? `${session.status} · stale` : session.status;
+        return `${statusLabel} · total ${session.total_findings} · accepted ${session.accepted_count} · rejected ${session.rejected_count} · withdrawn ${session.withdrawn_count} · pending ${pendingCount}`;
     }
+}
+
+/**
+ * Format a concise label for a session's scene set.
+ * Single-scene: ``01.02.01_scene.txt``
+ * Multi-scene:  ``01.02.01_scene.txt +2``
+ */
+function formatSceneSetLabel(session: SessionSummary): string {
+    const paths = session.scene_paths ?? [session.scene_path];
+    const primary = path.basename(paths[0] || session.scene_path);
+    if (paths.length <= 1) {
+        return primary;
+    }
+    return `${primary} +${paths.length - 1}`;
+}
+
+/**
+ * Build a tooltip-friendly list of all scene files in a session.
+ */
+function formatSceneSetTooltip(session: SessionSummary): string {
+    const paths = session.scene_paths ?? [session.scene_path];
+    if (paths.length <= 1) {
+        return `Scene: ${path.basename(paths[0] || session.scene_path)}`;
+    }
+    return `Scenes (${paths.length}):\n${paths.map((p) => `  ${path.basename(p)}`).join('\n')}`;
 }
 
 class SceneGroupItem extends vscode.TreeItem {
     constructor(
         public readonly label: string,
-        public readonly sessions: SessionSummary[]
+        public readonly sessions: SessionSummary[],
+        public readonly tooltipText?: string,
     ) {
         super(label, vscode.TreeItemCollapsibleState.Expanded);
         this.contextValue = 'sceneGroup';
-        this.description = `${sessions.length}`;
+        this.resourceUri = vscode.Uri.parse(
+            `lit-critic-count://session-group/${encodeURIComponent(label)}?count=${sessions.length}`,
+        );
         this.iconPath = new vscode.ThemeIcon('file-submodule');
+        this.tooltip = tooltipText ?? label;
+        this.id = `scene-group:${label}`;
     }
 }
 
@@ -194,13 +287,12 @@ class SessionTreeItem extends vscode.TreeItem {
             };
 
             if (isCurrent) {
-                this.label = `▶ ${label}`;
-                this.description = `current · ${description}`;
+                this.description = description;
             }
 
             // Set icon by state with stronger visual cues.
-            if (isCurrent) {
-                this.iconPath = new vscode.ThemeIcon('target');
+            if (isSessionStale(session)) {
+                this.iconPath = new vscode.ThemeIcon('warning');
             } else if (session.status === 'active') {
                 this.iconPath = new vscode.ThemeIcon('play-circle');
             } else if (session.accepted_count > 0 || session.rejected_count > 0) {
@@ -208,6 +300,7 @@ class SessionTreeItem extends vscode.TreeItem {
             } else {
                 this.iconPath = new vscode.ThemeIcon('file');
             }
+            this.id = `session:${session.id}`;
         } else {
             this.contextValue = 'empty';
             this.iconPath = new vscode.ThemeIcon('info');
@@ -215,10 +308,14 @@ class SessionTreeItem extends vscode.TreeItem {
     }
 
     private buildTooltip(session: SessionSummary): string {
+        const stale = isSessionStale(session);
+        const changedIndexes = stale && session.index_changed_files?.length
+            ? session.index_changed_files
+            : [];
         const lines = [
             `Session #${session.id}`,
-            `Scene: ${path.basename(session.scene_path)}`,
-            `Status: ${session.status}`,
+            formatSceneSetTooltip(session),
+            `Status: ${stale ? `${session.status} (stale)` : session.status}`,
             `Model: ${session.model}`,
             ``,
             `Findings: ${session.total_findings}`,
@@ -227,6 +324,7 @@ class SessionTreeItem extends vscode.TreeItem {
             `  Withdrawn: ${session.withdrawn_count}`,
             `  Pending: ${Math.max(0, session.total_findings - session.accepted_count - session.rejected_count - session.withdrawn_count)}`,
             ``,
+            ...(changedIndexes.length > 0 ? [`Changed indexes: ${changedIndexes.join(', ')}`, ``] : []),
             `Created: ${new Date(session.created_at).toLocaleString()}`,
         ];
 

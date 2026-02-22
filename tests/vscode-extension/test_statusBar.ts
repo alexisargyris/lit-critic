@@ -68,8 +68,10 @@ describe('StatusBar', () => {
             statusBar.setAnalyzing('Running lenses...');
             
             assert.match(mockItem.text, /\$\(sync~spin\)/);
+            assert.match(mockItem.text, /lit-critic:/);
             assert.match(mockItem.text, /Running lenses/);
-            assert.equal(mockItem.tooltip, 'Running lenses...');
+            assert.match(mockItem.tooltip, /Running lenses/);
+            assert.match(mockItem.tooltip, /lit-critic is busy/);
             assert.equal(mockItem.command, undefined);
         });
 
@@ -78,7 +80,7 @@ describe('StatusBar', () => {
             statusBar.setAnalyzing();
             
             assert.match(mockItem.text, /Analyzing/);
-            assert.match(mockItem.tooltip, /Analysis in progress/);
+            assert.match(mockItem.tooltip, /lit-critic is busy/);
         });
     });
 
