@@ -18,10 +18,13 @@ from lit_platform.user_config import get_repo_path, set_repo_path
 from lit_platform.persistence import LearningStore, get_connection
 from lit_platform.services.analysis_service import (
     API_KEY_ENV_VARS,
-    AVAILABLE_MODELS,
     DEFAULT_MODEL,
     LENS_PRESETS,
+    get_available_models,
+    is_known_model,
+    model_registry_status,
     normalize_lens_preferences,
+    resolve_model,
 )
 from lit_platform.services import (
     check_active_session,
@@ -65,6 +68,7 @@ class ResumeRequest(BaseModel):
     api_key: Optional[str] = None
     discussion_api_key: Optional[str] = None
     scene_path_override: Optional[str] = None
+    scene_path_overrides: Optional[dict[str, str]] = None
 
 
 class ResumeSessionByIdRequest(BaseModel):
@@ -73,6 +77,7 @@ class ResumeSessionByIdRequest(BaseModel):
     api_key: Optional[str] = None
     discussion_api_key: Optional[str] = None
     scene_path_override: Optional[str] = None
+    scene_path_overrides: Optional[dict[str, str]] = None
 
 
 class ViewSessionRequest(BaseModel):
@@ -81,6 +86,7 @@ class ViewSessionRequest(BaseModel):
     api_key: Optional[str] = None
     discussion_api_key: Optional[str] = None
     scene_path_override: Optional[str] = None
+    scene_path_overrides: Optional[dict[str, str]] = None
 
 
 class RejectRequest(BaseModel):
@@ -125,14 +131,14 @@ class RepoPathUpdateRequest(BaseModel):
 
 def _normalise_model_name(name: Optional[str], default: str = DEFAULT_MODEL) -> str:
     """Return a valid model short name, falling back to ``default``."""
-    if name and name in AVAILABLE_MODELS:
+    if name and is_known_model(name):
         return name
     return default
 
 
 def _normalise_optional_model_name(name: Optional[str]) -> Optional[str]:
     """Return a valid optional model short name, or ``None``."""
-    if name and name in AVAILABLE_MODELS:
+    if name and is_known_model(name):
         return name
     return None
 
@@ -224,7 +230,7 @@ def _resolve_analysis_and_discussion_keys(
     discussion_api_key: Optional[str],
 ) -> tuple[str, Optional[str]]:
     """Resolve provider-correct keys for analysis and discussion models."""
-    analysis_provider = AVAILABLE_MODELS[model]["provider"]
+    analysis_provider = resolve_model(model)["provider"]
     analysis_key = _resolve_provider_api_key(
         analysis_provider,
         api_key,
@@ -234,7 +240,7 @@ def _resolve_analysis_and_discussion_keys(
     if not discussion_model:
         return analysis_key, None
 
-    discussion_provider = AVAILABLE_MODELS[discussion_model]["provider"]
+    discussion_provider = resolve_model(discussion_model)["provider"]
 
     if discussion_provider == analysis_provider:
         # Same provider: discussion key is optional. If provided, validate and use it.
@@ -261,6 +267,8 @@ def _resolve_analysis_and_discussion_keys(
 @router.get("/config")
 async def get_config():
     """Return non-secret configuration state for the frontend."""
+    models = get_available_models()
+
     # Report which providers have API keys configured
     api_keys_configured = {
         provider: bool(os.environ.get(env_var))
@@ -271,11 +279,20 @@ async def get_config():
         "api_key_configured": any(api_keys_configured.values()),
         "api_keys_configured": api_keys_configured,
         "available_models": {
-            name: {"label": cfg["label"], "provider": cfg["provider"]}
-            for name, cfg in AVAILABLE_MODELS.items()
+            name: {
+                "label": cfg["label"],
+                "provider": cfg["provider"],
+                "id": cfg["id"],
+                "max_tokens": cfg["max_tokens"],
+            }
+            for name, cfg in models.items()
         },
         "default_model": DEFAULT_MODEL,
-        "lens_presets": LENS_PRESETS,
+        "model_registry": model_registry_status(),
+        "lens_presets": {
+            "auto": {},
+            **LENS_PRESETS,
+        },
     }
 
 
@@ -468,6 +485,7 @@ async def resume_session(req: ResumeRequest):
             analysis_key,
             discussion_api_key=discussion_key,
             scene_path_override=req.scene_path_override,
+            scene_path_overrides=req.scene_path_overrides,
         )
     except ResumeScenePathError as e:
         raise HTTPException(
@@ -477,6 +495,8 @@ async def resume_session(req: ResumeRequest):
                 "message": str(e),
                 "saved_scene_path": e.saved_scene_path,
                 "attempted_scene_path": e.attempted_scene_path,
+                "saved_scene_paths": e.saved_scene_paths,
+                "missing_scene_paths": e.missing_scene_paths,
                 "project_path": e.project_path,
                 "override_provided": e.override_provided,
             },
@@ -530,6 +550,7 @@ async def resume_session_by_id(req: ResumeSessionByIdRequest):
             analysis_key,
             discussion_api_key=discussion_key,
             scene_path_override=req.scene_path_override,
+            scene_path_overrides=req.scene_path_overrides,
         )
     except ResumeScenePathError as e:
         raise HTTPException(
@@ -539,6 +560,8 @@ async def resume_session_by_id(req: ResumeSessionByIdRequest):
                 "message": str(e),
                 "saved_scene_path": e.saved_scene_path,
                 "attempted_scene_path": e.attempted_scene_path,
+                "saved_scene_paths": e.saved_scene_paths,
+                "missing_scene_paths": e.missing_scene_paths,
                 "project_path": e.project_path,
                 "override_provided": e.override_provided,
             },
@@ -583,6 +606,7 @@ async def view_session(req: ViewSessionRequest):
             analysis_key,
             discussion_api_key=discussion_key,
             scene_path_override=req.scene_path_override,
+            scene_path_overrides=req.scene_path_overrides,
         )
     except ResumeScenePathError as e:
         raise HTTPException(
@@ -592,6 +616,8 @@ async def view_session(req: ViewSessionRequest):
                 "message": str(e),
                 "saved_scene_path": e.saved_scene_path,
                 "attempted_scene_path": e.attempted_scene_path,
+                "saved_scene_paths": e.saved_scene_paths,
+                "missing_scene_paths": e.missing_scene_paths,
                 "project_path": e.project_path,
                 "override_provided": e.override_provided,
             },

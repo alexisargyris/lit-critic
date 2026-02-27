@@ -40,8 +40,10 @@ npm run package
 Install the generated `.vsix`:
 
 ```bash
-code --install-extension lit-critic-2.3.0.vsix --force
+code --install-extension lit-critic-x.y.z.vsix --force
 ```
+
+Replace x, y, and z with the actual version numbers.
 
 ## Usage
 
@@ -51,15 +53,16 @@ Open the folder that contains `CANON.md`, `CAST.md`, and scene `.txt` files. The
 
 When `literaryCritic.autoStartServer` is enabled (default), the extension also auto-reveals the **lit-critic** activity view after startup in `CANON.md` workspaces.
 
-> If your fiction project is outside the lit-critic repository, set `literaryCritic.repoPath` to the lit-critic installation directory (for example `C:\Projects\lit-critic`). See [Opening a Scene Folder](#opening-a-scene-folder-separate-from-the-repo).
+> If your fiction project is outside the lit-critic repository, set `literaryCritic.repoPath` to the lit-critic installation directory (for example `C:\Projects\lit-critic`). See [Opening a Scene Folder](#opening-a-scene-folder-separate-from-repo).
 
 ### 2) Run analysis
 
 1. Press **`Ctrl+Shift+L`** (or run **lit-critic: Analyze Current Scene**).
 2. Use the multi-scene selection UI to choose one or more consecutive scenes (the same UI is used even for single-scene runs).
-3. The extension starts the local Platform API process if needed.
-4. Platform runs the 5 lenses in parallel (Prose, Structure, Logic, Clarity, Continuity).
-5. The Discussion Panel opens with the first finding.
+3. To change the analysis model quickly, use the **Change Analysis Model** button in the **Sessions** view title bar (next to Analyze/Refresh). The picker highlights your currently configured model.
+4. The extension starts the local Platform API process if needed.
+5. Platform runs the 6 lenses in parallel (Prose, Structure, Logic, Clarity, Continuity, Dialogue).
+6. The Discussion Panel opens with the first finding.
 
 ### 3) Review findings
 
@@ -77,6 +80,7 @@ The editor, sidebar, and discussion panel stay synchronized.
 
 - Progress is persisted to your project database (`.lit-critic.db`) by Platform.
 - Reopen the project and run Analyze/Resume to continue.
+- On resume/view, scene files are ensured open without reopening files that are already open in any editor group.
 - Export learning anytime via **lit-critic: Save Learning**.
 
 ## How It Works
@@ -153,7 +157,7 @@ If one or more reviewed scenes change mid-review, Platform adjusts per-scene lin
 | Save Session | — | Persist progress |
 | Clear Session | — | Delete active session |
 | Save Learning | — | Export `LEARNING.md` |
-| Select Model | — | Pick analysis model |
+| Change Analysis Model | — | Pick the analysis model from the Sessions view toolbar or Command Palette |
 | Stop Local API Process | — | Stop local API process |
 
 ## Settings

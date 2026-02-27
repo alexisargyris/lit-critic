@@ -23,6 +23,7 @@ const LENS_ICONS: Record<string, string> = {
     logic: 'lightbulb',
     clarity: 'eye',
     continuity: 'git-compare',
+    dialogue: 'comment-discussion',
 };
 
 const RESOLVED_COLOR_ID = 'gitDecoration.ignoredResourceForeground';
@@ -379,8 +380,8 @@ export class FindingsTreeProvider implements vscode.TreeDataProvider<FindingTree
             groups.get(lens)!.push(finding);
         }
 
-        // Order: prose, structure, logic, clarity, continuity
-        const order = ['prose', 'structure', 'logic', 'clarity', 'continuity'];
+        // Order: prose, structure, logic, clarity, continuity, dialogue
+        const order = ['prose', 'structure', 'logic', 'clarity', 'continuity', 'dialogue'];
         const lensItems: LensGroupItem[] = [];
         const findingItemsByLens = new Map<string, FindingTreeItem[]>();
         const findingItemsByIndex = new Map<number, FindingTreeItem>();

@@ -377,7 +377,7 @@ async def run_analysis(client: LLMClient, scene: str, indexes: dict[str, str],
     Raises CoordinatorError if coordination fails after all attempts.
     """
 
-    print("Running 5 lenses in parallel...")
+    print("Running 6 lenses in parallel...")
 
     lens_tasks = [
         run_lens(client, "prose", scene, indexes, model=model, max_tokens=max_tokens),
@@ -385,6 +385,7 @@ async def run_analysis(client: LLMClient, scene: str, indexes: dict[str, str],
         run_lens(client, "logic", scene, indexes, model=model, max_tokens=max_tokens),
         run_lens(client, "clarity", scene, indexes, model=model, max_tokens=max_tokens),
         run_lens(client, "continuity", scene, indexes, model=model, max_tokens=max_tokens),
+        run_lens(client, "dialogue", scene, indexes, model=model, max_tokens=max_tokens),
     ]
 
     lens_results = await asyncio.gather(*lens_tasks)

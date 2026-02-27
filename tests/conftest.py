@@ -244,6 +244,11 @@ def sample_lens_results():
             findings=[],
             raw_output='{"glossary_issues": [], "findings": []}'
         ),
+        LensResult(
+            lens_name="dialogue",
+            findings=[],
+            raw_output='[{"severity": "major", "location": "L12-L16", "evidence": "All characters sound identical", "impact": "Weakens voice distinction", "options": ["Differentiate diction per speaker"]}]'
+        ),
     ]
 
 
@@ -297,6 +302,22 @@ def sample_session_state_with_db(mock_anthropic_client, sample_scene, temp_proje
 
 
 # --- Phase 2: Management test fixtures ---
+
+@pytest.fixture
+def real_novel_dir():
+    """Path to the Dorian Gray test corpus for integration tests.
+
+    Skips the test if no chapter text files are present (i.e. the user
+    hasn't populated the directory yet).
+    """
+    p = Path(__file__).parent / "fixtures" / "novels" / "picture-of-dorian-gray"
+    if not p.exists():
+        pytest.skip("Test corpus directory not found: tests/fixtures/novels/picture-of-dorian-gray/")
+    txt_files = sorted(p.glob("chapter-*.txt"))
+    if not txt_files:
+        pytest.skip("No chapter files in test corpus — see tests/fixtures/novels/picture-of-dorian-gray/README.md")
+    return p
+
 
 @pytest.fixture
 def sample_session_summary():

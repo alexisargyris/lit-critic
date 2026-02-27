@@ -206,6 +206,32 @@ Output a JSON object with two arrays:
 
 If no issues found, output: {"glossary_issues": [], "findings": []}
 Output ONLY the JSON object, nothing else.""",
+
+        "dialogue": """## YOUR TASK: DIALOGUE LENS
+
+Focus ONLY on dialogue quality and conversational dynamics:
+- Character voice distinctiveness
+- Register consistency per character (cross-ref CAST.md)
+- Subtext vs on-the-nose exposition
+- Conversational rhythm and turn dynamics
+- Speaker attribution clarity in dialogue-heavy passages
+- Dialogue tags, punctuation, and speech conventions (cross-ref STYLE.md)
+
+IMPORTANT: Check LEARNING.md for author preferences. Do NOT repeatedly flag intentional choices the author has previously rejected.
+
+## OUTPUT FORMAT
+
+Output a JSON array of findings. Each finding must have:
+- severity: "critical" | "major" | "minor"
+- location: human-readable reference including the line range (e.g. "L018-L022, dialogue turn exchange")
+- line_start: integer, first line number of the issue
+- line_end: integer, last line number of the issue
+- evidence: why this is a problem
+- impact: why it matters to the reader
+- options: array of 1-2 action suggestions
+
+If no issues found, output: []
+Output ONLY the JSON array, nothing else.""",
     }
     
     return base_context + lens_instructions[lens_name]
@@ -281,7 +307,7 @@ COORDINATOR_TOOL = {
                         },
                         "lens": {
                             "type": "string",
-                            "enum": ["prose", "structure", "logic", "clarity", "continuity"],
+                            "enum": ["prose", "structure", "logic", "clarity", "continuity", "dialogue"],
                             "description": "Primary lens for this finding."
                         },
                         "location": {"type": "string", "description": "Human-readable location including line range (e.g. 'L042-L045, starting She moved...')."},
@@ -324,7 +350,7 @@ COORDINATOR_TOOL = {
 LENS_GROUPS = {
     "prose":     {"lenses": ["prose"],                        "label": "Prose"},
     "structure": {"lenses": ["structure"],                    "label": "Structure"},
-    "coherence": {"lenses": ["logic", "clarity", "continuity"], "label": "Coherence (Logic + Clarity + Continuity)"},
+    "coherence": {"lenses": ["logic", "clarity", "continuity", "dialogue"], "label": "Coherence (Logic + Clarity + Continuity + Dialogue)"},
 }
 
 
@@ -344,11 +370,11 @@ def get_coordinator_prompt(lens_results: list, scene: str) -> str:
 
     return f"""You are the coordinator for a multi-lens editorial review system.
 
-Five lenses have analyzed a scene. Your job is to:
+Six lenses have analyzed a scene. Your job is to:
 1. Parse their outputs
 2. Deduplicate (same issue flagged by multiple lenses → merge, note which lenses in flagged_by)
 3. Detect conflicts (lenses disagree → flag for author decision)
-4. Prioritize: Prose first, then Structure, then Coherence (Logic+Clarity+Continuity together)
+4. Prioritize: Prose first, then Structure, then Coherence (Logic+Clarity+Continuity+Dialogue together)
 5. Number the final findings sequentially
 6. **Preserve line_start and line_end** from lens outputs — these are critical for editor integration
 
@@ -389,8 +415,8 @@ def get_coordinator_chunk_prompt(group_name: str, group_results: list, scene: st
     coherence_note = ""
     if group_name == "coherence":
         coherence_note = """
-These three lenses often flag the same passage from different angles.
-Aggressively merge duplicates: if Logic and Clarity both flag the same line range,
+These four lenses often flag the same passage from different angles.
+Aggressively merge duplicates: if Logic, Clarity, and Dialogue flag the same line range,
 combine into a single finding and list both in flagged_by.
 """
 

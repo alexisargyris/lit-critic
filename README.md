@@ -2,7 +2,11 @@
 
 **A multi-lens editorial review system for fiction manuscripts.**
 
-lit-critic (short for Literary Critic) reads your novel scenes and provides detailed feedback through five analytical "lenses": Prose, Structure, Logic, Clarity, and Continuity. The tool doesn't generate your content or impose external standards; it checks your work against **your own rules** as defined in your project's index files.
+lit-critic (short for Literary Critic) reads your novel scenes and provides detailed feedback through six analytical "lenses": Prose, Structure, Logic, Clarity, Continuity, and Dialogue. The tool doesn't generate your content or impose external standards; it checks your work against **your own rules** as defined in your project's index files.
+
+<p align="center">
+  <img width="90%" src="assets/overview.png">
+</p>
 
 ---
 
@@ -22,6 +26,7 @@ lit-critic (short for Literary Critic) reads your novel scenes and provides deta
 - [Requirements](#requirements)
 - [Support](#support)
 - [Roadmap](#roadmap)
+- [Beyond Fiction](#beyond-fiction)
 - [License](#license)
 
 ---
@@ -29,7 +34,7 @@ lit-critic (short for Literary Critic) reads your novel scenes and provides deta
 ## How It Works
 
 1. **Loads** your index files (CANON, CAST, GLOSSARY, STYLE, THREADS, TIMELINE) and scene
-2. **Runs 5 lenses in parallel**: Prose, Structure, Logic, Clarity, Continuity
+2. **Runs 6 lenses in parallel**: Prose, Structure, Logic, Clarity, Continuity, Dialogue
 3. **Coordinates** results: deduplicates, prioritizes, detects conflicts
 4. **Presents** findings with line-number locations
 5. **Discusses** findings with you — the AI can revise, withdraw, or defend based on your input
@@ -46,18 +51,20 @@ You're writing a novel and want AI-powered editorial feedback that respects your
 
 lit-critic is an **editorial assistant, not a content generator**. It will never write prose for you, rewrite your sentences, or impose external standards. It reads your scenes, checks them against rules *you* define in your index files, and presents findings for you to accept, reject, or discuss. When it suggests specific wording (rarely), it's minimal — a couple of example words to illustrate a concept, never a rewritten paragraph. Your novel, your voice.
 
-- ✅ **Five editorial lenses** — Prose, Structure, Logic, Clarity, Continuity
+- ✅ **Six editorial lenses** — Prose, Structure, Logic, Clarity, Continuity, Dialogue
 - ✅ **Cross-scene analysis (consecutive scenes)** — analyze scene sets in one session for arc-level structure, logic, and continuity checks
 - ✅ **Batch-style scene-set workflow** — run one review session across multiple consecutive scene files instead of one file at a time
 - ✅ **Three interfaces** — CLI, Web UI, VS Code Extension (all use the same workflow)
 - ✅ **Auto-reveal in VS Code** — when a `CANON.md` project opens and extension auto-start runs, the lit-critic activity view is shown automatically
+- ✅ **Quick model switching in VS Code** — use the Sessions view toolbar button (**Change Analysis Model**) next to Analyze/Refresh before starting a new session
+- ✅ **Auto-refreshing model registry** — provider model catalogs can be auto-discovered (with cache + TTL), so new models can appear in `/api/config` without code edits
 - ✅ **Status-first Findings tree in VS Code** — pending findings are visually prioritized with severity tokens for quick triage
-- ✅ **Lens weighting presets** — choose balanced, prose-first, story-logic, or clarity-pass per analysis
+- ✅ **Smart lens presets** — auto-selects based on scene count; manual override available (balanced, prose-first, story-logic, clarity-pass)
 - ✅ **Interactive discussion** — debate findings; the AI can revise or withdraw
 - ✅ **Resizable VS Code discussion input** — drag the panel textarea handle to expand/shrink longer prompts comfortably
 - ✅ **Discussion context snapshots on re-review** — when a scene edit changes a finding, prior discussion remains visible as archived context and a new discussion block starts for the updated finding
 - ✅ **Learning system** — adapts to your style over time
-- ✅ **Auto-save & resume** — every decision is instantly saved; close anytime, with moved-scene recovery prompts when paths change
+- ✅ **Auto-save & resume** — every decision is instantly saved; close anytime, with moved-scene recovery prompts when paths change (including per-scene relinking for multi-scene sessions)
 - ✅ **Session management** — view history, inspect findings, clean up old reviews
 - ✅ **Slow-operation feedback in VS Code** — long-running actions (session load/refresh/resume) show progressive busy indicators and are timing-logged for diagnostics
 - ✅ **Scene change detection** — edit mid-review; line numbers adjust automatically
@@ -232,9 +239,11 @@ See the **[Installation Guide](docs/technical/installation.md)** for full develo
 - **Consecutive multi-scene analysis** — Scene sets are analyzed in one session with cross-scene continuity/logic reasoning
 - **Interoperable sessions** — Same project database works across CLI, Web UI, and VS Code
 - **Management API** — Platform endpoints for session history, learning data, and cleanup
+- **Dynamic model registry** — curated baseline + optional provider auto-discovery + local cache fallback for resilient model availability
 - **SemVer governance (no-CI)** — Component versions + compatibility matrix with local validator and pre-push hook support
 - **Release-intent guard** — Detects component changes without matching `versioning/compatibility.json` update (including pre-push ref-aware checks)
 - **Comprehensive tests** — Python (pytest) and TypeScript (mocha)
+- **Real novel test corpus** — Public-domain text (*The Picture of Dorian Gray*) with index files for integration testing against real prose
 
 ### 📖 Full Technical Docs
 
@@ -255,6 +264,12 @@ See the **[Installation Guide](docs/technical/installation.md)** for full develo
   - `OPENAI_API_KEY` for GPT models
   - If analysis and discussion models use different providers, configure both keys.
 - **Node.js 16+** (for VS Code extension only)
+
+Optional model-registry environment variables (advanced):
+- `LIT_CRITIC_MODEL_DISCOVERY_ENABLED` (`1`/`0`) — enable or disable provider auto-discovery
+- `LIT_CRITIC_MODEL_DISCOVERY_TTL_SECONDS` — refresh interval for provider discovery
+- `LIT_CRITIC_MODEL_DISCOVERY_TIMEOUT_SECONDS` — provider API timeout for discovery calls
+- `LIT_CRITIC_MODEL_CACHE_PATH` — override cache file path for discovered models
 
 ---
 
@@ -284,6 +299,21 @@ This roadmap reflects **personal priorities** based on my novel-writing needs. F
 - MCP server for integration with AI development tools
 
 No timeline or guarantees.
+
+---
+
+## Beyond Fiction
+
+If there is something generally useful in this repository, it is probably not the code itself but the **cooperative model** between human author and LLM that underpins it.
+
+lit-critic is built around a deliberate division of labour:
+
+- **The human**: creativity, intent, taste, and final judgement.
+- **The LLM**: adherence to rules, cross-referencing of large context, and structured analysis.
+
+Neither party does the other's job. The author never asks the LLM to write prose; the LLM never overrides the author's creative decisions. Instead, the author defines the rules (index files) and the LLM enforces them, presenting findings for the author to accept, reject, or debate. The result is a feedback loop where each side contributes what it does best.
+
+This pattern is not specific to fiction. The same principle — *human sets the rules and owns the creative/strategic decisions; LLM audits, cross-checks, and surfaces issues* — could apply to other domains: technical writing, legal document review, or even poetry. (A "lyric-critic" that checks your sonnets against your own declared meter and rhyme scheme? Mostly a joke — but only mostly.)
 
 ---
 

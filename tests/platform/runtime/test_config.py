@@ -1,6 +1,4 @@
-"""
-Tests for lit-critic.config module.
-"""
+"""Tests for ``lit_platform.runtime.config`` module."""
 
 import os
 import pytest
@@ -14,8 +12,13 @@ from lit_platform.runtime.config import (
     OPTIONAL_FILES,
     SESSION_FILE,
     AVAILABLE_MODELS,
+    BASE_AVAILABLE_MODELS,
     DEFAULT_MODEL,
     API_KEY_ENV_VARS,
+    get_available_models,
+    is_known_model,
+    model_registry_status,
+    refresh_available_models,
     resolve_model,
     resolve_api_key,
 )
@@ -166,6 +169,38 @@ class TestResolveModel:
         assert "provider" in result
         assert "max_tokens" in result
         assert "label" in result
+
+
+class TestModelRegistryHelpers:
+    """Tests for dynamic model registry helper functions."""
+
+    def test_get_available_models_returns_copy(self):
+        models = get_available_models()
+        assert models
+        models[DEFAULT_MODEL]["label"] = "mutated"
+
+        models_again = get_available_models()
+        assert models_again[DEFAULT_MODEL]["label"] != "mutated"
+
+    def test_refresh_available_models_disabled_does_not_drop_baseline(self):
+        with patch.dict(os.environ, {"LIT_CRITIC_MODEL_DISCOVERY_ENABLED": "0"}, clear=False):
+            refreshed = refresh_available_models(force=True)
+        assert DEFAULT_MODEL in refreshed
+        assert set(BASE_AVAILABLE_MODELS.keys()).issubset(set(refreshed.keys()))
+
+    def test_is_known_model_true_for_default(self):
+        assert is_known_model(DEFAULT_MODEL) is True
+
+    def test_is_known_model_false_for_random(self):
+        assert is_known_model("__nonexistent_model__") is False
+
+    def test_model_registry_status_shape(self):
+        status = model_registry_status()
+        assert "auto_discovery_enabled" in status
+        assert "cache_path" in status
+        assert "ttl_seconds" in status
+        assert "last_refresh_attempt_at" in status
+        assert "last_refresh_success_at" in status
 
 
 class TestResolveApiKey:

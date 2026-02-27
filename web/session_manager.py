@@ -11,19 +11,20 @@ from typing import Optional
 
 from lit_platform.facade import PlatformFacade
 from lit_platform.models import SessionState, Finding, LearningData, LensResult, CoordinatorError
-from lit_platform.persistence import SessionStore
+from lit_platform.persistence import SessionStore, FindingStore
 from lit_platform.runtime.utils import (
     concatenate_scenes,
     map_global_range_to_scene,
     remap_location_line_range,
 )
 from lit_platform.services.analysis_service import (
-    AVAILABLE_MODELS,
     DEFAULT_MODEL,
     INDEX_FILES,
     OPTIONAL_FILES,
     create_client,
+    is_known_model,
     normalize_lens_preferences,
+    resolve_model,
     run_coordinator,
     run_coordinator_chunked,
     run_lens,
@@ -140,6 +141,70 @@ class WebSessionManager:
         scene_docs = [(str(scene), self._load_scene(scene)) for scene in scene_paths]
         return concatenate_scenes(scene_docs)
 
+    @staticmethod
+    def _extract_saved_scene_paths(session_data: dict) -> list[str]:
+        """Extract persisted scene paths from session payload in normalized order."""
+        scene_paths = [str(p) for p in (session_data.get("scene_paths") or []) if p]
+        if scene_paths:
+            return scene_paths
+
+        single = session_data.get("scene_path", "")
+        return [single] if single else []
+
+    @staticmethod
+    def _normalize_scene_path_overrides(
+        scene_path_overrides: dict[str, str] | None,
+    ) -> dict[str, str]:
+        """Normalize scene path override mapping payload."""
+        if not scene_path_overrides:
+            return {}
+
+        normalized: dict[str, str] = {}
+        for old_path, new_path in scene_path_overrides.items():
+            if not old_path or not new_path:
+                continue
+            normalized[str(old_path)] = str(new_path)
+        return normalized
+
+    def _resolve_session_scene_paths(
+        self,
+        saved_scene_paths: list[str],
+        scene_path_override: str | None,
+        scene_path_overrides: dict[str, str] | None,
+    ) -> tuple[list[str], dict[str, str], list[str], bool]:
+        """Resolve saved scene paths using optional single/map overrides.
+
+        Returns:
+            resolved_scene_paths,
+            remap(old_path->new_path),
+            missing_resolved_paths,
+            override_provided
+        """
+        overrides_map = self._normalize_scene_path_overrides(scene_path_overrides)
+        override_provided = bool(scene_path_override) or bool(overrides_map)
+
+        resolved_scene_paths = list(saved_scene_paths)
+        remap: dict[str, str] = {}
+
+        # Apply explicit per-path overrides first.
+        for i, saved_path in enumerate(saved_scene_paths):
+            mapped = overrides_map.get(saved_path)
+            if mapped:
+                resolved_scene_paths[i] = mapped
+                remap[saved_path] = mapped
+
+        # Backward-compatible single override: apply to first missing saved path
+        # (or primary path when nothing is missing yet).
+        if scene_path_override and not overrides_map:
+            missing_saved = [p for p in saved_scene_paths if not Path(p).exists()]
+            target_old = missing_saved[0] if missing_saved else saved_scene_paths[0]
+            target_idx = saved_scene_paths.index(target_old)
+            resolved_scene_paths[target_idx] = scene_path_override
+            remap[target_old] = scene_path_override
+
+        missing_resolved_paths = [p for p in resolved_scene_paths if not Path(p).exists()]
+        return resolved_scene_paths, remap, missing_resolved_paths, override_provided
+
     async def start_analysis(self, scene_path: str, project_path: str, api_key: str,
                              model: str = DEFAULT_MODEL, discussion_model: str = None,
                              discussion_api_key: str | None = None,
@@ -154,11 +219,11 @@ class WebSessionManager:
             raise FileNotFoundError(f"Project directory not found: {project}")
 
         # Validate model
-        if model not in AVAILABLE_MODELS:
+        if not is_known_model(model):
             model = DEFAULT_MODEL
 
         # Validate discussion model
-        if discussion_model and discussion_model not in AVAILABLE_MODELS:
+        if discussion_model and not is_known_model(discussion_model):
             discussion_model = None
 
         # Handle existing active session
@@ -177,13 +242,13 @@ class WebSessionManager:
         indexes['LEARNING.md'] = generate_learning_markdown(learning)
 
         # Initialize provider-agnostic client
-        provider = AVAILABLE_MODELS[model]["provider"]
+        provider = resolve_model(model)["provider"]
         client = create_client(provider, api_key)
 
         # Initialize discussion client if using different model
         discussion_client = None
         if discussion_model:
-            discussion_provider = AVAILABLE_MODELS[discussion_model]["provider"]
+            discussion_provider = resolve_model(discussion_model)["provider"]
             # Only create a new client if the provider differs
             if discussion_provider != provider:
                 discussion_client = create_client(discussion_provider, discussion_api_key or api_key)
@@ -215,12 +280,12 @@ class WebSessionManager:
         self.analysis_progress = AnalysisProgress()
 
         # Run analysis with progress tracking
-        self.analysis_progress.add_event("status", {"message": "Running 5 lenses in parallel..."})
+        self.analysis_progress.add_event("status", {"message": "Running 6 lenses in parallel..."})
 
         model_id = self.state.model_id
         max_tokens = self.state.model_max_tokens
 
-        lens_names = ["prose", "structure", "logic", "clarity", "continuity"]
+        lens_names = ["prose", "structure", "logic", "clarity", "continuity", "dialogue"]
         lens_tasks = [
             self._run_lens_with_progress(client, name, scene_content, indexes,
                                          model=model_id, max_tokens=max_tokens)
@@ -339,7 +404,8 @@ class WebSessionManager:
 
     async def resume_session(self, project_path: str, api_key: str | None,
                              discussion_api_key: str | None = None,
-                             scene_path_override: str | None = None) -> dict:
+                             scene_path_override: str | None = None,
+                             scene_path_overrides: dict[str, str] | None = None) -> dict:
         """Resume a saved session. Returns summary info."""
         project = Path(project_path)
 
@@ -350,111 +416,15 @@ class WebSessionManager:
         # Extract the DB connection (caller takes ownership)
         conn = session_data.pop("_conn")
 
-        scene_paths = session_data.get("scene_paths") or []
-        scene_path_str = scene_paths[0] if scene_paths else session_data.get("scene_path", "")
-        if not scene_path_str:
-            conn.close()
-            raise ValueError("Session data is corrupted (missing scene path)")
-
-        saved_scene_path = Path(scene_path_str)
-        if scene_path_override:
-            resolved_scene_paths = [Path(scene_path_override)]
-        else:
-            resolved_scene_paths = [Path(p) for p in (scene_paths or [scene_path_str])]
-        scene_path = resolved_scene_paths[0]
-
-        if not scene_path.exists():
-            conn.close()
-            if scene_path_override:
-                raise ResumeScenePathError(
-                    "Provided scene file path does not exist.",
-                    saved_scene_path=str(saved_scene_path),
-                    attempted_scene_path=str(scene_path),
-                    project_path=str(project),
-                    override_provided=True,
-                )
-
-            raise ResumeScenePathError(
-                "Saved scene file was not found. The session may have been moved from another machine.",
-                saved_scene_path=str(saved_scene_path),
-                attempted_scene_path=str(saved_scene_path),
-                project_path=str(project),
-                override_provided=False,
-            )
-
-        if scene_path_override:
-            SessionStore.update_scene_path(conn, session_data["session_id"], str(scene_path))
-            session_data["scene_path"] = str(scene_path)
-
-        # Load files
-        indexes, loaded_files, missing_files = self._load_project_files(project)
-        scene_content, scene_line_map = self._load_scenes(resolved_scene_paths)
-
-        # Validate (warn but don't block — scene changes will be detected)
-        is_valid, error_msg = validate_session(
+        return await self._load_session_into_state(
+            project,
             session_data,
-            scene_content,
-            str(scene_path),
-            [str(p) for p in resolved_scene_paths],
+            conn,
+            api_key,
+            discussion_api_key=discussion_api_key,
+            scene_path_override=scene_path_override,
+            scene_path_overrides=scene_path_overrides,
         )
-
-        # Load learning from DB
-        learning = load_learning_from_db(conn)
-        restore_learning_session(learning, session_data.get("learning_session", {}))
-
-        # Restore model from session
-        saved_model = session_data.get("model", DEFAULT_MODEL)
-        if saved_model not in AVAILABLE_MODELS:
-            saved_model = DEFAULT_MODEL
-
-        # Restore discussion model from session
-        saved_discussion_model = session_data.get("discussion_model")
-        if saved_discussion_model and saved_discussion_model not in AVAILABLE_MODELS:
-            saved_discussion_model = None
-
-        # Initialize provider-agnostic client
-        provider = AVAILABLE_MODELS[saved_model]["provider"]
-        client = create_client(provider, api_key)
-
-        # Initialize discussion client if using different model
-        discussion_client = None
-        if saved_discussion_model:
-            discussion_provider = AVAILABLE_MODELS[saved_discussion_model]["provider"]
-            # Only create a new client if the provider differs
-            if discussion_provider != provider:
-                discussion_client = create_client(discussion_provider, discussion_api_key or api_key)
-            else:
-                # Same provider — reuse the same client
-                discussion_client = client
-
-        # Create session state
-        self.state = SessionState(
-            client=client,
-            scene_content=scene_content,
-            scene_path=str(scene_path),
-            project_path=project,
-            indexes=indexes,
-            scene_paths=[str(p) for p in resolved_scene_paths],
-            scene_line_map=scene_line_map,
-            learning=learning,
-            findings=[Finding.from_dict(f) for f in session_data.get("findings", [])],
-            glossary_issues=session_data.get("glossary_issues", []),
-            discussion_history=session_data.get("discussion_history", []),
-            lens_preferences=session_data.get("lens_preferences") or normalize_lens_preferences(None),
-            model=saved_model,
-            discussion_model=saved_discussion_model,
-            discussion_client=discussion_client,
-            index_context_hash=session_data.get("index_context_hash", ""),
-            index_context_stale=session_data.get("index_context_stale", False),
-            index_rerun_prompted=session_data.get("index_rerun_prompted", False),
-            index_changed_files=session_data.get("index_changed_files", []),
-            db_conn=conn,
-            session_id=session_data["session_id"],
-        )
-
-        self.current_index = session_data.get("current_index", 0)
-
-        return self._build_summary()
 
     async def resume_session_by_id(
         self,
@@ -463,6 +433,7 @@ class WebSessionManager:
         api_key: str | None,
         discussion_api_key: str | None = None,
         scene_path_override: str | None = None,
+        scene_path_overrides: dict[str, str] | None = None,
     ) -> dict:
         """Resume a specific saved session by id. Returns summary info."""
         project = Path(project_path)
@@ -491,6 +462,7 @@ class WebSessionManager:
             api_key,
             discussion_api_key=discussion_api_key,
             scene_path_override=scene_path_override,
+            scene_path_overrides=scene_path_overrides,
         )
 
     async def load_session_for_viewing(
@@ -500,6 +472,7 @@ class WebSessionManager:
         api_key: str | None,
         discussion_api_key: str | None = None,
         scene_path_override: str | None = None,
+        scene_path_overrides: dict[str, str] | None = None,
     ) -> dict:
         """Load any session (active, completed, or abandoned) for viewing/interactions."""
         project = Path(project_path)
@@ -517,6 +490,7 @@ class WebSessionManager:
             api_key,
             discussion_api_key=discussion_api_key,
             scene_path_override=scene_path_override,
+            scene_path_overrides=scene_path_overrides,
         )
 
     async def _load_session_into_state(
@@ -527,54 +501,56 @@ class WebSessionManager:
         api_key: str | None,
         discussion_api_key: str | None = None,
         scene_path_override: str | None = None,
+        scene_path_overrides: dict[str, str] | None = None,
     ) -> dict:
         """Shared logic for loading a persisted session into manager state."""
 
-        scene_paths = session_data.get("scene_paths") or []
-        scene_path_str = scene_paths[0] if scene_paths else session_data.get("scene_path", "")
-        if not scene_path_str:
+        saved_scene_paths = self._extract_saved_scene_paths(session_data)
+        if not saved_scene_paths:
             conn.close()
             raise ValueError("Session data is corrupted (missing scene path)")
 
-        saved_scene_path = Path(scene_path_str)
-        if scene_path_override:
-            resolved_scene_paths = [Path(scene_path_override)]
-        else:
-            resolved_scene_paths = [Path(p) for p in (scene_paths or [scene_path_str])]
-        scene_path = resolved_scene_paths[0]
+        resolved_scene_paths, remap, missing_scene_paths, override_provided = self._resolve_session_scene_paths(
+            saved_scene_paths,
+            scene_path_override,
+            scene_path_overrides,
+        )
 
-        if not scene_path.exists():
+        if missing_scene_paths:
             conn.close()
-            if scene_path_override:
-                raise ResumeScenePathError(
-                    "Provided scene file path does not exist.",
-                    saved_scene_path=str(saved_scene_path),
-                    attempted_scene_path=str(scene_path),
-                    project_path=str(project),
-                    override_provided=True,
-                )
+            saved_scene_path = saved_scene_paths[0]
+            attempted_scene_path = missing_scene_paths[0]
 
             raise ResumeScenePathError(
-                "Saved scene file was not found. The session may have been moved from another machine.",
+                (
+                    "Provided scene file path(s) do not resolve all session scenes."
+                    if override_provided
+                    else "Saved scene file was not found. The session may have been moved from another machine."
+                ),
                 saved_scene_path=str(saved_scene_path),
-                attempted_scene_path=str(saved_scene_path),
+                attempted_scene_path=str(attempted_scene_path),
                 project_path=str(project),
-                override_provided=False,
+                override_provided=override_provided,
+                saved_scene_paths=[str(p) for p in saved_scene_paths],
+                missing_scene_paths=[str(p) for p in missing_scene_paths],
             )
 
-        if scene_path_override:
-            SessionStore.update_scene_path(conn, session_data["session_id"], str(scene_path))
-            session_data["scene_path"] = str(scene_path)
+        if remap:
+            SessionStore.update_scene_paths(conn, session_data["session_id"], [str(p) for p in resolved_scene_paths])
+            FindingStore.remap_scene_paths(conn, session_data["session_id"], remap)
+            session_data["scene_paths"] = [str(p) for p in resolved_scene_paths]
+            session_data["scene_path"] = str(resolved_scene_paths[0])
 
         # Load files
         indexes, loaded_files, missing_files = self._load_project_files(project)
-        scene_content, scene_line_map = self._load_scenes(resolved_scene_paths)
+        scene_content, scene_line_map = self._load_scenes([Path(p) for p in resolved_scene_paths])
+        scene_path = str(resolved_scene_paths[0])
 
         # Validate (warn but don't block — scene changes will be detected)
         is_valid, error_msg = validate_session(
             session_data,
             scene_content,
-            str(scene_path),
+            scene_path,
             [str(p) for p in resolved_scene_paths],
         )
 
@@ -584,22 +560,22 @@ class WebSessionManager:
 
         # Restore model from session
         saved_model = session_data.get("model", DEFAULT_MODEL)
-        if saved_model not in AVAILABLE_MODELS:
+        if not is_known_model(saved_model):
             saved_model = DEFAULT_MODEL
 
         # Restore discussion model from session
         saved_discussion_model = session_data.get("discussion_model")
-        if saved_discussion_model and saved_discussion_model not in AVAILABLE_MODELS:
+        if saved_discussion_model and not is_known_model(saved_discussion_model):
             saved_discussion_model = None
 
         # Initialize provider-agnostic client
-        provider = AVAILABLE_MODELS[saved_model]["provider"]
+        provider = resolve_model(saved_model)["provider"]
         client = create_client(provider, api_key)
 
         # Initialize discussion client if using different model
         discussion_client = None
         if saved_discussion_model:
-            discussion_provider = AVAILABLE_MODELS[saved_discussion_model]["provider"]
+            discussion_provider = resolve_model(saved_discussion_model)["provider"]
             # Only create a new client if the provider differs
             if discussion_provider != provider:
                 discussion_client = create_client(discussion_provider, discussion_api_key or api_key)
@@ -611,7 +587,7 @@ class WebSessionManager:
         self.state = SessionState(
             client=client,
             scene_content=scene_content,
-            scene_path=str(scene_path),
+            scene_path=scene_path,
             project_path=project,
             indexes=indexes,
             scene_paths=[str(p) for p in resolved_scene_paths],
@@ -1133,9 +1109,13 @@ class ResumeScenePathError(FileNotFoundError):
         attempted_scene_path: str,
         project_path: str,
         override_provided: bool,
+        saved_scene_paths: Optional[list[str]] = None,
+        missing_scene_paths: Optional[list[str]] = None,
     ):
         super().__init__(message)
         self.saved_scene_path = saved_scene_path
         self.attempted_scene_path = attempted_scene_path
         self.project_path = project_path
         self.override_provided = override_provided
+        self.saved_scene_paths = saved_scene_paths or ([saved_scene_path] if saved_scene_path else [])
+        self.missing_scene_paths = missing_scene_paths or ([attempted_scene_path] if attempted_scene_path else [])

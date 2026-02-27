@@ -30,13 +30,14 @@ def all_findings_considered(findings: list[Finding]) -> bool:
 
 def next_index_for_lens(findings: list[Finding], current_index: int, target_lens: str) -> int:
     """Return the next index after applying lens-group skip semantics."""
+    coherence_lenses = {"logic", "clarity", "continuity", "dialogue"}
     idx = current_index + 1
     while idx < len(findings):
         lens = (findings[idx].lens or "").lower()
         if target_lens == "structure" and lens == "prose":
             idx += 1
             continue
-        if target_lens == "coherence" and lens in ("prose", "structure"):
+        if target_lens == "coherence" and lens not in coherence_lenses:
             idx += 1
             continue
         break

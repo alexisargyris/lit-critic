@@ -72,7 +72,7 @@ class TestRunLens:
             return_value=LLMResponse(text='[]')
         )
 
-        lens_names = ["prose", "structure", "logic", "clarity", "continuity"]
+        lens_names = ["prose", "structure", "logic", "clarity", "continuity", "dialogue"]
 
         for lens_name in lens_names:
             result = await run_lens(mock_anthropic_client, lens_name, "Test scene", sample_indexes)
@@ -440,7 +440,7 @@ class TestRunAnalysis:
         self, mock_anthropic_client, sample_indexes, sample_scene,
         sample_coordinator_output
     ):
-        """run_analysis should run 5 lenses then 3 chunked coordinator calls."""
+        """run_analysis should run 6 lenses then 3 chunked coordinator calls."""
         mock_anthropic_client.create_message = AsyncMock(
             return_value=LLMResponse(text='[]')
         )
@@ -451,7 +451,7 @@ class TestRunAnalysis:
         with patch('lit_platform.runtime.api.print'):
             result = await run_analysis(mock_anthropic_client, sample_scene, sample_indexes)
 
-        assert mock_anthropic_client.create_message.call_count == 5  # 5 lenses
+        assert mock_anthropic_client.create_message.call_count == 6  # 6 lenses
         assert mock_anthropic_client.create_message_with_tool.call_count == 3  # 3 coordinator chunks
         assert "findings" in result
         assert len(result["findings"]) >= 1  # dedup may reduce count

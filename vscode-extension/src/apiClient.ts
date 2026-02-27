@@ -19,6 +19,7 @@ import {
     SessionDetail,
     LearningData,
     ResumeErrorDetail,
+    ScenePathRecoverySelection,
     RepoPreflightStatus,
     RepoPathInvalidDetail,
 } from './types';
@@ -279,12 +280,23 @@ export class ApiClient {
         );
     }
 
+    private buildScenePathRecoveryPayload(selection?: ScenePathRecoverySelection): Record<string, unknown> {
+        if (!selection) {
+            return {};
+        }
+
+        return {
+            ...(selection.scenePathOverride ? { scene_path_override: selection.scenePathOverride } : {}),
+            ...(selection.scenePathOverrides ? { scene_path_overrides: selection.scenePathOverrides } : {}),
+        };
+    }
+
     /** POST /api/resume — resume a saved session. */
-    async resume(projectPath: string, apiKey?: string, scenePathOverride?: string): Promise<AnalysisSummary> {
+    async resume(projectPath: string, apiKey?: string, recoverySelection?: ScenePathRecoverySelection): Promise<AnalysisSummary> {
         return this.request<AnalysisSummary>('POST', '/api/resume', {
             project_path: projectPath,
             ...(apiKey ? { api_key: apiKey } : {}),
-            ...(scenePathOverride ? { scene_path_override: scenePathOverride } : {}),
+            ...this.buildScenePathRecoveryPayload(recoverySelection),
         });
     }
 
@@ -293,13 +305,13 @@ export class ApiClient {
         projectPath: string,
         sessionId: number,
         apiKey?: string,
-        scenePathOverride?: string,
+        recoverySelection?: ScenePathRecoverySelection,
     ): Promise<AnalysisSummary> {
         return this.request<AnalysisSummary>('POST', '/api/resume-session', {
             project_path: projectPath,
             session_id: sessionId,
             ...(apiKey ? { api_key: apiKey } : {}),
-            ...(scenePathOverride ? { scene_path_override: scenePathOverride } : {}),
+            ...this.buildScenePathRecoveryPayload(recoverySelection),
         });
     }
 
@@ -308,20 +320,20 @@ export class ApiClient {
         projectPath: string,
         sessionId: number,
         apiKey?: string,
-        scenePathOverride?: string,
+        recoverySelection?: ScenePathRecoverySelection,
     ): Promise<AnalysisSummary> {
         return this.request<AnalysisSummary>('POST', '/api/view-session', {
             project_path: projectPath,
             session_id: sessionId,
             ...(apiKey ? { api_key: apiKey } : {}),
-            ...(scenePathOverride ? { scene_path_override: scenePathOverride } : {}),
+            ...this.buildScenePathRecoveryPayload(recoverySelection),
         });
     }
 
     async resumeWithRecovery(
         projectPath: string,
         apiKey: string | undefined,
-        getScenePathOverride: (detail: ResumeErrorDetail) => Promise<string | undefined>,
+        getScenePathOverride: (detail: ResumeErrorDetail) => Promise<ScenePathRecoverySelection | undefined>,
     ): Promise<AnalysisSummary> {
         try {
             return await this.resume(projectPath, apiKey);
@@ -332,12 +344,17 @@ export class ApiClient {
                 throw err;
             }
 
-            const override = await getScenePathOverride(detail);
-            if (!override || !override.trim()) {
+            const selection = await getScenePathOverride(detail);
+            if (!selection || (!selection.scenePathOverride?.trim() && !selection.scenePathOverrides)) {
                 throw new Error('Resume cancelled by user.');
             }
 
-            return this.resume(projectPath, apiKey, override.trim());
+            const normalized: ScenePathRecoverySelection = {
+                ...(selection.scenePathOverride ? { scenePathOverride: selection.scenePathOverride.trim() } : {}),
+                ...(selection.scenePathOverrides ? { scenePathOverrides: selection.scenePathOverrides } : {}),
+            };
+
+            return this.resume(projectPath, apiKey, normalized);
         }
     }
 
@@ -364,7 +381,7 @@ export class ApiClient {
         projectPath: string,
         sessionId: number,
         apiKey: string | undefined,
-        getScenePathOverride: (detail: ResumeErrorDetail) => Promise<string | undefined>,
+        getScenePathOverride: (detail: ResumeErrorDetail) => Promise<ScenePathRecoverySelection | undefined>,
     ): Promise<AnalysisSummary> {
         try {
             return await this.resumeSessionById(projectPath, sessionId, apiKey);
@@ -375,12 +392,17 @@ export class ApiClient {
                 throw err;
             }
 
-            const override = await getScenePathOverride(detail);
-            if (!override || !override.trim()) {
+            const selection = await getScenePathOverride(detail);
+            if (!selection || (!selection.scenePathOverride?.trim() && !selection.scenePathOverrides)) {
                 throw new Error('Resume cancelled by user.');
             }
 
-            return this.resumeSessionById(projectPath, sessionId, apiKey, override.trim());
+            const normalized: ScenePathRecoverySelection = {
+                ...(selection.scenePathOverride ? { scenePathOverride: selection.scenePathOverride.trim() } : {}),
+                ...(selection.scenePathOverrides ? { scenePathOverrides: selection.scenePathOverrides } : {}),
+            };
+
+            return this.resumeSessionById(projectPath, sessionId, apiKey, normalized);
         }
     }
 
@@ -388,7 +410,7 @@ export class ApiClient {
         projectPath: string,
         sessionId: number,
         apiKey: string | undefined,
-        getScenePathOverride: (detail: ResumeErrorDetail) => Promise<string | undefined>,
+        getScenePathOverride: (detail: ResumeErrorDetail) => Promise<ScenePathRecoverySelection | undefined>,
     ): Promise<AnalysisSummary> {
         try {
             return await this.viewSession(projectPath, sessionId, apiKey);
@@ -399,12 +421,17 @@ export class ApiClient {
                 throw err;
             }
 
-            const override = await getScenePathOverride(detail);
-            if (!override || !override.trim()) {
+            const selection = await getScenePathOverride(detail);
+            if (!selection || (!selection.scenePathOverride?.trim() && !selection.scenePathOverrides)) {
                 throw new Error('View session cancelled by user.');
             }
 
-            return this.viewSession(projectPath, sessionId, apiKey, override.trim());
+            const normalized: ScenePathRecoverySelection = {
+                ...(selection.scenePathOverride ? { scenePathOverride: selection.scenePathOverride.trim() } : {}),
+                ...(selection.scenePathOverrides ? { scenePathOverrides: selection.scenePathOverrides } : {}),
+            };
+
+            return this.viewSession(projectPath, sessionId, apiKey, normalized);
         }
     }
 

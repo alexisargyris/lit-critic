@@ -1,5 +1,5 @@
 """
-Tests for lit-critic.utils module.
+Tests for ``lit_platform.runtime.utils`` module.
 
 Covers:
 - number_lines: line number prepending

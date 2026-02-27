@@ -1,6 +1,4 @@
-"""
-Tests for the server.session module (SQLite-backed).
-"""
+"""Tests for the ``lit_platform.runtime.session`` module (SQLite-backed)."""
 
 import pytest
 import sqlite3

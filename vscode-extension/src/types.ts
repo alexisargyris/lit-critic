@@ -94,8 +94,15 @@ export interface ResumeErrorDetail {
     message?: string;
     saved_scene_path?: string;
     attempted_scene_path?: string;
+    saved_scene_paths?: string[];
+    missing_scene_paths?: string[];
     project_path?: string;
     override_provided?: boolean;
+}
+
+export interface ScenePathRecoverySelection {
+    scenePathOverride?: string;
+    scenePathOverrides?: Record<string, string>;
 }
 
 export interface RepoPreflightStatus {
@@ -198,8 +205,20 @@ export interface DiscussStreamEvent {
 /** Response from GET /api/config */
 export interface ServerConfig {
     api_key_configured: boolean;
-    available_models: Record<string, { label: string }>;
+    available_models: Record<string, {
+        label: string;
+        provider?: string;
+        id?: string;
+        max_tokens?: number;
+    }>;
     default_model: string;
+    model_registry?: {
+        auto_discovery_enabled: boolean;
+        cache_path: string;
+        ttl_seconds: number;
+        last_refresh_attempt_at: number | null;
+        last_refresh_success_at: number | null;
+    };
     lens_presets?: Record<string, Record<string, number>>;
 }
 

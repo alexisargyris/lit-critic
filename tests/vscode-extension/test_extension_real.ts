@@ -157,6 +157,14 @@ describe('Extension (Real)', () => {
     });
 
     function loadExtension() {
+        // Pre-load registerCommands with the mock vscode so its transitive
+        // `import * as vscode from 'vscode'` is shimmed rather than hitting
+        // the real (unavailable) vscode module in the test environment.
+        const registerCommandsMod = proxyquire(
+            '../../vscode-extension/src/commands/registerCommands',
+            { vscode: mockVscode },
+        );
+
         const module = proxyquire('../../vscode-extension/src/extension', {
             'vscode': mockVscode,
             './serverManager': { ServerManager: mockServerManager },
@@ -173,6 +181,7 @@ describe('Extension (Real)', () => {
             './operationTracker': { OperationTracker: mockOperationTracker },
             'path': mockPath,
             'fs': mockFs,
+            './commands/registerCommands': registerCommandsMod,
         });
         activate = module.activate;
         deactivate = module.deactivate;
@@ -835,7 +844,7 @@ describe('Extension (Real)', () => {
                         available_models: { sonnet: { label: 'Sonnet' } },
                         default_model: 'sonnet',
                         lens_presets: {
-                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1 },
+                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
                         },
                     };
                 }
@@ -937,7 +946,7 @@ describe('Extension (Real)', () => {
                         available_models: { sonnet: { label: 'Sonnet' } },
                         default_model: 'sonnet',
                         lens_presets: {
-                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1 },
+                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
                         },
                     };
                 }
@@ -1026,7 +1035,7 @@ describe('Extension (Real)', () => {
                         available_models: { sonnet: { label: 'Sonnet' } },
                         default_model: 'sonnet',
                         lens_presets: {
-                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1 },
+                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
                         },
                     };
                 }
@@ -1168,6 +1177,7 @@ describe('Extension (Real)', () => {
                                 logic: 1,
                                 clarity: 1,
                                 continuity: 1,
+                                dialogue: 1,
                             },
                         },
                     };
@@ -1231,13 +1241,301 @@ describe('Extension (Real)', () => {
             await analyzeCallback();
 
             assert.ok(
-                statusMessages.some((message) => message.includes('Running 3 lenses (clarity-pass preset)...')),
+                statusMessages.some((message) => message.includes('Running 4 lenses (clarity-pass preset)...')),
                 'Expected status bar to include preset-aware lens count',
             );
             assert.ok(
                 statusMessages.every((message) => !message.includes('Running 5 lenses')),
                 'Expected no hardcoded "Running 5 lenses" status',
             );
+        });
+
+        it('should resolve auto lens preset to single-scene for single-scene analyze', async () => {
+            let analyzeCallback: any;
+            let analyzeLensPreset: string | undefined;
+            const statusMessages: string[] = [];
+
+            mockStatusBar = class MockStatusBar {
+                setReady() {}
+                setAnalyzing(message?: string) { statusMessages.push(message || ''); }
+                setProgress() {}
+                setComplete() {}
+                setError() {}
+                dispose() {}
+            };
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) { return { ok: true }; }
+                async getSession() { return { active: false }; }
+                async checkSession() { return { exists: false }; }
+                async listSessions() { return { sessions: [] }; }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                        lens_presets: {
+                            'single-scene': { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
+                            'multi-scene': { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
+                        },
+                    };
+                }
+                async analyze(
+                    _scenePath: string,
+                    _projectPath: string,
+                    _model: string,
+                    _discussionModel: string | undefined,
+                    _apiKey: string | undefined,
+                    lensPrefs: any,
+                ) {
+                    analyzeLensPreset = lensPrefs?.preset;
+                    return {
+                        scene_path: '/test/repo/scene-a.txt',
+                        scene_name: 'scene-a.txt',
+                        project_path: '/test/repo',
+                        total_findings: 0,
+                        current_index: 0,
+                        glossary_issues: [],
+                        counts: { critical: 0, major: 0, minor: 0 },
+                        lens_counts: {},
+                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
+                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
+                        findings_status: [],
+                    };
+                }
+                streamAnalysisProgress(_onEvent: any, onDone: any, _onError: any) {
+                    setTimeout(() => onDone(), 0);
+                    return () => {};
+                }
+                async getCurrentFinding() { return { complete: true }; }
+            };
+
+            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
+                if (cmd === 'literaryCritic.analyze') {
+                    analyzeCallback = callback;
+                }
+                return { dispose: () => {} };
+            };
+
+            mockVscode.window.activeTextEditor = undefined;
+            mockVscode.window.visibleTextEditors = [];
+            mockVscode.window.showOpenDialog = async () => [{ fsPath: '/test/repo/scene-a.txt' }];
+            mockVscode.window.showTextDocument = async () => ({
+                document: { uri: { fsPath: '/test/repo/scene-a.txt' } },
+                viewColumn: 1,
+            });
+
+            mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/repo' } }];
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    if (key === 'lensPreset') return 'auto';
+                    return defaultValue;
+                },
+                update: async () => {},
+                inspect: () => ({ workspaceValue: undefined, globalValue: undefined, workspaceFolderValue: undefined }),
+            });
+
+            mockFs.existsSync = (filePath: string) => filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+            await analyzeCallback();
+
+            assert.equal(analyzeLensPreset, 'single-scene');
+            assert.ok(
+                statusMessages.some((message) => message.includes('(single-scene preset)')),
+                'Expected analysis status to reflect resolved single-scene preset',
+            );
+        });
+
+        it('should resolve auto lens preset to multi-scene for multi-scene analyze', async () => {
+            let analyzeCallback: any;
+            let analyzeLensPreset: string | undefined;
+            const statusMessages: string[] = [];
+
+            mockStatusBar = class MockStatusBar {
+                setReady() {}
+                setAnalyzing(message?: string) { statusMessages.push(message || ''); }
+                setProgress() {}
+                setComplete() {}
+                setError() {}
+                dispose() {}
+            };
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) { return { ok: true }; }
+                async getSession() { return { active: false }; }
+                async checkSession() { return { exists: false }; }
+                async listSessions() { return { sessions: [] }; }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                        lens_presets: {
+                            'single-scene': { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
+                            'multi-scene': { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
+                        },
+                    };
+                }
+                async analyze(
+                    _scenePath: string,
+                    _projectPath: string,
+                    _model: string,
+                    _discussionModel: string | undefined,
+                    _apiKey: string | undefined,
+                    lensPrefs: any,
+                ) {
+                    analyzeLensPreset = lensPrefs?.preset;
+                    return {
+                        scene_path: '/test/repo/scene-a.txt',
+                        scene_name: 'scene-a.txt',
+                        project_path: '/test/repo',
+                        total_findings: 0,
+                        current_index: 0,
+                        glossary_issues: [],
+                        counts: { critical: 0, major: 0, minor: 0 },
+                        lens_counts: {},
+                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
+                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
+                        findings_status: [],
+                    };
+                }
+                streamAnalysisProgress(_onEvent: any, onDone: any, _onError: any) {
+                    setTimeout(() => onDone(), 0);
+                    return () => {};
+                }
+                async getCurrentFinding() { return { complete: true }; }
+            };
+
+            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
+                if (cmd === 'literaryCritic.analyze') {
+                    analyzeCallback = callback;
+                }
+                return { dispose: () => {} };
+            };
+
+            mockVscode.window.activeTextEditor = undefined;
+            mockVscode.window.visibleTextEditors = [];
+            mockVscode.window.showOpenDialog = async () => [
+                { fsPath: '/test/repo/scene-a.txt' },
+                { fsPath: '/test/repo/scene-b.txt' },
+            ];
+            mockVscode.window.showTextDocument = async (docOrUri: any) => ({
+                document: { uri: docOrUri },
+                viewColumn: 1,
+            });
+
+            mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/repo' } }];
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    if (key === 'lensPreset') return 'auto';
+                    return defaultValue;
+                },
+                update: async () => {},
+                inspect: () => ({ workspaceValue: undefined, globalValue: undefined, workspaceFolderValue: undefined }),
+            });
+
+            mockFs.existsSync = (filePath: string) => filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+            await analyzeCallback();
+
+            assert.equal(analyzeLensPreset, 'multi-scene');
+            assert.ok(
+                statusMessages.some((message) => message.includes('(multi-scene preset)')),
+                'Expected analysis status to reflect resolved multi-scene preset',
+            );
+        });
+
+        it('should keep manual lens preset unchanged regardless of scene count', async () => {
+            let analyzeCallback: any;
+            let analyzeLensPreset: string | undefined;
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) { return { ok: true }; }
+                async getSession() { return { active: false }; }
+                async checkSession() { return { exists: false }; }
+                async listSessions() { return { sessions: [] }; }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                        lens_presets: {
+                            'prose-first': { prose: 1.6, structure: 1.1, logic: 0.9, clarity: 0.9, continuity: 0.8, dialogue: 1.1 },
+                        },
+                    };
+                }
+                async analyze(
+                    _scenePath: string,
+                    _projectPath: string,
+                    _model: string,
+                    _discussionModel: string | undefined,
+                    _apiKey: string | undefined,
+                    lensPrefs: any,
+                ) {
+                    analyzeLensPreset = lensPrefs?.preset;
+                    return {
+                        scene_path: '/test/repo/scene-a.txt',
+                        scene_name: 'scene-a.txt',
+                        project_path: '/test/repo',
+                        total_findings: 0,
+                        current_index: 0,
+                        glossary_issues: [],
+                        counts: { critical: 0, major: 0, minor: 0 },
+                        lens_counts: {},
+                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
+                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
+                        findings_status: [],
+                    };
+                }
+                streamAnalysisProgress(_onEvent: any, onDone: any, _onError: any) {
+                    setTimeout(() => onDone(), 0);
+                    return () => {};
+                }
+                async getCurrentFinding() { return { complete: true }; }
+            };
+
+            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
+                if (cmd === 'literaryCritic.analyze') {
+                    analyzeCallback = callback;
+                }
+                return { dispose: () => {} };
+            };
+
+            mockVscode.window.activeTextEditor = undefined;
+            mockVscode.window.visibleTextEditors = [];
+            mockVscode.window.showOpenDialog = async () => [
+                { fsPath: '/test/repo/scene-a.txt' },
+                { fsPath: '/test/repo/scene-b.txt' },
+            ];
+            mockVscode.window.showTextDocument = async (docOrUri: any) => ({
+                document: { uri: docOrUri },
+                viewColumn: 1,
+            });
+
+            mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/repo' } }];
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    if (key === 'lensPreset') return 'prose-first';
+                    return defaultValue;
+                },
+                update: async () => {},
+                inspect: () => ({ workspaceValue: undefined, globalValue: undefined, workspaceFolderValue: undefined }),
+            });
+
+            mockFs.existsSync = (filePath: string) => filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+            await analyzeCallback();
+
+            assert.equal(analyzeLensPreset, 'prose-first');
         });
 
         it('should sync backend repo path after repo-path recovery during analyze startup', async () => {
@@ -1455,7 +1753,7 @@ describe('Extension (Real)', () => {
                         available_models: { sonnet: { label: 'Sonnet' } },
                         default_model: 'sonnet',
                         lens_presets: {
-                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1 },
+                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
                         },
                     };
                 }
@@ -1597,7 +1895,7 @@ describe('Extension (Real)', () => {
                         available_models: { sonnet: { label: 'Sonnet' } },
                         default_model: 'sonnet',
                         lens_presets: {
-                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1 },
+                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
                         },
                     };
                 }
@@ -2658,6 +2956,201 @@ describe('Extension (Real)', () => {
                 await clearSessionCallback();
                 assert.ok(clearCalled, 'clearSession API should have been called');
             }
+        });
+
+        it('should delete learning entry when command receives Learning tree item entryId', async () => {
+            let deleteLearningEntryCallback: any;
+            const deletedEntryIds: number[] = [];
+            const infoMessages: string[] = [];
+            let learningRefreshCalls = 0;
+
+            mockLearningTreeProvider = class MockLearningTreeProvider {
+                setApiClient() {}
+                setProjectPath() {}
+                async refresh() {
+                    learningRefreshCalls += 1;
+                }
+            };
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) {
+                    return { ok: true };
+                }
+                async getSession() {
+                    return { active: false };
+                }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                    };
+                }
+                async deleteLearningEntry(entryId: number, _projectPath: string) {
+                    deletedEntryIds.push(entryId);
+                    return { deleted: true, entry_id: entryId };
+                }
+            };
+
+            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
+                if (cmd === 'literaryCritic.deleteLearningEntry') {
+                    deleteLearningEntryCallback = callback;
+                }
+                return { dispose: () => {} };
+            };
+
+            mockVscode.window.showInformationMessage = async (message: string) => {
+                infoMessages.push(message);
+                return undefined;
+            };
+
+            mockVscode.workspace.workspaceFolders = [
+                { uri: { fsPath: '/test/repo' } },
+            ];
+
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return false;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
+            mockFs.existsSync = (filePath: string) => {
+                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+            };
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+
+            await deleteLearningEntryCallback({ entryId: 42 });
+
+            assert.deepEqual(deletedEntryIds, [42]);
+            assert.ok(
+                infoMessages.includes('lit-critic: Learning entry deleted.'),
+                'Expected success message after deleting learning entry',
+            );
+            assert.ok(learningRefreshCalls > 0, 'Expected learning tree refresh after deletion');
+        });
+
+        it('should support legacy deleteLearningEntry payload shape { entry: { id } }', async () => {
+            let deleteLearningEntryCallback: any;
+            const deletedEntryIds: number[] = [];
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) {
+                    return { ok: true };
+                }
+                async getSession() {
+                    return { active: false };
+                }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                    };
+                }
+                async deleteLearningEntry(entryId: number, _projectPath: string) {
+                    deletedEntryIds.push(entryId);
+                    return { deleted: true, entry_id: entryId };
+                }
+            };
+
+            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
+                if (cmd === 'literaryCritic.deleteLearningEntry') {
+                    deleteLearningEntryCallback = callback;
+                }
+                return { dispose: () => {} };
+            };
+
+            mockVscode.workspace.workspaceFolders = [
+                { uri: { fsPath: '/test/repo' } },
+            ];
+
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return false;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
+            mockFs.existsSync = (filePath: string) => {
+                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+            };
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+
+            await deleteLearningEntryCallback({ entry: { id: 43 } });
+
+            assert.deepEqual(deletedEntryIds, [43]);
+        });
+
+        it('should show error when deleteLearningEntry cannot resolve an entry id', async () => {
+            let deleteLearningEntryCallback: any;
+            const errorMessages: string[] = [];
+            let deleteCalled = false;
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) {
+                    return { ok: true };
+                }
+                async getSession() {
+                    return { active: false };
+                }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                    };
+                }
+                async deleteLearningEntry(_entryId: number, _projectPath: string) {
+                    deleteCalled = true;
+                    return { deleted: true, entry_id: 0 };
+                }
+            };
+
+            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
+                if (cmd === 'literaryCritic.deleteLearningEntry') {
+                    deleteLearningEntryCallback = callback;
+                }
+                return { dispose: () => {} };
+            };
+
+            mockVscode.window.showErrorMessage = async (message: string) => {
+                errorMessages.push(message);
+                return undefined;
+            };
+
+            mockVscode.workspace.workspaceFolders = [
+                { uri: { fsPath: '/test/repo' } },
+            ];
+
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return false;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
+            mockFs.existsSync = (filePath: string) => {
+                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+            };
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+
+            await deleteLearningEntryCallback({});
+
+            assert.ok(
+                errorMessages.includes('lit-critic: Could not determine learning entry ID.'),
+                'Expected missing-entry-id error message',
+            );
+            assert.equal(deleteCalled, false, 'Expected API delete call not to run without an entry id');
         });
     });
 });

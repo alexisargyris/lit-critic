@@ -23,10 +23,11 @@ from lit_platform.user_config import get_repo_path, set_repo_path
 from lit_platform.session_state_machine import restore_learning_session
 from lit_platform.models import SessionState, Finding, CoordinatorError
 from lit_platform.services.analysis_service import (
-    AVAILABLE_MODELS,
     DEFAULT_MODEL,
     LENS_PRESETS,
     create_client,
+    get_available_models,
+    is_known_model,
     normalize_lens_preferences,
     resolve_api_key,
     resolve_model,
@@ -134,10 +135,15 @@ async def cmd_analyze(args):
             print(f"Error: Invalid weight '{raw_weight}' for lens '{lens_name}'.")
             sys.exit(1)
 
+    preset = args.lens_preset
+    if preset == "auto":
+        # CLI currently supports single-scene analysis only.
+        preset = "single-scene"
+
     try:
         lens_preferences = normalize_lens_preferences(
             {
-                "preset": args.lens_preset,
+                "preset": preset,
                 "weights": lens_overrides,
             }
         )
@@ -366,7 +372,7 @@ async def cmd_resume(args):
 
     # Resolve model
     saved_model = session_data.get("model", DEFAULT_MODEL)
-    if saved_model not in AVAILABLE_MODELS:
+    if not is_known_model(saved_model):
         print(f"  Warning: Model '{saved_model}' unavailable, using {DEFAULT_MODEL}")
         saved_model = DEFAULT_MODEL
 
@@ -376,7 +382,7 @@ async def cmd_resume(args):
 
     # Restore discussion model if present in session
     saved_discussion_model = session_data.get("discussion_model")
-    if saved_discussion_model and saved_discussion_model not in AVAILABLE_MODELS:
+    if saved_discussion_model and not is_known_model(saved_discussion_model):
         print(f"  Warning: Discussion model '{saved_discussion_model}' unavailable, using same as analysis")
         saved_discussion_model = None
 
@@ -596,24 +602,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    lens_preset_choices = ["auto", *sorted(name for name in LENS_PRESETS.keys() if name != "auto")]
+
+    model_choices = sorted(get_available_models().keys())
+
     # --- analyze ---
     p_analyze = subparsers.add_parser("analyze", help="Run a new analysis")
     p_analyze.add_argument("--scene", required=True, help="Path to the scene file")
     p_analyze.add_argument("--project", required=True, help="Path to the project directory")
     p_analyze.add_argument("--api-key", help="API key (or set env var)")
     p_analyze.add_argument(
-        "--model", choices=list(AVAILABLE_MODELS.keys()),
+        "--model", choices=model_choices,
         default=DEFAULT_MODEL, help=f"Model (default: {DEFAULT_MODEL})",
     )
     p_analyze.add_argument(
-        "--discussion-model", choices=list(AVAILABLE_MODELS.keys()),
+        "--discussion-model", choices=model_choices,
         default=None, help="Model for discussion (default: same as analysis model)",
     )
     p_analyze.add_argument(
         "--lens-preset",
-        choices=sorted(LENS_PRESETS.keys()),
-        default="balanced",
-        help="Lens weighting preset (default: balanced)",
+        choices=lens_preset_choices,
+        default="auto",
+        help="Lens weighting preset (default: auto - selects based on scene count)",
     )
     p_analyze.add_argument(
         "--lens-weight",

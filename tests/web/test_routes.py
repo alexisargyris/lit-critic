@@ -160,6 +160,12 @@ class TestWithActiveSession:
                 flagged_by=["clarity"],
                 ambiguity_type="ambiguous_possibly_intentional"
             ),
+            Finding(
+                number=4, severity="major", lens="dialogue",
+                location="Paragraph 12", evidence="Dialogue voices blend",
+                impact="Weakens character distinction", options=["Differentiate diction"],
+                flagged_by=["dialogue"]
+            ),
         ]
 
         session_mgr.state = SessionState(
@@ -179,7 +185,7 @@ class TestWithActiveSession:
         assert response.status_code == 200
         data = response.json()
         assert data["active"] is True
-        assert data["total_findings"] == 3
+        assert data["total_findings"] == 4
         assert data["scene_paths"] == ["/test/scene.txt", "/test/scene-2.txt"]
 
     def test_session_includes_model_info(self, client, active_session):
@@ -203,7 +209,7 @@ class TestWithActiveSession:
         assert data["finding"]["number"] == 1
         assert data["finding"]["severity"] == "critical"
         assert data["current"] == 1
-        assert data["total"] == 3
+        assert data["total"] == 4
 
     def test_continue_finding(self, client, active_session):
         response = client.post("/api/finding/continue")
@@ -246,8 +252,8 @@ class TestWithActiveSession:
     def test_review_does_not_report_complete_when_pending_findings_remain(self, client, active_session):
         """Review should recover to unresolved findings instead of false completion."""
         # Simulate being on a withdrawn tail finding while earlier findings are pending.
-        session_mgr.current_index = 2
-        session_mgr.state.findings[2].status = 'withdrawn'
+        session_mgr.current_index = 3
+        session_mgr.state.findings[3].status = 'withdrawn'
 
         response = client.post("/api/finding/review")
         assert response.status_code == 200
@@ -299,9 +305,18 @@ class TestWithActiveSession:
         assert data["finding"]["number"] == 3
         assert data["finding"]["lens"] == "clarity"
         assert data["current"] == 3
-        assert data["total"] == 3
+        assert data["total"] == 4
         # Backend index should have been updated
         assert session_mgr.current_index == 2
+
+    def test_skip_to_coherence_can_land_on_dialogue(self, client, active_session):
+        # Start from clarity so next coherence lens is dialogue
+        session_mgr.current_index = 2
+        response = client.post("/api/finding/skip-to/coherence")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["complete"] is False
+        assert data["finding"]["lens"] == "dialogue"
 
     def test_goto_finding_first(self, client, active_session):
         """Goto to index 0 returns the first finding."""
@@ -376,7 +391,7 @@ class TestWithActiveSession:
 
     def test_continue_past_all_findings(self, client, active_session):
         # Move past all findings
-        session_mgr.current_index = 2
+        session_mgr.current_index = 3
         response = client.post("/api/finding/continue")
         assert response.status_code == 200
         data = response.json()
@@ -602,6 +617,27 @@ class TestConfigEndpoint:
             assert "provider" in info, f"Model '{name}' missing provider"
             assert info["provider"] in ("anthropic", "openai")
 
+    def test_config_models_include_id_and_max_tokens(self, client):
+        """Each model in config should include id and max_tokens for richer clients."""
+        response = client.get("/api/config")
+        data = response.json()
+        for name, info in data["available_models"].items():
+            assert "id" in info, f"Model '{name}' missing id"
+            assert isinstance(info["id"], str)
+            assert "max_tokens" in info, f"Model '{name}' missing max_tokens"
+            assert isinstance(info["max_tokens"], int)
+            assert info["max_tokens"] > 0
+
+    def test_config_includes_model_registry_status(self, client):
+        """Config should include non-secret model registry diagnostics."""
+        response = client.get("/api/config")
+        data = response.json()
+        assert "model_registry" in data
+        registry = data["model_registry"]
+        assert "auto_discovery_enabled" in registry
+        assert "cache_path" in registry
+        assert "ttl_seconds" in registry
+
     def test_config_includes_openai_models(self, client):
         """Config should include at least one OpenAI model."""
         response = client.get("/api/config")
@@ -811,6 +847,29 @@ class TestAnalyzeEndpoint:
         assert response.status_code == 400
         assert "appears to be an Anthropic key" in response.json()["detail"]
 
+    @patch.object(session_mgr, "start_analysis", new_callable=AsyncMock)
+    def test_rerun_reuses_persisted_resolved_lens_preset(self, mock_start, client, reset_session):
+        """Re-run should pass through persisted resolved lens preferences (not raw 'auto')."""
+        mock_start.return_value = {"ok": True}
+        session_mgr.state = MagicMock(
+            model="sonnet",
+            discussion_model=None,
+            scene_paths=["/any/scene1.txt", "/any/scene2.txt"],
+            scene_path="/any/scene1.txt",
+            lens_preferences={"preset": "multi-scene", "weights": {"structure": 1.5}},
+        )
+
+        response = client.post("/api/analyze/rerun", json={
+            "project_path": "/any/project",
+            "api_key": "sk-ant-explicit",
+        })
+
+        assert response.status_code == 200
+        _, kwargs = mock_start.await_args
+        assert kwargs["scene_paths"] == ["/any/scene1.txt", "/any/scene2.txt"]
+        assert kwargs["lens_preferences"]["preset"] == "multi-scene"
+        assert kwargs["lens_preferences"]["preset"] != "auto"
+
     def test_resume_no_session(self, client, reset_session, tmp_path):
         response = client.post("/api/resume", json={
             "project_path": str(tmp_path),
@@ -875,6 +934,7 @@ class TestAnalyzeEndpoint:
             str(tmp_path),
             "sk-ant-env",
             discussion_api_key="sk-openai-env",
+            scene_path_overrides=None,
             scene_path_override=None,
         )
 
@@ -904,6 +964,42 @@ class TestAnalyzeEndpoint:
             "sk-ant-explicit",
             discussion_api_key=None,
             scene_path_override=str(tmp_path / "renamed_scene.md"),
+            scene_path_overrides=None,
+        )
+
+    @patch("web.routes.check_active_session")
+    @patch.object(session_mgr, "resume_session", new_callable=AsyncMock)
+    def test_resume_passes_scene_path_overrides_map(
+        self,
+        mock_resume,
+        mock_check_active,
+        client,
+        reset_session,
+        tmp_path,
+    ):
+        """Resume route should pass scene_path_overrides map through to session manager."""
+        mock_check_active.return_value = {"exists": False}
+        mock_resume.return_value = {"active": True}
+
+        response = client.post("/api/resume", json={
+            "project_path": str(tmp_path),
+            "api_key": "sk-ant-explicit",
+            "scene_path_overrides": {
+                "D:/old-machine/project/ch01.md": str(tmp_path / "ch01.md"),
+                "D:/old-machine/project/ch02.md": str(tmp_path / "ch02.md"),
+            },
+        })
+
+        assert response.status_code == 200
+        mock_resume.assert_awaited_once_with(
+            str(tmp_path),
+            "sk-ant-explicit",
+            discussion_api_key=None,
+            scene_path_override=None,
+            scene_path_overrides={
+                "D:/old-machine/project/ch01.md": str(tmp_path / "ch01.md"),
+                "D:/old-machine/project/ch02.md": str(tmp_path / "ch02.md"),
+            },
         )
 
     @patch("web.routes.check_active_session")
@@ -936,6 +1032,8 @@ class TestAnalyzeEndpoint:
         assert detail["code"] == "scene_path_not_found"
         assert detail["saved_scene_path"] == "D:/old-machine/project/ch01.md"
         assert detail["attempted_scene_path"] == "D:/old-machine/project/ch01.md"
+        assert detail["saved_scene_paths"] == ["D:/old-machine/project/ch01.md"]
+        assert detail["missing_scene_paths"] == ["D:/old-machine/project/ch01.md"]
         assert detail["project_path"] == str(tmp_path)
         assert detail["override_provided"] is False
 
@@ -974,6 +1072,7 @@ class TestAnalyzeEndpoint:
             "sk-ant-env",
             discussion_api_key=None,
             scene_path_override=None,
+            scene_path_overrides=None,
         )
 
     def test_resume_session_by_id_nonexistent_project_404(self, client, reset_session):
@@ -1056,6 +1155,7 @@ class TestAnalyzeEndpoint:
             "sk-ant-env",
             discussion_api_key=None,
             scene_path_override=None,
+            scene_path_overrides=None,
         )
 
     def test_view_session_by_id_nonexistent_project_404(self, client, reset_session):
@@ -1120,6 +1220,8 @@ class TestAnalyzeEndpoint:
         assert detail["code"] == "scene_path_not_found"
         assert detail["saved_scene_path"] == "D:/old-machine/project/ch01.md"
         assert detail["attempted_scene_path"] == "D:/old-machine/project/ch01.md"
+        assert detail["saved_scene_paths"] == ["D:/old-machine/project/ch01.md"]
+        assert detail["missing_scene_paths"] == ["D:/old-machine/project/ch01.md"]
         assert detail["project_path"] == str(tmp_path)
         assert detail["override_provided"] is False
 

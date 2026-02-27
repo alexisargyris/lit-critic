@@ -1,6 +1,4 @@
-"""
-Tests for the server.db SQLite storage layer.
-"""
+"""Tests for the ``lit_platform.runtime.db`` SQLite storage layer."""
 
 import pytest
 from lit_platform.runtime.db import SessionStore, FindingStore, LearningStore, CATEGORY_PREFERENCE, CATEGORY_BLIND_SPOT

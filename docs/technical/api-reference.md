@@ -50,16 +50,39 @@ Get available models and configuration.
     "openai": false
   },
   "available_models": {
-    "opus": {"label": "Opus 4.6 (deepest analysis)", "provider": "anthropic"},
-    "sonnet": {"label": "Sonnet 4.5 (balanced)", "provider": "anthropic"},
-    "haiku": {"label": "Haiku 4.5 (fast & cheap)", "provider": "anthropic"},
-    "gpt-4o": {"label": "GPT-4o (balanced)", "provider": "openai"},
-    "gpt-4o-mini": {"label": "GPT-4o Mini (fast & cheap)", "provider": "openai"},
-    "o3": {"label": "o3 (reasoning)", "provider": "openai"}
+    "opus": {
+      "label": "Opus 4.6 (deepest analysis)",
+      "provider": "anthropic",
+      "id": "claude-opus-4-6",
+      "max_tokens": 8192
+    },
+    "sonnet": {
+      "label": "Sonnet 4.5 (balanced)",
+      "provider": "anthropic",
+      "id": "claude-sonnet-4-5-20250929",
+      "max_tokens": 4096
+    },
+    "gpt-4o": {
+      "label": "GPT-4o (balanced)",
+      "provider": "openai",
+      "id": "gpt-4o",
+      "max_tokens": 4096
+    }
   },
-  "default_model": "sonnet"
+  "default_model": "sonnet",
+  "model_registry": {
+    "auto_discovery_enabled": true,
+    "cache_path": "C:/Users/alexi/.lit-critic-models-cache.json",
+    "ttl_seconds": 86400,
+    "last_refresh_attempt_at": 1772198720.42,
+    "last_refresh_success_at": 1772198720.42
+  }
 }
 ```
+
+Notes:
+- `available_models` is dynamic (curated baseline + optional provider auto-discovery).
+- `model_registry` exposes diagnostics only (no secrets/keys).
 
 **Status Codes:**
 - `200 OK` Success
@@ -152,7 +175,7 @@ data: {"message": "Coordinating prose findings..."}
 **3. Status Updates**
 ```
 event: status
-data: {"message": "Running 5 lenses in parallel..."}
+data: {"message": "Running 6 lenses in parallel..."}
 ```
 
 **4. Warnings**
@@ -901,7 +924,9 @@ Skip all remaining minor-severity findings.
 Skip to the next finding from a specific lens.
 
 **Path Parameters:**
-- `lens` (string) — One of: `prose`, `structure`, `logic`, `clarity`, `continuity`
+- `lens` (string) — One of: `prose`, `structure`, `logic`, `clarity`, `continuity`, `dialogue`
+  - Group-level skip aliases are also supported by the web route layer (`structure`, `coherence`),
+    where `coherence` covers `logic`, `clarity`, `continuity`, and `dialogue`.
 
 **Request:** None
 
@@ -951,7 +976,7 @@ Save LEARNING.md to project directory.
 interface Finding {
   number: number;
   severity: "critical" | "major" | "minor";
-  lens: "prose" | "structure" | "logic" | "clarity" | "continuity";
+  lens: "prose" | "structure" | "logic" | "clarity" | "continuity" | "dialogue";
   location: string;                    // e.g., "L042-L045"
   line_start: number | null;           // 1-based line number
   line_end: number | null;

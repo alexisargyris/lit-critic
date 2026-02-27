@@ -85,7 +85,7 @@ AI: "Understood. I'll note that in your learning profile."
 When you start a new review:
 
 1. The tool loads learning data from the project database (`.lit-critic.db`)
-2. All five lenses receive the learning content as context
+2. All six lenses receive the learning content as context
 3. Lenses are instructed to respect your documented preferences
 
 **Effect:**

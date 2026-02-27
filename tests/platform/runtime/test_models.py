@@ -1,6 +1,4 @@
-"""
-Tests for lit-critic.models module.
-"""
+"""Tests for ``lit_platform.runtime.models`` module."""
 
 import pytest
 from lit_platform.runtime.models import Finding, LearningData, LensResult, SessionState

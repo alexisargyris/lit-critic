@@ -74,6 +74,7 @@ def print_summary(results: dict):
     print("\n" + "=" * 60)
     print("Ready for discussion. Type 'continue' to begin.")
     print("Commands: continue | review | skip to structure | skip to coherence")
+    print("          (coherence = logic + clarity + continuity + dialogue)")
     print("          reject | accept | export learning | quit | help")
     print("=" * 60)
 

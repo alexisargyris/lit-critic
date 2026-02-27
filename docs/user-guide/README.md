@@ -82,15 +82,16 @@ Six files track your novel's continuity:
 
 See **[Index Files Guide](index-files.md)** for complete documentation.
 
-### The Five Lenses
+### The Six Lenses
 
-lit-critic analyzes your scenes through five perspectives:
+lit-critic analyzes your scenes through six perspectives:
 
 1. **Prose** Fluidity, rhythm, voice consistency
 2. **Structure** Pacing, scene objectives, narrative threads
 3. **Logic** Character motivation, cause-effect, world consistency
 4. **Clarity** Reference clarity, grounding, legibility
 5. **Continuity** Term consistency, fact tracking, timeline coherence
+6. **Dialogue** Character voice distinctiveness, register consistency, subtext, and turn dynamics
 
 ---
 

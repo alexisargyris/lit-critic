@@ -276,12 +276,19 @@ const App = {
     populateLensPresetSelector(presets) {
         const select = document.getElementById('lens-preset-select');
         if (!select) return;
-        const saved = select.dataset.saved || localStorage.getItem('lc_lens_preset') || 'balanced';
+        const saved = select.dataset.saved || localStorage.getItem('lc_lens_preset') || 'auto';
+        const labels = {
+            'auto': 'Auto (recommended)',
+            'balanced': 'Balanced (override)',
+            'prose-first': 'Prose-first (override)',
+            'story-logic': 'Story-logic (override)',
+            'clarity-pass': 'Clarity-pass (override)',
+        };
         select.innerHTML = '';
         for (const presetName of Object.keys(presets)) {
             const option = document.createElement('option');
             option.value = presetName;
-            option.textContent = presetName;
+            option.textContent = labels[presetName] || presetName;
             if (presetName === saved) option.selected = true;
             select.appendChild(option);
         }
@@ -335,7 +342,11 @@ const App = {
 
         const model = document.getElementById('model-select').value;
         const discussionModel = document.getElementById('discussion-model-select').value;
-        const lensPreset = document.getElementById('lens-preset-select').value || 'balanced';
+        const lensPreset = document.getElementById('lens-preset-select').value || 'auto';
+        let effectivePreset = lensPreset;
+        if (lensPreset === 'auto') {
+            effectivePreset = scenePaths.length > 1 ? 'multi-scene' : 'single-scene';
+        }
 
         // Word-count guardrail (spec §4): warn but don't block
         const proceed = await App.checkWordCountWarning(scenePaths);
@@ -367,7 +378,7 @@ const App = {
                 model: model,
                 discussion_model: discussionModel || null,
                 lens_preferences: {
-                    preset: lensPreset,
+                    preset: effectivePreset,
                 },
             };
             // Include scene_paths array for multi-scene analysis

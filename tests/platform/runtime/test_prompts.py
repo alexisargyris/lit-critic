@@ -1,6 +1,4 @@
-"""
-Tests for lit-critic.prompts module.
-"""
+"""Tests for ``lit_platform.runtime.prompts`` module."""
 
 import pytest
 from lit_platform.runtime.prompts import (
@@ -55,6 +53,14 @@ class TestGetLensPrompt:
         assert "CONTINUITY" in prompt
         assert "GLOSSARY" in prompt
         assert "glossary_issues" in prompt
+
+    def test_dialogue_lens_prompt(self, sample_indexes):
+        """Dialogue lens prompt should include dialogue-specific instructions."""
+        prompt = get_lens_prompt("dialogue", "Test scene content", sample_indexes)
+
+        assert "DIALOGUE" in prompt
+        assert "voice" in prompt.lower() or "register" in prompt.lower()
+        assert "CAST.md" in prompt or "STYLE.md" in prompt
     
     def test_includes_all_indexes(self, sample_indexes):
         """Prompt should include all provided index content."""
@@ -96,6 +102,7 @@ class TestGetCoordinatorPrompt:
         assert "LOGIC LENS OUTPUT" in prompt
         assert "CLARITY LENS OUTPUT" in prompt
         assert "CONTINUITY LENS OUTPUT" in prompt
+        assert "DIALOGUE LENS OUTPUT" in prompt
     
     def test_includes_raw_output(self, sample_lens_results, sample_scene):
         """Coordinator prompt should include raw outputs from lenses."""

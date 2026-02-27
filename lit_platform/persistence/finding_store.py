@@ -121,6 +121,28 @@ class FindingStore:
         conn.commit()
 
     @staticmethod
+    def remap_scene_paths(conn: sqlite3.Connection, session_id: int,
+                          remap: dict[str, str]) -> None:
+        """Rewrite finding.scene_path values for a session using an old->new map."""
+        if not remap:
+            return
+
+        updated = False
+        for old_path, new_path in remap.items():
+            if not old_path or not new_path or old_path == new_path:
+                continue
+            conn.execute(
+                """UPDATE finding
+                   SET scene_path = ?
+                   WHERE session_id = ? AND scene_path = ?""",
+                (new_path, session_id, old_path),
+            )
+            updated = True
+
+        if updated:
+            conn.commit()
+
+    @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> dict:
         """Convert a finding row to a plain dict, deserialising JSON columns."""
         d = dict(row)

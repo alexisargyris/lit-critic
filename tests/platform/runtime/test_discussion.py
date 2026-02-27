@@ -1,5 +1,5 @@
 """
-Tests for lit-critic.discussion module.
+Tests for ``lit_platform.runtime.discussion`` module.
 
 Covers all 4 phases:
 - Phase 1: Multi-turn conversations (system prompt + message pairs)

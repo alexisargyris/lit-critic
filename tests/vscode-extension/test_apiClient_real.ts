@@ -245,10 +245,44 @@ describe('ApiClient (Real)', () => {
             };
 
             client = createClient();
-            await client.resume('/test/project', undefined, '/test/project/scenes/ch01.md');
+            await client.resume('/test/project', undefined, { scenePathOverride: '/test/project/scenes/ch01.md' });
 
             assert.equal(capturedBody.project_path, '/test/project');
             assert.equal(capturedBody.scene_path_override, '/test/project/scenes/ch01.md');
+        });
+
+        it('should send POST to /api/resume with scene_path_overrides map', async () => {
+            let capturedBody: any;
+
+            mockHttp.request = (options: any, callback?: any) => {
+                assert.equal(options.method, 'POST');
+                assert.equal(options.path, '/api/resume');
+
+                const req = new MockHttpRequest(new MockHttpResponse(200, sampleAnalysisSummary));
+                const originalWrite = req.write.bind(req);
+                req.write = (data: any) => {
+                    capturedBody = JSON.parse(data);
+                    originalWrite(data);
+                };
+                if (callback) {
+                    req.on('response', callback);
+                }
+                return req;
+            };
+
+            client = createClient();
+            await client.resume('/test/project', undefined, {
+                scenePathOverrides: {
+                    '/old/path/ch01.md': '/new/path/ch01.md',
+                    '/old/path/ch02.md': '/new/path/ch02.md',
+                },
+            });
+
+            assert.equal(capturedBody.project_path, '/test/project');
+            assert.deepEqual(capturedBody.scene_path_overrides, {
+                '/old/path/ch01.md': '/new/path/ch01.md',
+                '/old/path/ch02.md': '/new/path/ch02.md',
+            });
         });
 
         it('should send POST to /api/resume-session with session_id', async () => {
@@ -297,7 +331,7 @@ describe('ApiClient (Real)', () => {
             };
 
             client = createClient();
-            await client.resumeSessionById('/test/project', 7, undefined, '/test/project/scenes/ch01.md');
+            await client.resumeSessionById('/test/project', 7, undefined, { scenePathOverride: '/test/project/scenes/ch01.md' });
 
             assert.equal(capturedBody.project_path, '/test/project');
             assert.equal(capturedBody.session_id, 7);
@@ -350,7 +384,7 @@ describe('ApiClient (Real)', () => {
             };
 
             client = createClient();
-            await client.viewSession('/test/project', 7, undefined, '/test/project/scenes/ch01.md');
+            await client.viewSession('/test/project', 7, undefined, { scenePathOverride: '/test/project/scenes/ch01.md' });
 
             assert.equal(capturedBody.project_path, '/test/project');
             assert.equal(capturedBody.session_id, 7);
@@ -393,12 +427,65 @@ describe('ApiClient (Real)', () => {
             const result = await client.resumeWithRecovery(
                 '/test/project',
                 undefined,
-                async () => '/new/path/ch01.md'
+                async () => ({ scenePathOverride: '/new/path/ch01.md' })
             );
 
             assert.equal(callCount, 2);
             assert.equal(capturedBodies[0].project_path, '/test/project');
             assert.equal(capturedBodies[1].scene_path_override, '/new/path/ch01.md');
+            assert.equal(result.scene_name, sampleAnalysisSummary.scene_name);
+        });
+
+        it('should recover from scene_path_not_found in resumeWithRecovery using multi-scene overrides map', async () => {
+            const capturedBodies: any[] = [];
+            let callCount = 0;
+
+            mockHttp.request = (options: any, callback?: any) => {
+                callCount += 1;
+                assert.equal(options.method, 'POST');
+                assert.equal(options.path, '/api/resume');
+
+                const response = callCount === 1
+                    ? new MockHttpResponse(409, {
+                        detail: {
+                            code: 'scene_path_not_found',
+                            saved_scene_paths: ['/old/path/ch01.md', '/old/path/ch02.md'],
+                            missing_scene_paths: ['/old/path/ch01.md', '/old/path/ch02.md'],
+                        },
+                    })
+                    : new MockHttpResponse(200, sampleAnalysisSummary);
+
+                const req = new MockHttpRequest(response);
+                const originalWrite = req.write.bind(req);
+                req.write = (data: any) => {
+                    capturedBodies.push(JSON.parse(data));
+                    originalWrite(data);
+                };
+
+                if (callback) {
+                    req.on('response', callback);
+                }
+                return req;
+            };
+
+            client = createClient();
+            const result = await client.resumeWithRecovery(
+                '/test/project',
+                undefined,
+                async () => ({
+                    scenePathOverrides: {
+                        '/old/path/ch01.md': '/new/path/ch01.md',
+                        '/old/path/ch02.md': '/new/path/ch02.md',
+                    },
+                })
+            );
+
+            assert.equal(callCount, 2);
+            assert.equal(capturedBodies[0].project_path, '/test/project');
+            assert.deepEqual(capturedBodies[1].scene_path_overrides, {
+                '/old/path/ch01.md': '/new/path/ch01.md',
+                '/old/path/ch02.md': '/new/path/ch02.md',
+            });
             assert.equal(result.scene_name, sampleAnalysisSummary.scene_name);
         });
 
@@ -439,7 +526,7 @@ describe('ApiClient (Real)', () => {
                 '/test/project',
                 7,
                 undefined,
-                async () => '/new/path/ch01.md'
+                async () => ({ scenePathOverride: '/new/path/ch01.md' })
             );
 
             assert.equal(callCount, 2);
@@ -487,7 +574,7 @@ describe('ApiClient (Real)', () => {
                 '/test/project',
                 7,
                 undefined,
-                async () => '/new/path/ch01.md'
+                async () => ({ scenePathOverride: '/new/path/ch01.md' })
             );
 
             assert.equal(callCount, 2);

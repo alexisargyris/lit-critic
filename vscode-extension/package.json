@@ -2,7 +2,7 @@
   "name": "lit-critic",
   "displayName": "lit-critic",
   "description": "Multi-lens editorial review system for fiction manuscripts",
-"version": "2.4.1",
+  "version": "2.7.0",
   "publisher": "alexisargyris",
   "repository": {
     "type": "git",
@@ -102,7 +102,8 @@
       },
       {
         "command": "literaryCritic.selectModel",
-        "title": "lit-critic: Select Model"
+        "title": "lit-critic: Change Analysis Model",
+        "icon": "$(settings-gear)"
       },
       {
         "command": "literaryCritic.stopServer",
@@ -131,69 +132,33 @@
           "type": "string",
           "default": "sonnet",
           "order": 40,
-          "enum": [
-            "opus",
-            "opus-4-5",
-            "sonnet",
-            "haiku",
-            "gpt-4o",
-            "gpt-4o-mini",
-            "o3"
-          ],
-          "enumDescriptions": [
-            "Opus 4.6 (deepest analysis)",
-            "Opus 4.5",
-            "Sonnet 4.5 (balanced, default)",
-            "Haiku 4.5 (fast & cheap)",
-            "GPT-4o (balanced)",
-            "GPT-4o Mini (fast & cheap)",
-            "o3 (reasoning)"
-          ],
-          "description": "Analysis model (required): used for lens analysis and coordinator"
+          "description": "Analysis model short name (required): used for lens analysis and coordinator. Tip: use command 'lit-critic: Change Analysis Model' for the current dynamic model list from backend /api/config."
         },
         "literaryCritic.discussionModel": {
           "type": "string",
           "default": "",
           "order": 41,
-          "enum": [
-            "",
-            "opus",
-            "opus-4-5",
-            "sonnet",
-            "haiku",
-            "gpt-4o",
-            "gpt-4o-mini",
-            "o3"
-          ],
-          "enumDescriptions": [
-            "Same as analysis model",
-            "Opus 4.6 (deepest analysis)",
-            "Opus 4.5",
-            "Sonnet 4.5 (balanced)",
-            "Haiku 4.5 (fast & cheap)",
-            "GPT-4o (balanced)",
-            "GPT-4o Mini (fast & cheap)",
-            "o3 (reasoning)"
-          ],
-          "description": "Discussion model (optional): leave empty to use the analysis model"
+          "description": "Discussion model short name (optional): leave empty to use the analysis model. Any backend-known model is accepted."
         },
         "literaryCritic.lensPreset": {
           "type": "string",
-          "default": "balanced",
+          "default": "auto",
           "order": 42,
           "enum": [
+            "auto",
             "balanced",
             "prose-first",
             "story-logic",
             "clarity-pass"
           ],
           "enumDescriptions": [
-            "Balanced across all lenses",
-            "Prioritize prose/style findings",
-            "Prioritize structure and logic consistency",
-            "Prioritize clarity and readability"
+            "Automatically select based on scene count (recommended)",
+            "Override: equal weight across all lenses",
+            "Override: prioritize prose and style findings",
+            "Override: prioritize structure and logic consistency",
+            "Override: prioritize clarity and readability"
           ],
-          "description": "Lens weighting preset used to rank findings"
+          "description": "Lens weighting preset. 'auto' selects the best preset based on scene count (single vs. multi-scene). Other values override auto-selection."
         },
         "literaryCritic.autoStartServer": {
           "type": "boolean",
@@ -252,6 +217,11 @@
           "group": "navigation"
         },
         {
+          "command": "literaryCritic.selectModel",
+          "when": "view == literaryCritic.sessions",
+          "group": "navigation"
+        },
+        {
           "command": "literaryCritic.refreshSessions",
           "when": "view == literaryCritic.sessions",
           "group": "navigation"
@@ -305,7 +275,7 @@
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
     "package": "npx @vscode/vsce package",
-    "test": "mocha --require ts-node/register \"../tests/vscode-extension/**/*.ts\""
+    "test": "mocha --exit --require ts-node/register \"../tests/vscode-extension/**/*.ts\""
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

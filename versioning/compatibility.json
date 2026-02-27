@@ -2,10 +2,10 @@
   "components": {
     "contracts_v1": "1.1.0",
     "core": "2.0.1",
-    "platform": "2.4.0",
-    "cli": "2.2.2",
-    "web": "2.4.0",
-    "vscode_extension": "2.4.1"
+    "platform": "2.7.0",
+    "cli": "2.5.0",
+    "web": "2.7.0",
+    "vscode_extension": "2.7.0"
   },
   "compatibility": {
     "platform": {

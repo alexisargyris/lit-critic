@@ -4,13 +4,14 @@ Welcome! This guide will walk you through setting up lit-critic (short for Liter
 
 ## What is lit-critic?
 
-lit-critic is an editorial review tool that reads your novel scenes and provides detailed feedback through five analytical "lenses":
+lit-critic is an editorial review tool that reads your novel scenes and provides detailed feedback through six analytical "lenses":
 
 1. **Prose** Fluidity, rhythm, voice consistency
 2. **Structure** Pacing, scene objectives, narrative threads
 3. **Logic** Character motivation, cause-effect, world consistency
 4. **Clarity** Reference clarity, grounding, legibility
 5. **Continuity** Term consistency, fact tracking, timeline coherence
+6. **Dialogue** Character voice distinctiveness, register consistency, and conversational dynamics
 
 The tool doesn't impose external standards—it checks your work against **your own rules** as defined in your index files.
 
@@ -226,7 +227,7 @@ For consecutive multi-scene analysis in one session, use the Web UI or VS Code e
 ### What Happens Next
 
 1. **Loading** The tool loads your index files and scene text
-2. **Analysis** Five lenses run in parallel (takes 30–90 seconds)
+2. **Analysis** Six lenses run in parallel (takes 30–90 seconds)
 3. **Findings** Results appear one at a time in priority order
 4. **Discussion** You can accept, reject, or discuss each finding
 
@@ -249,7 +250,7 @@ python lit-critic.py analyze --scene scene.txt --project ~/my-novel/ --model gpt
 Each finding includes:
 
 - **Severity** Critical, Major, or Minor
-- **Lens** Which lens flagged it (Prose, Structure, Logic, Clarity, Continuity)
+- **Lens** Which lens flagged it (Prose, Structure, Logic, Clarity, Continuity, Dialogue)
 - **Location** Line range in your scene (e.g., L042-L045)
 - **Evidence** The specific text or pattern
 - **Impact** Why it matters for the reader
@@ -265,6 +266,7 @@ At each finding, you can:
 | **Type anything** | Start a discussion with the AI about this finding |
 | `skip minor` | Skip all minor-severity findings |
 | `skip to structure` | Jump to Structure lens findings |
+| `skip to coherence` | Jump to Coherence lens findings (Logic + Clarity + Continuity + Dialogue) |
 | `quit` (or `q`) | End the session (you can save and resume later) |
 
 See **[Working with Findings](working-with-findings.md)** for detailed guidance.

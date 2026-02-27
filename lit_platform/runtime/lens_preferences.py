@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-LENS_NAMES = ("prose", "structure", "logic", "clarity", "continuity")
+LENS_NAMES = ("prose", "structure", "logic", "clarity", "continuity", "dialogue")
 
-DEFAULT_LENS_PRESET = "balanced"
+DEFAULT_LENS_PRESET = "auto"
 
 LENS_PRESETS: dict[str, dict[str, float]] = {
     "balanced": {
@@ -15,6 +15,7 @@ LENS_PRESETS: dict[str, dict[str, float]] = {
         "logic": 1.0,
         "clarity": 1.0,
         "continuity": 1.0,
+        "dialogue": 1.0,
     },
     "prose-first": {
         "prose": 1.6,
@@ -22,6 +23,7 @@ LENS_PRESETS: dict[str, dict[str, float]] = {
         "logic": 0.9,
         "clarity": 0.9,
         "continuity": 0.8,
+        "dialogue": 1.1,
     },
     "story-logic": {
         "prose": 0.8,
@@ -29,6 +31,7 @@ LENS_PRESETS: dict[str, dict[str, float]] = {
         "logic": 1.5,
         "clarity": 1.0,
         "continuity": 1.2,
+        "dialogue": 1.1,
     },
     "clarity-pass": {
         "prose": 0.8,
@@ -36,6 +39,23 @@ LENS_PRESETS: dict[str, dict[str, float]] = {
         "logic": 1.2,
         "clarity": 1.6,
         "continuity": 1.1,
+        "dialogue": 1.3,
+    },
+    "single-scene": {
+        "prose": 1.5,
+        "structure": 0.8,
+        "logic": 1.3,
+        "clarity": 1.3,
+        "continuity": 0.7,
+        "dialogue": 1.4,
+    },
+    "multi-scene": {
+        "prose": 0.8,
+        "structure": 1.5,
+        "logic": 1.3,
+        "clarity": 1.2,
+        "continuity": 1.5,
+        "dialogue": 0.7,
     },
 }
 
@@ -45,10 +65,18 @@ MAX_LENS_WEIGHT = 3.0
 
 def default_lens_preferences() -> dict:
     """Return a fresh default lens preferences payload."""
+    default_weights_preset = "balanced" if DEFAULT_LENS_PRESET == "auto" else DEFAULT_LENS_PRESET
     return {
         "preset": DEFAULT_LENS_PRESET,
-        "weights": deepcopy(LENS_PRESETS[DEFAULT_LENS_PRESET]),
+        "weights": deepcopy(LENS_PRESETS[default_weights_preset]),
     }
+
+
+def resolve_auto_preset(scene_count: int) -> str:
+    """Resolve the 'auto' preset to a concrete preset name."""
+    if scene_count <= 1:
+        return "single-scene"
+    return "multi-scene"
 
 
 def normalize_lens_preferences(raw: dict | None) -> dict:
@@ -65,11 +93,12 @@ def normalize_lens_preferences(raw: dict | None) -> dict:
         return prefs
 
     preset = raw.get("preset", DEFAULT_LENS_PRESET)
-    if preset not in LENS_PRESETS:
+    resolved_preset = "balanced" if preset == "auto" else preset
+    if resolved_preset not in LENS_PRESETS:
         valid = ", ".join(sorted(LENS_PRESETS.keys()))
-        raise ValueError(f"Invalid lens preset '{preset}'. Valid presets: {valid}")
+        raise ValueError(f"Invalid lens preset '{resolved_preset}'. Valid presets: {valid}")
 
-    weights = deepcopy(LENS_PRESETS[preset])
+    weights = deepcopy(LENS_PRESETS[resolved_preset])
     overrides = raw.get("weights") or {}
     if not isinstance(overrides, dict):
         raise ValueError("lens_preferences.weights must be an object mapping lens names to numbers")
@@ -90,7 +119,7 @@ def normalize_lens_preferences(raw: dict | None) -> dict:
         weights[lens_name] = weight_value
 
     return {
-        "preset": preset,
+        "preset": resolved_preset,
         "weights": weights,
     }
 

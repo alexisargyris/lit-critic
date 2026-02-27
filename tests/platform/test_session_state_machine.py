@@ -72,9 +72,19 @@ def test_next_index_for_lens_coherence_skips_prose_and_structure():
     findings[1].lens = "prose"
     findings[2].lens = "structure"
     findings[3].lens = "structure"
-    findings[4].lens = "coherence"
+    findings[4].lens = "logic"
 
     assert next_index_for_lens(findings, 0, "coherence") == 4
+
+
+def test_next_index_for_lens_coherence_can_land_on_dialogue():
+    findings = [_finding("pending") for _ in range(5)]
+    findings[1].lens = "prose"
+    findings[2].lens = "structure"
+    findings[3].lens = "dialogue"
+    findings[4].lens = "prose"
+
+    assert next_index_for_lens(findings, 0, "coherence") == 3
 
 
 def test_next_available_index_skips_withdrawn_only():

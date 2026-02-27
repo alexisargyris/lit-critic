@@ -1,6 +1,4 @@
-"""
-Tests for the server.learning module (SQLite-backed).
-"""
+"""Tests for the ``lit_platform.runtime.learning`` module (SQLite-backed)."""
 
 import pytest
 from pathlib import Path

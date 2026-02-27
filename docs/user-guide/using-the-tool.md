@@ -28,6 +28,20 @@ python lit-critic.py analyze --scene scene.txt --project ~/novel/ --model gpt-4o
 
 CLI analysis is single-scene per run. For consecutive multi-scene analysis in one session, use the Web UI or VS Code extension selector.
 
+### Lens Preset (`--lens-preset`)
+
+The CLI now defaults to `--lens-preset auto`.
+
+- `auto` resolves to `single-scene` in CLI analyze runs (CLI currently analyzes one scene per run)
+- You can still manually override with `balanced`, `prose-first`, `story-logic`, or `clarity-pass`
+
+Examples:
+
+```bash
+python lit-critic.py analyze --scene scene.txt --project ~/novel/ --lens-preset auto
+python lit-critic.py analyze --scene scene.txt --project ~/novel/ --lens-preset story-logic
+```
+
 ### Interactive Commands
 
 During review:
@@ -72,7 +86,7 @@ python lit-critic-web.py --reload            # Auto-reload for development
 
 ### Features
 
-- **Setup screen** Select scene file(s), project directory, and model
+- **Setup screen** Select scene file(s), project directory, model, and lens preset (`Auto` recommended)
 - **Multi-scene analysis** Use "Add another scene" to select consecutive scenes for cross-boundary analysis
 - **Live progress** Watch each lens complete in real-time
 - **Chat interface** Discuss findings naturally
@@ -84,9 +98,10 @@ python lit-critic-web.py --reload            # Auto-reload for development
 
 1. **Select files** on the setup screen (use "Add another scene" for consecutive multi-scene analysis)
 2. **Choose model** (Claude: Opus/Sonnet/Haiku, or OpenAI: GPT-4o/GPT-4o-mini)
-3. **Start analysis** progress bars show each lens
-4. **Review findings** one at a time — source scene is shown for multi-scene sessions
-5. **Save learning** to capture your preferences
+3. **Choose lens preset** (`Auto` is the default and resolves to `single-scene` or `multi-scene` based on selected scene count; other presets are manual overrides)
+4. **Start analysis** progress bars show each lens
+5. **Review findings** one at a time — source scene is shown for multi-scene sessions
+6. **Save learning** to capture your preferences
 
 ---
 
@@ -100,7 +115,7 @@ Native editor integration with squiggly underlines, sidebar tree, and discussion
 cd vscode-extension
 npm install
 npm run package
-code --install-extension lit-critic-2.4.0.vsix --force
+code --install-extension lit-critic-2.5.0.vsix --force
 ```
 
 Or press **F5** in the `vscode-extension` folder for development mode.
@@ -117,6 +132,14 @@ Or press **F5** in the `vscode-extension` folder for development mode.
    - Enable `literaryCritic.disableProblemDecorationBadges` to hide problem badges in this workspace
 
 > These options update VS Code workspace settings under `workbench.editor.decorations.*` and therefore affect **all** diagnostics in that workspace (not only lit-critic).
+
+4. **(Optional) Set lens preset behavior**
+   - Setting: `literaryCritic.lensPreset`
+   - Default: `auto` (recommended)
+   - With `auto`, the extension resolves preset at analysis time:
+     - one selected scene → `single-scene`
+     - multiple selected scenes → `multi-scene`
+   - Other preset values act as manual overrides
 
 ### Usage
 
@@ -387,7 +410,7 @@ All interfaces fall back gracefully on error.
 ### Estimate Costs
 
 Typical 3–4 page scene:
-- **6 API calls** (5 lenses + coordinator)
+- **7 API calls** (6 lenses + coordinator)
 - **Sonnet**: ~$0.10–0.15
 - **Opus**: ~$0.50–0.75
 - **Haiku**: ~$0.02–0.05

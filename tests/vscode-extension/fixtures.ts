@@ -139,8 +139,8 @@ export const sampleServerConfig = {
     },
     default_model: 'sonnet',
     lens_presets: {
-        balanced: { prose: 1.0, structure: 1.0, logic: 1.0, clarity: 1.0, continuity: 1.0 },
-        'prose-first': { prose: 1.6, structure: 1.1, logic: 0.9, clarity: 0.9, continuity: 0.8 },
+        balanced: { prose: 1.0, structure: 1.0, logic: 1.0, clarity: 1.0, continuity: 1.0, dialogue: 1.0 },
+        'prose-first': { prose: 1.6, structure: 1.1, logic: 0.9, clarity: 0.9, continuity: 0.8, dialogue: 1.1 },
     },
 };
 

@@ -1,12 +1,14 @@
 # Working with Findings
 
-This guide explains how to interpret and respond to findings from lit-critic's five editorial lenses.
+This guide explains how to interpret and respond to findings from lit-critic's six editorial lenses.
 
 ---
 
 ## Understanding Findings
 
-Each finding represents one concern identified by one of the five lenses. Findings are presented one at a time in priority order.
+Each finding represents one concern identified by one of the six lenses. Findings are presented one at a time in priority order.
+
+Priority is influenced by the active lens preset for that analysis run. If you use `auto`, lit-critic resolves to a scene-aware preset (`single-scene` or `multi-scene`) before analysis; if you pick a manual preset, that override is used instead.
 
 ### Finding Components
 
@@ -27,6 +29,7 @@ Which editorial perspective flagged it:
 - **Logic** Motivation, causality, consistency
 - **Clarity** Reference resolution, grounding
 - **Continuity** Facts, terms, timeline
+- **Dialogue** Character voice, register consistency, subtext, and turn dynamics
 
 #### 3. Location
 Line range in your scene (e.g., `L042-L045`).

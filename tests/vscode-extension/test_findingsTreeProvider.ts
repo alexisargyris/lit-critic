@@ -27,8 +27,8 @@ describe('FindingsTreeProvider', () => {
         });
 
         it('should order lenses correctly', () => {
-            const order = ['prose', 'structure', 'logic', 'clarity', 'continuity'];
-            assert.deepEqual(order, ['prose', 'structure', 'logic', 'clarity', 'continuity']);
+            const order = ['prose', 'structure', 'logic', 'clarity', 'continuity', 'dialogue'];
+            assert.deepEqual(order, ['prose', 'structure', 'logic', 'clarity', 'continuity', 'dialogue']);
         });
     });
 

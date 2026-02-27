@@ -159,9 +159,18 @@ class SessionStore:
     def update_scene_path(conn: sqlite3.Connection, session_id: int,
                           scene_path: str) -> None:
         """Update the persisted scene path for a session."""
+        SessionStore.update_scene_paths(conn, session_id, [scene_path])
+
+    @staticmethod
+    def update_scene_paths(conn: sqlite3.Connection, session_id: int,
+                           scene_paths: list[str]) -> None:
+        """Update the persisted ordered scene path set for a session."""
+        normalized_scene_paths = SessionStore._normalize_scene_paths(scene_paths=scene_paths)
+        if not normalized_scene_paths:
+            raise ValueError("update_scene_paths() requires at least one scene path")
         conn.execute(
             "UPDATE session SET scene_path = ? WHERE id = ?",
-            (SessionStore._encode_scene_paths([scene_path]), session_id),
+            (SessionStore._encode_scene_paths(normalized_scene_paths), session_id),
         )
         conn.commit()
 

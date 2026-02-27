@@ -105,6 +105,34 @@ All clients are presentation and interaction layers over Platform behavior.
 - Diagnostics, findings tree, discussion panel
 - Local API process management for developer workflow
 
+#### Internal module structure
+
+The extension is decomposed into focused modules to keep `extension.ts` as a thin composition root:
+
+| Module | Responsibility |
+|---|---|
+| `extension.ts` | Activation wiring only — instantiates services, registers commands, delegates startup |
+| `bootstrap/startupService.ts` | Repo-root discovery, repo-path recovery, server startup with busy UI, auto-load sidebars, activity-view reveal |
+| `commands/registerCommands.ts` | Centralised command-ID → handler mapping; keeps command palette surface enumerable and testable |
+| `workflows/sessionWorkflowController.ts` | All session/finding command handlers (analyze, resume, accept, reject, review, rerun, etc.) |
+| `workflows/stateStore.ts` | Mutable runtime session state (findings cache, current index, totals, notices) — injected as a unit to enable deterministic tests |
+| `ui/workbenchPresenter.ts` | Status bar transitions, findings/sessions tree reveal, discussion panel coordination, diagnostics updates |
+| `domain/findingLogic.ts` | Pure finding-navigation helpers (fallback resolution, index clamping, context-change detection) |
+| `domain/sessionDecisionLogic.ts` | Pure session-entry decision helpers (repo-path error parsing, session label formatting) |
+| `domain/modelSelectionLogic.ts` | Pure model/preset selection helpers (configured model resolution, status message building) |
+
+All VS Code surface interactions are injected through narrow port interfaces (`StartupPorts`, `WorkflowUiPort`, `WorkflowDeps`) so that unit tests can use simple fakes without loading the VS Code runtime.
+
+#### Test organization
+
+| Test file | What it tests |
+|---|---|
+| `test_startupService.ts` | Startup service branches: repo discovery, recovery loop, progress UI, activity reveal |
+| `test_sessionWorkflowController.ts` | Workflow command handlers with fake ports — no VS Code or server required |
+| `test_registerCommands.ts` | Command-ID coverage and handler-wiring correctness |
+| `test_domain_*.ts` | Pure helper logic — zero mocking |
+| `test_extension_real.ts` | Integration-style: activation wiring, command registration, auto-start behavior |
+
 ---
 
 ## 6) Data Ownership and Persistence

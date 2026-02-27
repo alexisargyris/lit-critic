@@ -310,7 +310,7 @@ def _print_help():
     print("  reject             - reject finding (prompts for reason)")
     print("  review             - re-check current finding against scene edits")
     print("  skip to structure  - jump to structure findings")
-    print("  skip to coherence  - jump to coherence findings")
+    print("  skip to coherence  - jump to coherence findings (logic + clarity + continuity + dialogue)")
     print("  intentional        - mark ambiguity as intentional")
     print("  accidental         - mark ambiguity as accidental")
     print("  export learning    - export LEARNING.md to project directory")
