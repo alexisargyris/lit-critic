@@ -150,3 +150,5 @@ def adapt_legacy_re_evaluate_output_to_response(
         reason=legacy_output.get("reason"),
         meta=MetaContract(model_used=model_used, timings=timings, token_usage=token_usage),
     )
+
+

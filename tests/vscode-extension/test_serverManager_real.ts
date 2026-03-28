@@ -33,7 +33,10 @@ describe('ServerManager (Real)', () => {
         }
     });
 
-    function createManager(repoRoot = '/test/repo') {
+    function createManager(
+        repoRoot = '/test/repo',
+        options?: { readyTimeoutMs?: number; readyIntervalMs?: number },
+    ) {
         const module = proxyquire('../../vscode-extension/src/serverManager', {
             'vscode': mockVscode,
             'child_process': { spawn: mockSpawn },
@@ -41,7 +44,7 @@ describe('ServerManager (Real)', () => {
             'path': mockPath,
         });
         ServerManager = module.ServerManager;
-        return new ServerManager(repoRoot);
+        return new ServerManager(repoRoot, options);
     }
 
     describe('constructor', () => {
@@ -283,7 +286,8 @@ describe('ServerManager (Real)', () => {
                 request: () => ({ on: () => {}, destroy: () => {} }),
             };
             
-            manager = createManager('/test/repo');
+            // Use a short timeout so this test completes in ~500ms instead of ~30s.
+            manager = createManager('/test/repo', { readyTimeoutMs: 500, readyIntervalMs: 50 });
             
             try {
                 await manager.start();
@@ -293,7 +297,7 @@ describe('ServerManager (Real)', () => {
             }
             
             manager = null; // Prevent afterEach cleanup
-        }).timeout(35000); // Extend timeout for this test
+        }).timeout(3000);
 
         it('should fire onStopped on process error', (done) => {
             mockSpawn = createSmartSpawn(mockChildProcess);

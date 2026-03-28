@@ -112,7 +112,7 @@ class TestGenerateLearningMarkdown:
         ld = LearningData()
         ld.preferences.append({"description": "Test preference"})
         result = generate_learning_markdown(ld)
-        assert "- Test preference" in result
+        assert "Test preference" in result  # confidence prefix prepended by generate_learning_markdown
 
 
 class TestExportLearningMarkdown:

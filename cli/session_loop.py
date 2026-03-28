@@ -17,6 +17,9 @@ from lit_platform.session_state_machine import (
 from lit_platform.persistence import LearningStore
 
 from lit_platform.services import (
+    audit_indexes_deterministic,
+    audit_indexes_semantic,
+    format_audit_report,
     detect_and_apply_scene_changes,
     review_current_finding_against_scene_edits,
     persist_finding,
@@ -24,12 +27,18 @@ from lit_platform.services import (
     persist_session_learning,
     persist_discussion_history,
     complete_session,
+    generate_and_save_session_summary,
     create_session,
     discuss_finding_stream,
     export_learning_markdown,
+    scan_scene_for_index_entries,
+    format_index_report,
 )
 from lit_platform.models import SessionState, Finding
+from lit_platform.runtime.config import resolve_model
 from lit_platform.runtime.utils import remap_location_line_range
+from lit_platform.facade import PlatformFacade
+from lit_platform.services.analysis_service import OPTIONAL_FILES
 
 from .interface import (
     print_finding,
@@ -68,6 +77,8 @@ async def run_interactive_session(
                 options=f.get('options', []),
                 flagged_by=f.get('flagged_by', []),
                 ambiguity_type=f.get('ambiguity_type'),
+                stale=f.get('stale', False),
+                origin=f.get('origin', 'legacy'),
             )
             for i, f in enumerate(findings_data)
         ]
@@ -203,6 +214,17 @@ async def run_interactive_session(
                 filepath = export_learning_markdown(state.project_path)
                 print(f"\n  ✓ Exported to {filepath}")
 
+            # Index scan — update index files from current scene
+            elif user_lower == 'index':
+                await _handle_index_scan(state)
+
+            # Index audit — deterministic/deep checks for index consistency
+            elif user_lower == 'audit':
+                await _handle_index_audit(state, deep=False)
+
+            elif user_lower == 'audit deep':
+                await _handle_index_audit(state, deep=True)
+
             # Help
             elif user_lower == 'help':
                 _print_help()
@@ -243,7 +265,16 @@ async def run_interactive_session(
     print("\n" + "=" * 60)
     print("All findings have been considered. Session completed.")
     print(f"  Learning updated: {prefs} preference(s), {amb} ambiguity pattern(s) in DB.")
-    print("Type 'export learning' to write LEARNING.md, or 'quit' to exit.")
+
+    # Generate and display the session-end disconfirming meta-observation.
+    print("\n[Generating session reflection...]")
+    session_summary = await generate_and_save_session_summary(state)
+    if session_summary:
+        print("\n─ META-OBSERVATION ─────────────────────────────────────")
+        print(session_summary)
+        print("─────────────────────────────────────────────────────────")
+
+    print("\nType 'export learning' to write LEARNING.md, or 'quit' to exit.")
     print("=" * 60)
 
     while True:
@@ -255,6 +286,12 @@ async def run_interactive_session(
         if final_input == 'export learning':
             filepath = export_learning_markdown(state.project_path)
             print(f"\n  ✓ Exported to {filepath}")
+        elif final_input == 'index':
+            await _handle_index_scan(state)
+        elif final_input == 'audit':
+            await _handle_index_audit(state, deep=False)
+        elif final_input == 'audit deep':
+            await _handle_index_audit(state, deep=True)
         elif final_input in ('quit', 'q', 'exit', ''):
             break
 
@@ -302,6 +339,56 @@ async def _handle_discussion(state: SessionState, finding: Finding,
     persist_session_learning(state)
 
 
+async def _handle_index_scan(state: SessionState) -> None:
+    """Scan the current scene and insert new entries into index files."""
+    print("\n[Scanning scene for new index entries...]")
+    try:
+        report = await scan_scene_for_index_entries(
+            scene_content=state.scene_content,
+            project_path=state.project_path,
+            indexes=state.indexes,
+            client=state.client,
+            model=state.model,
+            max_tokens=state.model_max_tokens,
+        )
+        print(format_index_report(report))
+    except Exception as e:
+        print(f"\n  ⚠ Index scan failed: {e}")
+
+
+async def _handle_index_audit(state: SessionState, deep: bool = False) -> None:
+    """Run index audit from the interactive session loop."""
+    mode = "deterministic"
+    if deep:
+        mode = "deep"
+    print(f"\n[Running {mode} index audit...]")
+
+    try:
+        indexes = PlatformFacade.load_legacy_indexes_from_project(
+            state.project_path,
+            optional_filenames=tuple(OPTIONAL_FILES),
+        )
+        report = audit_indexes_deterministic(indexes)
+
+        if deep:
+            model_name = state.discussion_model or state.model
+            model_cfg = resolve_model(model_name)
+            try:
+                semantic = await audit_indexes_semantic(
+                    indexes,
+                    state.effective_discussion_client,
+                    model=model_cfg["id"],
+                    max_tokens=model_cfg["max_tokens"],
+                )
+                report.semantic = semantic
+            except Exception as e:
+                print(f"\n  ⚠ Deep audit failed, showing deterministic report only: {e}")
+
+        print(format_audit_report(report))
+    except Exception as e:
+        print(f"\n  ⚠ Index audit failed: {e}")
+
+
 def _print_help():
     """Print available commands."""
     print("\nCommands:")
@@ -314,5 +401,8 @@ def _print_help():
     print("  intentional        - mark ambiguity as intentional")
     print("  accidental         - mark ambiguity as accidental")
     print("  export learning    - export LEARNING.md to project directory")
+    print("  index              - scan scene and update index files (CAST/GLOSSARY/THREADS/TIMELINE)")
+    print("  audit              - run deterministic index audit")
+    print("  audit deep         - run deterministic + semantic index audit")
     print("  quit (q)           - pause session (auto-saved)")
     print("  [any other text]   - discuss with critic")

@@ -1,418 +1,351 @@
-# Index Files Guide
+# Knowledge Management Guide
 
-Your lit-critic project includes six **index files** (sometimes called "documents of record"). These files live in your project's root directory and serve as the canonical maps for continuity, world rules, and navigation.
+Your lit-critic project maintains a **knowledge base** about your novel's world. This knowledge powers continuity analysis — when the tool asks "did Amelia's hematocrit level change unexpectedly?" or "is the vault locked in this scene?", it's drawing on that knowledge base.
 
-Think of them as your novel's reference library—the source of truth when you need to check a fact, verify a term, or track a narrative thread.
+There are two kinds of knowledge:
 
----
-
-## Overview
-
-| File | Purpose | Update When |
-|------|---------|-------------|
-| **TIMELINE.md** | Scene sequence with brief outcomes | Every new or changed scene |
-| **CANON.md** | World rules and invariants | When rules or constraints change |
-| **CAST.md** | Character facts and relationships | When character details change |
-| **GLOSSARY.md** | Controlled vocabulary with first-seen IDs | When new terms appear |
-| **THREADS.md** | Open narrative promises and their status | When threads open or close |
-| **STYLE.md** | Prose micro-rules (tense, punctuation, etc.) | When you establish new style rules |
+| Kind | Files | How it's maintained |
+|------|-------|---------------------|
+| **Author-authored** | `CANON.md`, `STYLE.md` | You write and update these by hand |
+| **Auto-extracted** | Cast, Glossary, Threads, Timeline | Extracted automatically from your prose |
 
 ---
 
-## 1. TIMELINE.md
+## Author-Authored Knowledge
 
-**Purpose:** The reading-order sequence of your novel with one or two lines summarizing each scene's outcome.
+### CANON.md
 
-**Why it matters:** When you revise scene 42, you need to know what happened in scenes 40–43 without re-reading them. TIMELINE.md gives you that at a glance.
+The immutable rules of your fictional world: magic systems, physical laws, social constraints, historical constraints, and any "cannot" that characters cannot violate without breaking the world's logic.
 
-### Structure
+**You write CANON.md.** The tool reads it as context during extraction and analysis — it uses CANON.md to avoid generating continuity findings that contradict established world rules.
 
-```markdown
-# Timeline
-
-## Part 01 — The Awakening
-
-### Chapter 01
-
-**01.01.01** Amelia wakes in the sanctuary. Discovers her hematocrit is 28%. George is missing.
-
-**01.01.02** Amelia searches the upper sanctum. Finds George's notes about the vault.
-
-**01.01.03** Amelia descends to the vault level. The Breach Gates are sealed but the corridor smells wrong.
-
-### Chapter 02
-
-**01.02.01** Flashback: Three days earlier, Amelia and George argue about opening the vault.
-
-...
-```
-
-### Guidelines
-
-- **One line per scene** (two if the scene is complex)
-- **Focus on outcomes**, not process (what changed, not how)
-- **Include key facts** (numbers, states) if they're important for continuity
-- **Use chronological markers** if the narrative is non-linear (e.g., "Flashback: Day -3")
-
-### When to Update
-
-- **After writing a new scene** add the outcome immediately
-- **After major revisions** if the scene's outcome changed, update the summary
-- **When rearranging scenes** reorder the entries to match reading order
-
----
-
-## 2. CANON.md
-
-**Purpose:** The immutable rules of your fictional world. Physical laws, magic systems, social constraints, technological limits—anything that characters cannot violate without breaking the world's logic.
-
-**Why it matters:** When Amelia drinks the potion in scene 5, you need to know if that breaks the "no magic inside sanctuaries" rule you established in scene 2. CANON.md is the authoritative answer.
-
-### Structure
+**Example structure:**
 
 ```markdown
 # Canon
 
-## World Rules
-
-### Physical Laws
-- Gravity is 1.2x Earth standard
-- Atmosphere is breathable but thin (equivalent to 3000m altitude on Earth)
-- Days are 27 standard hours
-
-### Magic System
+## Magic System
 - Magic requires blood contact with runestones
 - Sanctuaries block all magic within their wards
 - Ward strength degrades 5% per day without maintenance
 
-### Biological Constraints
+## Biological Constraints
 - Hematocrit below 25% causes loss of consciousness
-- Humans cannot survive more than 3 days without water
-- Healing magic does not work on infections
 
 ## Historical Constraints
 - The war ended 12 years ago (current year = 842 Post-Armistice)
-- The old capital was destroyed; no survivors
-- Breach Gates were sealed 200 years ago
-
-## Social Rules
-- Sanctuary law supersedes kingdom law within ward boundaries
-- Blood oaths are binding (magical enforcement)
-- Speaking the Forbidden Tongue is punishable by exile
 ```
 
-### Guidelines
-
-- **Record rules when they first matter** in a scene
-- **Be specific**: "Magic is limited" is vague. "Magic requires blood contact with runestones" is actionable.
-- **Distinguish cannot from will-not**: CANON.md is for "cannot" (physical impossibility). Character choices ("George will not betray Amelia") go elsewhere.
-- **Update immediately** when you revise a world rule, then search your scenes to ensure consistency
-
-### When to Update
-
-- **When you introduce a new rule** that constrains future scenes
-- **When you change an existing rule** (search all scenes for the old rule and revise)
-- **When a scene references a rule** you haven't documented yet
+**When to update CANON.md:**
+- When you establish a new world rule in a scene
+- When you revise an existing rule (then check your scenes for violations)
+- When you want the LLM to treat something as an inviolable constraint
 
 ---
 
-## 3. CAST.md
+### STYLE.md
 
-**Purpose:** Character facts, relationships, and histories. The source of truth for names, ages, physical traits, backstories, and how characters relate to one another.
+Your prose micro-rules: tense conventions, punctuation preferences, dialogue tag policy, sentence structure habits, terminology guidelines.
 
-**Why it matters:** In scene 15, you wrote "Amelia was twelve when the war ended." In scene 47, you need to know her current age. CAST.md has the math.
+**You write STYLE.md.** The tool reads it during analysis to check for deviations from your documented style.
 
-### Structure
-
-```markdown
-# Cast
-
-## Main Characters
-
-### Amelia Ashvale
-- **Age:** 24 (born Year 818 PA)
-- **Role:** Sanctuary warden, former soldier
-- **Physical:** 168cm, lean build, burn scar on right forearm, brown eyes
-- **Key facts:**
-  - Fought in the final year of the war (age 12)
-  - Trained by George since age 13
-  - Only surviving member of her squad
-- **Relationships:**
-  - George: mentor, father-figure, trusts implicitly
-  - Lyra: sister-in-arms, complicated loyalty
-  - High Priest: mutual distrust
-
-### George Thorne
-- **Age:** 56 (born Year 786 PA)
-- **Role:** Sanctuary elder, former battle-mage
-- **Physical:** 182cm, gray hair, missing left index finger
-- **Key facts:**
-  - Lost his magic during the war (has not revealed how)
-  - Holds the only key to the vault
-  - Diagnosed with bloodrot (terminal, 6 months)
-- **Relationships:**
-  - Amelia: protégé, sees her as a daughter
-  - Lyra: former rival, grudging respect
-  - High Priest: old friend, growing tension
-
-## Supporting Characters
-
-### Lyra Voss
-- **Age:** 27
-- **Role:** Scout, information broker
-- **Physical:** 175cm, red hair, no visible scars
-- **Relationships:**
-  - Amelia: complicated (past betrayal forgiven but not forgotten)
-  - George: distrusts him
-
-...
-```
-
-### Guidelines
-
-- **Include measurements** when they matter (age, height, time-since-event)
-- **Track relationships bidirectionally** (both "Amelia trusts George" and "George sees Amelia as a daughter")
-- **Note secrets** if they're character-defining (e.g., "George hides his terminal diagnosis")
-- **Update facts immediately** when you reveal or change them in a scene
-
-### When to Update
-
-- **When you introduce a new character** (even minor ones, if they'll recur)
-- **When you reveal a new fact** about a character
-- **When relationships shift** (e.g., Amelia learns of George's betrayal)
-
----
-
-## 4. GLOSSARY.md
-
-**Purpose:** Controlled vocabulary for specialized terms, place names, invented words, and non-English terms. Ensures consistent spelling and usage throughout the novel.
-
-**Why it matters:** If you spell it "Breach Gates" in scene 3 and "breach gates" in scene 9 and "Breachgates" in scene 15, searching for consistency breaks. GLOSSARY.md is the official spelling.
-
-### Structure
-
-```markdown
-# Glossary
-
-## Terms
-
-### Breach Gates
-**Definition:** The ancient sealed portals leading to the underworld. Locked 200 years ago after the First Incursion.  
-**First seen:** 01.01.03  
-**Notes:** Always capitalized. Plural form even when referring to a single gate.
-
-### hematocrit
-**Definition:** Percentage of blood volume composed of red blood cells. Normal human range: 38–50%. Below 25% is life-threatening.  
-**First seen:** 01.01.01  
-**Notes:** Lowercase. Used as both noun and adjective ("hematocrit level" or just "hematocrit").
-
-### sanctuary ward
-**Definition:** Magical barrier protecting sanctuary grounds. Blocks all magic, including healing spells.  
-**First seen:** 01.01.02  
-**Notes:** Lowercase unless starting a sentence. Strength measured in percentage (100% = full strength).
-
-### Κυρία (Kyria)
-**Definition:** Greek term meaning "Lady" or "Mistress." Used as a title of respect for the High Priestess.  
-**First seen:** 01.02.03  
-**Transliteration:** Kyria  
-**Notes:** Always capitalize. The Greek spelling is canonical; use transliteration in prose only when POV character doesn't know Greek.
-
-## Place Names
-
-### The Ashvale Sanctuary
-**Definition:** Fortified monastery on the eastern ridge. One of twelve sanctuaries remaining after the war.  
-**First seen:** 01.01.01  
-**Notes:** "The" is part of the official name.
-
-...
-```
-
-### Guidelines
-
-- **Record the first scene ID** where each term appears
-- **Note capitalization, hyphenation, spacing** explicitly
-- **Include transliterations** for non-English terms
-- **Provide context** (definition, usage notes)
-
-### When to Update
-
-- **Immediately when you introduce a new term** in a scene
-- **When you standardize spelling** of an existing term (then search-and-replace across all scenes)
-- **When you realize you've been inconsistent** (pick the official version, record it, fix all scenes)
-
----
-
-## 5. THREADS.md
-
-**Purpose:** Track narrative promises—questions raised, mysteries introduced, arcs begun—and their current status.
-
-**Why it matters:** In scene 8, you hinted that George is hiding something. In scene 40, you need to know if you've resolved that thread or if it's still hanging.
-
-### Structure
-
-```markdown
-# Threads
-
-## Active Threads
-
-### vault_mystery
-**Opened:** 01.01.02  
-**Question:** What's inside the vault? Why did George hide the key?  
-**Status:** Active. Amelia found the vault door ajar (01.03.01) but hasn't entered yet.  
-**Notes:** Reader knows George is dying; Amelia doesn't. This asymmetry is intentional.
-
-### George_secret
-**Opened:** 01.02.01  
-**Question:** Why did George lose his magic? What happened during the war?  
-**Status:** Active. Mentioned in flashback but not explained.  
-**Notes:** Plan to resolve in Part 02, Chapter 04.
-
-### ward_collapse
-**Opened:** 01.01.02  
-**Question:** Why are the sanctuary wards failing? Who's sabotaging them?  
-**Status:** Active. Clues planted in 01.02.03 (ward strength dropping faster than decay rate).  
-**Notes:** Connected to vault_mystery.
-
-## Resolved Threads
-
-### Amelia_injury
-**Opened:** 01.01.01  
-**Closed:** 01.04.05  
-**Resolution:** Amelia received transfusion from Lyra; hematocrit restored to 34%.  
-**Notes:** Physical arc resolved but emotional aftermath (Amelia owes Lyra a debt) remains active.
-
-...
-```
-
-### Guidelines
-
-- **Give each thread a short ID** (e.g., `vault_mystery`) for easy reference in scene @@META headers
-- **Record the scene ID where the thread opened**
-- **Update status regularly** as you write
-- **Move to "Resolved"** when the question is answered or the arc completes
-
-### When to Update
-
-- **When you open a new thread** (introduce a question or promise)
-- **When you advance a thread** (provide new clues or complications)
-- **When you resolve a thread** (answer the question, complete the arc)
-
----
-
-## 6. STYLE.md
-
-**Purpose:** Your novel's prose micro-rules—tense conventions, punctuation preferences, sentence structure habits, term usage guidelines.
-
-**Why it matters:** You wrote scene 1–10 with "Amelia said" as the default dialogue tag. In scene 11, you start using "Amelia spoke." STYLE.md is where you decide the rule and stick to it.
-
-### Structure
+**Example structure:**
 
 ```markdown
 # Style Guide
 
 ## Tense Rules
-
-### Default Tense
 Past tense for present-time narrative.
-
-### Flashbacks
-Use present tense for flashbacks (inverted convention).  
-Example: "Three days earlier, Amelia *stands* in the vault corridor..."
+Use present tense for flashbacks (inverted convention).
 
 ## Dialogue Tags
+Use "said" as the default neutral tag.
 
-### Default Tag
-Use "said" as the default neutral tag. Avoid fancy tags ("exclaimed," "retorted") unless the manner of speech is essential.
-
-### Tag Placement
-Place tags after the first clause of multi-sentence dialogue:  
-✅ "I don't know," Amelia said. "The vault was already open."  
-❌ Amelia said, "I don't know. The vault was already open."
-
-## Terminology
-
-### Magic System Terms
-- "ward" (lowercase) unless starting a sentence
-- "Breach Gates" (always capitalized, always plural)
-- "runestone" (one word, lowercase)
-
-### Greek Terms
-Use Greek spelling (e.g., Κυρία) in narration when POV character knows Greek. Use transliteration (e.g., Kyria) when POV character doesn't.
-
-## Punctuation
-
-### Em Dashes
-Use em dashes (—) for abrupt interruptions or shifts in thought. No spaces around the dash:  
-✅ "Amelia, I—"  
-❌ "Amelia, I —"
-
-### Oxford Comma
-Always use the Oxford comma in lists:  
-✅ "Amelia, George, and Lyra"  
-❌ "Amelia, George and Lyra"
-
-## Sentence Structure
-
-### Sentence Length
-Vary sentence length to control pacing. Action scenes: shorter sentences. Introspective scenes: longer, more complex syntax.
-
-### Filter Words
-Avoid unnecessary filter words ("saw," "felt," "heard") in deep POV:  
-❌ Amelia *saw* the door ajar.  
-✅ The door hung ajar.
-
-...
+## Em Dashes
+Use em dashes (—) for abrupt interruptions. No spaces around the dash.
 ```
 
-### Guidelines
-
-- **Document the rule, not every instance** (you don't need to list every dialogue tag, just the policy)
-- **Include examples** (show the right way and the wrong way)
-- **Distinguish rules from preferences** (rules = never break; preferences = default unless there's a reason)
-- **Update when you catch yourself inconsistently** (if you notice you've been inconsistent, pick the rule, record it, and search-fix)
-
-### When to Update
-
-- **When you establish a new stylistic convention** (e.g., you decide flashbacks use present tense)
-- **When you catch an inconsistency** and pick the official way
-- **When you deliberately break a rule** (note the exception and why)
+**When to update STYLE.md:**
+- When you establish a new stylistic convention
+- When you catch an inconsistency and pick the official way
 
 ---
 
-## How lit-critic Uses These Files
+## Auto-Extracted Knowledge
 
-When you run an analysis on a scene, lit-critic loads all six index files to provide context:
+The following four knowledge categories are extracted automatically from your prose by the LLM during `knowledge refresh`. You do not maintain them by hand. If extraction gets something wrong, correct it with an override rather than editing exported markdown or raw database data.
 
-- **TIMELINE.md** Checks if the scene's Prev/Next pointers match the reading order
-- **CANON.md** Flags violations of world rules (e.g., Amelia uses magic inside the sanctuary)
-- **CAST.md** Catches character inconsistencies (e.g., George's age doesn't match his backstory)
-- **GLOSSARY.md** Detects term spelling variations (e.g., "breach gates" vs. "Breach Gates")
-- **THREADS.md** Warns if you're advancing a thread marked as resolved, or if threads go stale
-- **STYLE.md** Highlights deviations from your documented prose rules
-
-The tool respects your world and your voice—it's checking for internal consistency, not imposing external standards.
+| Category | What's extracted |
+|----------|-----------------|
+| **Cast** | Character names, aliases, categories, traits, relationships |
+| **Glossary** | Specialized terms, definitions, translations, usage notes |
+| **Threads** | Narrative threads opened/advanced/closed, questions raised |
+| **Timeline** | Scene-level timeline entries (location, POV, objective, continuity anchors) |
 
 ---
 
-## Best Practices
+## Knowledge Tree Visual States
 
-### 1. Update As You Write
-Don't wait until the end of a chapter to update index files. When you introduce a term, add it to GLOSSARY.md immediately. When you close a thread, move it to "Resolved" in THREADS.md.
+Each entity in the Knowledge tree displays visual cues based on its current state. Multiple states can apply simultaneously; the highest-priority state determines the icon and color.
 
-### 2. Use Index Files While Drafting
-Before writing a scene, skim the relevant index files. About to write a scene with George? Check CAST.md for his age, traits, and relationships. About to reference the vault? Check CANON.md for the rules.
+| State | Icon | Label | Color | Inline actions | What to do |
+|---|---|---|---|---|---|
+| Normal | property | — | default | Lock, Delete | No action needed |
+| Overridden | property | `overridden` | teal | Reset Override, Lock, Delete | Review; reset if extraction later corrected itself |
+| Locked | lock | `locked` | gold | Toggle Lock | Unlock to allow future LLM updates |
+| Stale | ⚠ warning | `stale` | red | — | Run **Refresh Knowledge** |
+| Flagged | ⚠ warning | `flagged` | orange | Keep ✓, Delete 🗑 | Review and decide — see [Resolving flagged entities](#resolving-flagged-entities) |
 
-### 3. Search for Consistency
-When you update a fact (e.g., change George's age from 54 to 56), search your entire project for the old value and fix all scenes.
+**Priority order (highest first):** stale → flagged → locked → overridden
 
-### 4. One Source of Truth
-If a fact appears in multiple index files (e.g., George's terminal diagnosis is in both CAST.md and a THREADS.md entry), make sure they agree. Better yet, put the fact in one place and cross-reference it.
+---
+
+## The Knowledge Refresh Command
+
+Run `knowledge refresh` after writing or revising scenes. The command:
+
+1. Refreshes scene chain projections (validates your Prev/Next links)
+2. Reports any chain validation warnings (gaps, orphans, cycles)
+3. Identifies scenes whose content has changed since the last extraction
+4. Sends each changed scene to the LLM (using the `quick` model slot) with CANON.md as context
+5. Stores extracted results in the project database
+
+**CLI:**
+```bash
+lit-critic knowledge refresh --project /path/to/project
+```
+
+**VS Code extension:** Click the **Refresh Knowledge** button in the Knowledge view toolbar.
+
+The command is also called automatically when you start a new analysis session.
+
+### Extraction is incremental
+
+Only scenes that have changed since the last refresh are sent for extraction. A scene that hasn't changed does not cost a model call.
+
+### Chain warnings
+
+If your Prev/Next chain has issues (a broken link, an orphaned scene, a cycle), `knowledge refresh` reports them as warnings. Analysis still proceeds — chain issues are advisory, not blocking.
+
+---
+
+## Keeping Knowledge Up To Date (VS Code Extension)
+
+When you edit a scene or a reference file (CANON.md / STYLE.md), the knowledge base becomes out of date. The VS Code extension provides a **staleness-driven workflow** to detect what changed and bring everything back in sync. This workflow is entirely manual — there are no automatic file watchers.
+
+### The full update workflow
+
+#### Step 1 — Edit and save
+
+Edit a scene file or a reference file and save. VS Code marks the file as changed ('M' label with highlight colour in the Source Control view). The knowledge base is now potentially out of date, but the extension does not yet know this.
+
+#### Step 2 — Check for Changes
+
+Click **Check for Changes** in the **Inputs** section header of the Knowledge view.
+
+The extension calls the backend, which compares the current file hashes against the last-known projection hashes. The result is pushed to all three sidebar panels:
+
+- **Inputs panel** — changed file(s) are highlighted in muted red and labelled *stale*.
+- **Knowledge panel** — affected knowledge entries are highlighted and labelled *stale*:
+  - After a **scene file** change: only entries sourced from that scene are marked stale (characters, terms, threads, timeline entries that were extracted from it).
+  - After a **reference file** change (CANON.md or STYLE.md): **all** knowledge entries are marked stale.
+- **Sessions panel** — sessions whose stored file hashes differ from the current hashes are highlighted as stale.
+
+A notification shows how many stale inputs were found (e.g. *"1 stale input found"*), or *"Everything is up to date"* if nothing changed.
+
+#### Step 3 — Refresh Knowledge
+
+Click **Refresh Knowledge** in the Knowledge view toolbar.
+
+The system re-extracts knowledge from stale scenes (an LLM call per stale scene, using the `quick` model slot). Entity locking is respected — locked entries are skipped during extraction and reconciliation.
+
+After extraction, the **reconciliation review pass** runs. This is a second LLM pass that reviews all knowledge against the current scene content:
+- Updates field values for unlocked entities where the text evidence warrants changes.
+- Flags unsupported unlocked entities for deletion. If a flagged entity has user overrides, it is placed in the *review* queue rather than being deleted immediately.
+
+When the operation completes, the extension automatically re-queries staleness. Knowledge entries that were refreshed successfully are no longer marked stale.
+
+**If the reconciliation pass flagged any entities for review**, a notification reports the count (e.g. *"2 knowledge item(s) flagged for review by reconciliation pass."*). Those entries appear in the Knowledge tree with a ⚠ warning icon, an orange `flagged` label, and inline **Keep** and **Delete** buttons.
+
+#### Step 4 — Resolve flagged entities (if any) {#resolving-flagged-entities}
+
+For each entity marked `flagged`, use the inline buttons that appear when you hover over it in the tree:
+
+- **Keep ✓** — prompts you to choose between:
+  - **Keep & Lock** — dismisses the flag and locks the entity so the LLM will not update it again.
+  - **Keep Only** — dismisses the flag without locking (the entity may be re-evaluated on the next refresh).
+- **Delete 🗑** — shows a confirmation prompt, then permanently removes the entity and all its overrides.
+
+After either action the flag is cleared immediately from the tree. The entity returns to its normal state (normal, overridden, or locked, depending on what was chosen).
+
+#### Step 5 — Refresh stale sessions
+
+Sessions marked stale must be re-run individually. Re-run each stale session using the normal **Analyze** flow. After each re-run, the extension automatically re-queries staleness and the session is cleared from the stale list.
+
+#### Step 6 — Confirm completion
+
+Once all stale knowledge entries have been refreshed and all stale sessions have been re-run, the input file's stale badge clears automatically. Run **Check for Changes** again to confirm: *"Everything is up to date."*
+
+> **Note:** The input badge is a summary indicator. It stays stale until **all** its dependent knowledge entries **and** sessions have been refreshed — not just knowledge alone.
+
+---
+
+### Summary table
+
+| Step | Actor | Action | Result |
+|------|-------|--------|--------|
+| 1 | User | Edits and saves a scene or reference file | File marked changed by VS Code |
+| 2 | User | Clicks **Check for Changes** | Stale files, knowledge entries, and sessions highlighted |
+| 3 | User | Clicks **Refresh Knowledge** | Stale scenes re-extracted; reconciliation pass runs; staleness re-checked |
+| 4 | User | Resolves flagged entities (keep or delete) | Flagged indicators cleared |
+| 5 | User | Re-runs each stale session | Session staleness cleared after each re-run |
+| 6 | User | Clicks **Check for Changes** | Confirms everything is up to date |
+
+---
+
+## Known Issues
+
+### Character renames are not always detected automatically
+
+When you rename a character in a scene file, **Refresh Knowledge** will re-extract the scene and add or update the entry for the new name. The reconciliation pass now uses per-scene `cast_present` data — each scene summary includes a `Cast:` field listing the characters present — and includes explicit rename-detection instructions. If the old character name no longer appears in any scene's cast list and a plausible replacement name is present, the reconciliation pass will propose removal of the old entity.
+
+A manual check is still recommended as a belt-and-suspenders step:
+
+1. After refreshing knowledge, check the Knowledge tree for the old character name.
+2. If it still appears and should not, use **Delete Knowledge Entity** from its context menu.
+
+### CANON.md change forces scene re-extraction
+
+When CANON.md changes, all knowledge entries are correctly flagged as stale. **Refresh Knowledge** now also force-marks all previously-extracted scenes as stale before the extraction pass runs. This means that even if a scene's prose has not changed, it will be re-extracted against the updated canon — ensuring the extraction LLM uses the new world rules as context.
+
+### STYLE.md change only marks sessions as stale
+
+When STYLE.md changes, the staleness system now correctly marks only **sessions** as stale. Knowledge entries (characters, terms, threads, timeline) are left unaffected, because STYLE.md is used during analysis sessions only — it is not passed to the extraction LLM and has no effect on what is extracted.
+
+---
+
+## Reviewing and Correcting Extracted Knowledge
+
+Extraction is reliable but not perfect. The review workflow lets you inspect what was extracted and correct anything that's wrong.
+
+### Viewing extracted knowledge
+
+**CLI:**
+```bash
+lit-critic knowledge review --project /path/to/project --category characters
+```
+
+Available categories: `characters`, `terms`, `threads`, `timeline`
+
+**VS Code extension:** Open the **Knowledge** view in the sidebar. Entries are grouped by category. Use **Refresh Knowledge** to re-extract from scenes and **Review Knowledge** to load the current review tree. Entries with corrections applied are marked as author-corrected and show their overridden fields in the tooltip.
+
+### Correcting an entry
+
+When extracted knowledge is wrong, you submit an **override** rather than editing the extraction directly. Overrides survive re-extraction — if the scene is re-processed, the extraction result updates, but your correction is applied on top.
+
+**CLI:**
+```bash
+lit-critic knowledge review --project /path/to/project --category characters
+# Follow the interactive prompts to select an entity and field, then type the corrected value
+```
+
+**VS Code extension:** You have two editing paths:
+
+- **Quick edit (V1):** click a knowledge entity, or use **Edit Knowledge Entry** from its context menu. Then choose the field, type the corrected value, and save. The tree refreshes immediately.
+- **Detailed review (V2):** use **Open Knowledge Review Panel** from the entity context menu to compare extracted values and overrides side by side, save/reset individual fields, and move to the next or previous entity.
+
+`CANON.md` and `STYLE.md` remain normal author-authored files. The Knowledge view correction flow applies only to the auto-extracted categories.
+
+### Deleting an override
+
+If the extraction later corrects itself, you can remove your override:
+
+```bash
+lit-critic knowledge review --project /path/to/project --category characters
+# Select the entity, select the overridden field, choose "Delete override"
+```
+
+**VS Code extension:** Use **Reset Knowledge Override** from the entity context menu for the quick path, or reset an individual field from the Knowledge Review panel. After reset, the tree refreshes from server truth.
+
+---
+
+## The Extraction Lock
+
+If a scene is particularly complex or you want to prevent re-extraction (e.g., you've manually reviewed all its knowledge and are satisfied), you can lock it:
+
+```bash
+lit-critic scenes lock scene-name.txt --project /path/to/project
+```
+
+**VS Code extension:** Right-click a scene → **Lock Scene**.
+
+Locked scenes are skipped during `knowledge refresh`. To unlock:
+
+```bash
+lit-critic scenes unlock scene-name.txt --project /path/to/project
+```
+
+The lock only affects extraction — the scene still participates in analysis normally.
+
+---
+
+## Exporting Knowledge to Markdown
+
+You can export all extracted knowledge (with overrides applied) to a single markdown file for external review or archiving:
+
+**CLI:**
+```bash
+lit-critic knowledge export --project /path/to/project
+```
+
+**VS Code extension:** The extension currently focuses on browsing and correcting knowledge in place. Use the CLI command for markdown export.
+
+The export is read-only — it does not affect the database. It produces a structured markdown document covering Cast, Glossary, Threads, and Timeline.
+
+---
+
+## How Extracted Knowledge Is Used During Analysis
+
+When you analyze a scene, lit-critic loads:
+
+- **CANON.md** and **STYLE.md** directly from files (author-authored)
+- **Cast, Glossary, Threads, Timeline** serialized from the database (auto-extracted, with overrides applied)
+
+This knowledge is packed into the analysis prompt as context, enabling the LLM to check continuity, flag rule violations, and identify thread inconsistencies — the same job that manually-maintained index files used to do.
+
+---
+
+## Project Setup Checklist
+
+When starting a new project:
+
+1. **Create CANON.md** with your world's core rules
+2. **Create STYLE.md** with your prose conventions
+3. **Write your scenes** with the minimal @@META header (Prev/Next only)
+4. **Run `knowledge refresh`** to initialize extraction and validate the scene chain
+5. **Review the Knowledge view** and add overrides for any extraction errors
+6. **Run analysis** on any scene
+
+---
+
+## Frequently Asked Questions
+
+**Do I need to maintain CAST.md, GLOSSARY.md, THREADS.md, or TIMELINE.md files?**  
+No. Those files are no longer used. Their content is now extracted automatically and stored in the database. If you have old versions of those files, the tool will ignore them.
+
+**What if extraction misses something important?**  
+Submit an override for the missing field. You can also add information to CANON.md if it's a world rule that should always be in context.
+
+**Can I still write knowledge by hand like the old index files?**  
+CANON.md and STYLE.md are always hand-authored. For the other categories, use overrides to correct or supplement what extraction produces. The override system is designed to persist through re-extractions.
+
+**How often should I run `knowledge refresh`?**  
+After any writing session where you changed scenes. Extraction is incremental, so it only processes what changed.
 
 ---
 
 ## See Also
 
-- **[Scene Format Guide](scene-format.md)** How to structure scene files with @@META headers
+- **[Scene Format Guide](scene-format.md)** The minimal @@META format (Prev/Next only)
 - **[Getting Started](getting-started.md)** Project setup walkthrough
-- **[Templates](templates/)** Annotated template files for all index documents
-- **[Working with Findings](working-with-findings.md)** Understanding lit-critic's feedback
+- **[Working with Findings](working-with-findings.md)** Understanding the tool's feedback

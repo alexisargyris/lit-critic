@@ -12,6 +12,7 @@ from typing import Optional
 from lit_platform.facade import PlatformFacade
 from lit_platform.models import SessionState, Finding, LearningData, LensResult, CoordinatorError
 from lit_platform.persistence import SessionStore, FindingStore
+from lit_platform.runtime.model_slots import resolve_models_for_mode
 from lit_platform.runtime.utils import (
     concatenate_scenes,
     map_global_range_to_scene,
@@ -19,17 +20,16 @@ from lit_platform.runtime.utils import (
 )
 from lit_platform.services.analysis_service import (
     DEFAULT_MODEL,
-    INDEX_FILES,
-    OPTIONAL_FILES,
     create_client,
     is_known_model,
-    normalize_lens_preferences,
     resolve_model,
     run_coordinator,
     run_coordinator_chunked,
     run_lens,
 )
 from lit_platform.persistence import LearningStore
+from lit_platform.services.code_checks import run_code_checks
+from lit_platform.services.project_knowledge_service import ensure_project_knowledge_fresh
 
 from lit_platform.services import (
     load_learning,
@@ -56,6 +56,7 @@ from lit_platform.services import (
     discuss_finding_stream,
 )
 from lit_platform.session_state_machine import (
+    apply_tier_model_assignment,
     apply_acceptance,
     apply_discussion_status,
     apply_rejection,
@@ -97,6 +98,10 @@ class WebSessionManager:
         self.results: Optional[dict] = None
         self.current_index: int = 0
         self.analysis_progress: Optional[AnalysisProgress] = None
+        self.read_only_view: bool = False
+        self.loaded_session_status: Optional[str] = None
+
+    _FRONTIER_LENSES = {"prose", "structure", "horizon"}
 
     @property
     def is_active(self) -> bool:
@@ -108,27 +113,13 @@ class WebSessionManager:
             return 0
         return len(self.state.findings)
 
+    @property
+    def is_read_only(self) -> bool:
+        return self.read_only_view
+
     def _load_project_files(self, project_path: Path) -> dict[str, str]:
-        """Load all index files from the project directory via Platform layer."""
-        loaded = []
-        missing = []
-
-        indexes = PlatformFacade.load_legacy_indexes_from_project(
-            project_path,
-            optional_filenames=tuple(OPTIONAL_FILES),
-        )
-
-        for filename in INDEX_FILES:
-            if indexes.get(filename):
-                loaded.append(filename)
-            else:
-                missing.append(filename)
-
-        for filename in OPTIONAL_FILES:
-            if indexes.get(filename):
-                loaded.append(filename)
-
-        return indexes, loaded, missing
+        """Load project knowledge context via the Platform facade."""
+        return PlatformFacade.load_legacy_indexes_from_project(project_path)
 
     def _load_scene(self, scene_path: Path) -> str:
         """Load the scene file via Platform layer."""
@@ -209,7 +200,9 @@ class WebSessionManager:
                              model: str = DEFAULT_MODEL, discussion_model: str = None,
                              discussion_api_key: str | None = None,
                              scene_paths: list[str] | None = None,
-                             lens_preferences: dict | None = None) -> dict:
+                             depth_mode: str = "deep",
+                             frontier_model: str | None = None,
+                             checker_model: str | None = None) -> dict:
         """Start a new analysis. Returns summary info. Populates self.state."""
         project = Path(project_path)
         requested_scene_paths = scene_paths or [scene_path]
@@ -218,13 +211,33 @@ class WebSessionManager:
         if not project.exists():
             raise FileNotFoundError(f"Project directory not found: {project}")
 
-        # Validate model
+        # Validate legacy model inputs first (transitional compatibility).
         if not is_known_model(model):
             model = DEFAULT_MODEL
-
-        # Validate discussion model
         if discussion_model and not is_known_model(discussion_model):
             discussion_model = None
+
+        # Resolve canonical tier assignments for this run.
+        candidate_frontier_model = frontier_model or discussion_model or model
+        if not is_known_model(candidate_frontier_model):
+            candidate_frontier_model = DEFAULT_MODEL
+
+        candidate_checker_model = checker_model or model
+        if not is_known_model(candidate_checker_model):
+            candidate_checker_model = DEFAULT_MODEL
+
+        resolved_models = resolve_models_for_mode(
+            depth_mode,
+            {
+                "frontier": candidate_frontier_model,
+                "quick": candidate_checker_model,
+                "deep": candidate_checker_model,
+            },
+        )
+
+        resolved_depth_mode = resolved_models["mode"]
+        resolved_frontier_model = resolved_models["frontier_model"]
+        resolved_checker_model = resolved_models["checker_model"]
 
         # Handle existing active session
         active = check_active_session(project)
@@ -232,8 +245,11 @@ class WebSessionManager:
             # Auto-complete the previous session
             complete_active_session(project)
 
+        # Ensure projections + extracted knowledge are fresh for this run.
+        ensure_project_knowledge_fresh(project)
+
         # Load files
-        indexes, loaded_files, missing_files = self._load_project_files(project)
+        indexes = self._load_project_files(project)
         scene_content, scene_line_map = self._load_scenes(scenes)
 
         # Load learning and inject directly into indexes so that analysis prompts
@@ -241,20 +257,15 @@ class WebSessionManager:
         learning = load_learning(project)
         indexes['LEARNING.md'] = generate_learning_markdown(learning)
 
-        # Initialize provider-agnostic client
-        provider = resolve_model(model)["provider"]
-        client = create_client(provider, api_key)
+        # Initialize clients per tier model.
+        checker_provider = resolve_model(resolved_checker_model)["provider"]
+        client = create_client(checker_provider, api_key)
 
-        # Initialize discussion client if using different model
-        discussion_client = None
-        if discussion_model:
-            discussion_provider = resolve_model(discussion_model)["provider"]
-            # Only create a new client if the provider differs
-            if discussion_provider != provider:
-                discussion_client = create_client(discussion_provider, discussion_api_key or api_key)
-            else:
-                # Same provider — reuse the same client
-                discussion_client = client
+        frontier_provider = resolve_model(resolved_frontier_model)["provider"]
+        if frontier_provider != checker_provider:
+            discussion_client = create_client(frontier_provider, discussion_api_key or api_key)
+        else:
+            discussion_client = client
 
         # Create session state
         self.state = SessionState(
@@ -266,29 +277,72 @@ class WebSessionManager:
             scene_paths=[str(s) for s in scenes],
             scene_line_map=scene_line_map,
             learning=learning,
-            lens_preferences=normalize_lens_preferences(lens_preferences),
-            model=model,
-            discussion_model=discussion_model,
+            depth_mode=resolved_depth_mode,
+            frontier_model=resolved_frontier_model,
+            checker_model=resolved_checker_model,
+            model=resolved_checker_model,
+            discussion_model=resolved_frontier_model,
             discussion_client=discussion_client,
             index_context_hash=compute_index_context_hash(indexes),
             index_context_stale=False,
             index_rerun_prompted=False,
             index_changed_files=[],
         )
+        self.read_only_view = False
+        self.loaded_session_status = "active"
+
+        apply_tier_model_assignment(
+            self.state,
+            depth_mode=resolved_depth_mode,
+            frontier_model=resolved_frontier_model,
+            checker_model=resolved_checker_model,
+        )
 
         # Set up progress tracking
         self.analysis_progress = AnalysisProgress()
 
+        # ------------------------------------------------------------------ #
+        # Phase 1: Run deterministic code checks (free, instant)
+        # ------------------------------------------------------------------ #
+        self.analysis_progress.add_event("status", {"message": "Running code checks..."})
+        code_findings = run_code_checks(scene_content, indexes)
+        if code_findings:
+            self.analysis_progress.add_event("code_checks_complete", {
+                "message": f"Code checks: {len(code_findings)} finding(s)",
+                "count": len(code_findings),
+            })
+        else:
+            self.analysis_progress.add_event("code_checks_complete", {
+                "message": "Code checks: all clear",
+                "count": 0,
+            })
+
         # Run analysis with progress tracking
-        self.analysis_progress.add_event("status", {"message": "Running 6 lenses in parallel..."})
+        self.analysis_progress.add_event("status", {"message": "Running 7 lenses in parallel..."})
 
-        model_id = self.state.model_id
-        max_tokens = self.state.model_max_tokens
+        checker_model_cfg = resolve_model(self.state.effective_checker_model)
+        frontier_model_cfg = resolve_model(self.state.effective_frontier_model)
+        checker_client = self.state.client
+        frontier_client = self.state.effective_discussion_client
 
-        lens_names = ["prose", "structure", "logic", "clarity", "continuity", "dialogue"]
+        lens_names = ["prose", "structure", "logic", "clarity", "continuity", "dialogue", "horizon"]
         lens_tasks = [
-            self._run_lens_with_progress(client, name, scene_content, indexes,
-                                         model=model_id, max_tokens=max_tokens)
+            self._run_lens_with_progress(
+                frontier_client if name in self._FRONTIER_LENSES else checker_client,
+                name,
+                scene_content,
+                indexes,
+                model=(
+                    frontier_model_cfg["id"]
+                    if name in self._FRONTIER_LENSES
+                    else checker_model_cfg["id"]
+                ),
+                max_tokens=(
+                    frontier_model_cfg["max_tokens"]
+                    if name in self._FRONTIER_LENSES
+                    else checker_model_cfg["max_tokens"]
+                ),
+            )
             for name in lens_names
         ]
 
@@ -308,12 +362,16 @@ class WebSessionManager:
         def _coord_progress(event_type: str, data: dict):
             self.analysis_progress.add_event(event_type, data)
 
+        # Coordinator always runs on checker tier (quick/deep) to keep
+        # aggregation and fallback behavior aligned with checker-model routing.
+        coordinator_client = checker_client
+
         try:
             coordinated = await run_coordinator_chunked(
-                client, lens_results, scene_content,
-                model=model_id, max_tokens=max_tokens,
+                coordinator_client, lens_results, scene_content,
+                model=checker_model_cfg["id"],
+                max_tokens=checker_model_cfg["max_tokens"],
                 progress_callback=_coord_progress,
-                lens_preferences=self.state.lens_preferences,
             )
         except CoordinatorError:
             # Fallback to single-call coordinator
@@ -322,9 +380,9 @@ class WebSessionManager:
             })
             try:
                 coordinated = await run_coordinator(
-                    client, lens_results, scene_content,
-                    model=model_id, max_tokens=max_tokens,
-                    lens_preferences=self.state.lens_preferences,
+                    coordinator_client, lens_results, scene_content,
+                    model=checker_model_cfg["id"],
+                    max_tokens=checker_model_cfg["max_tokens"],
                 )
             except CoordinatorError as e:
                 error_msg = str(e)
@@ -335,11 +393,14 @@ class WebSessionManager:
 
         self.results = coordinated
 
-        # Convert findings to Finding objects
+        # Convert LLM findings to Finding objects.
+        # Numbers are offset by the number of code findings so the combined
+        # list has a single contiguous sequence: 1..K (code), K+1..K+N (LLM).
+        code_count = len(code_findings)
         findings_data = coordinated.get("findings", [])
-        self.state.findings = [
+        llm_findings = [
             Finding(
-                number=f.get('number', i + 1),
+                number=code_count + f.get('number', i + 1),
                 severity=f.get('severity', 'minor'),
                 lens=f.get('lens', 'unknown'),
                 location=f.get('location', ''),
@@ -349,10 +410,15 @@ class WebSessionManager:
                 impact=f.get('impact', ''),
                 options=f.get('options', []),
                 flagged_by=f.get('flagged_by', []),
-                ambiguity_type=f.get('ambiguity_type')
+                ambiguity_type=f.get('ambiguity_type'),
+                origin=f.get('origin', 'legacy'),
             )
             for i, f in enumerate(findings_data)
         ]
+
+        # Combine: code findings first, then LLM findings.
+        # Apply scene path / line remapping to all findings.
+        self.state.findings = code_findings + llm_findings
 
         for finding in self.state.findings:
             mapped_scene_path, local_start, local_end = map_global_range_to_scene(
@@ -473,15 +539,17 @@ class WebSessionManager:
         discussion_api_key: str | None = None,
         scene_path_override: str | None = None,
         scene_path_overrides: dict[str, str] | None = None,
+        passive: bool = False,
+        reopen: bool = False,
     ) -> dict:
         """Load any session (active, completed, or abandoned) for viewing/interactions."""
         project = Path(project_path)
 
-        session_data = load_session_by_id(project, session_id)
+        session_data = load_session_by_id(project, session_id, passive=passive)
         if not session_data:
             raise FileNotFoundError(f"Session {session_id} not found in project directory.")
 
-        conn = session_data.pop("_conn")
+        conn = session_data.pop("_conn", None)
 
         return await self._load_session_into_state(
             project,
@@ -491,6 +559,8 @@ class WebSessionManager:
             discussion_api_key=discussion_api_key,
             scene_path_override=scene_path_override,
             scene_path_overrides=scene_path_overrides,
+            read_only=passive,
+            reopen=reopen,
         )
 
     async def _load_session_into_state(
@@ -502,12 +572,15 @@ class WebSessionManager:
         discussion_api_key: str | None = None,
         scene_path_override: str | None = None,
         scene_path_overrides: dict[str, str] | None = None,
+        read_only: bool = False,
+        reopen: bool = False,
     ) -> dict:
         """Shared logic for loading a persisted session into manager state."""
 
         saved_scene_paths = self._extract_saved_scene_paths(session_data)
         if not saved_scene_paths:
-            conn.close()
+            if conn:
+                conn.close()
             raise ValueError("Session data is corrupted (missing scene path)")
 
         resolved_scene_paths, remap, missing_scene_paths, override_provided = self._resolve_session_scene_paths(
@@ -517,7 +590,8 @@ class WebSessionManager:
         )
 
         if missing_scene_paths:
-            conn.close()
+            if conn:
+                conn.close()
             saved_scene_path = saved_scene_paths[0]
             attempted_scene_path = missing_scene_paths[0]
 
@@ -535,14 +609,16 @@ class WebSessionManager:
                 missing_scene_paths=[str(p) for p in missing_scene_paths],
             )
 
-        if remap:
+        # Only persist path remapping if NOT in read-only mode
+        if remap and conn and not read_only:
             SessionStore.update_scene_paths(conn, session_data["session_id"], [str(p) for p in resolved_scene_paths])
             FindingStore.remap_scene_paths(conn, session_data["session_id"], remap)
+        if remap:
             session_data["scene_paths"] = [str(p) for p in resolved_scene_paths]
             session_data["scene_path"] = str(resolved_scene_paths[0])
 
         # Load files
-        indexes, loaded_files, missing_files = self._load_project_files(project)
+        indexes = self._load_project_files(project)
         scene_content, scene_line_map = self._load_scenes([Path(p) for p in resolved_scene_paths])
         scene_path = str(resolved_scene_paths[0])
 
@@ -555,33 +631,54 @@ class WebSessionManager:
         )
 
         # Load learning from DB
-        learning = load_learning_from_db(conn)
+        if conn:
+            learning = load_learning_from_db(conn)
+        else:
+            learning = load_learning(project, passive=True)
         restore_learning_session(learning, session_data.get("learning_session", {}))
 
-        # Restore model from session
-        saved_model = session_data.get("model", DEFAULT_MODEL)
-        if not is_known_model(saved_model):
-            saved_model = DEFAULT_MODEL
+        if conn and reopen and session_data.get("status") in {"completed", "abandoned"}:
+            SessionStore.reopen(conn, session_data["session_id"])
+            session_data["status"] = "active"
+            self.read_only_view = False
 
-        # Restore discussion model from session
-        saved_discussion_model = session_data.get("discussion_model")
-        if saved_discussion_model and not is_known_model(saved_discussion_model):
-            saved_discussion_model = None
+        # Restore tier assignments from session (with legacy fallbacks).
+        saved_depth_mode = session_data.get("depth_mode") or "deep"
 
-        # Initialize provider-agnostic client
-        provider = resolve_model(saved_model)["provider"]
-        client = create_client(provider, api_key)
+        saved_frontier_model = (
+            session_data.get("frontier_model")
+            or session_data.get("discussion_model")
+            or session_data.get("model")
+            or DEFAULT_MODEL
+        )
+        if not is_known_model(saved_frontier_model):
+            saved_frontier_model = DEFAULT_MODEL
 
-        # Initialize discussion client if using different model
-        discussion_client = None
-        if saved_discussion_model:
-            discussion_provider = resolve_model(saved_discussion_model)["provider"]
-            # Only create a new client if the provider differs
-            if discussion_provider != provider:
-                discussion_client = create_client(discussion_provider, discussion_api_key or api_key)
-            else:
-                # Same provider — reuse the same client
-                discussion_client = client
+        saved_checker_model = session_data.get("checker_model") or session_data.get("model") or DEFAULT_MODEL
+        if not is_known_model(saved_checker_model):
+            saved_checker_model = DEFAULT_MODEL
+
+        resolved_models = resolve_models_for_mode(
+            saved_depth_mode,
+            {
+                "frontier": saved_frontier_model,
+                "quick": saved_checker_model,
+                "deep": saved_checker_model,
+            },
+        )
+        resolved_depth_mode = resolved_models["mode"]
+        resolved_frontier_model = resolved_models["frontier_model"]
+        resolved_checker_model = resolved_models["checker_model"]
+
+        # Initialize clients from restored tier models.
+        checker_provider = resolve_model(resolved_checker_model)["provider"]
+        client = create_client(checker_provider, api_key)
+
+        frontier_provider = resolve_model(resolved_frontier_model)["provider"]
+        if frontier_provider != checker_provider:
+            discussion_client = create_client(frontier_provider, discussion_api_key or api_key)
+        else:
+            discussion_client = client
 
         # Create session state
         self.state = SessionState(
@@ -596,9 +693,11 @@ class WebSessionManager:
             findings=[Finding.from_dict(f) for f in session_data.get("findings", [])],
             glossary_issues=session_data.get("glossary_issues", []),
             discussion_history=session_data.get("discussion_history", []),
-            lens_preferences=session_data.get("lens_preferences") or normalize_lens_preferences(None),
-            model=saved_model,
-            discussion_model=saved_discussion_model,
+            depth_mode=resolved_depth_mode,
+            frontier_model=resolved_frontier_model,
+            checker_model=resolved_checker_model,
+            model=resolved_checker_model,
+            discussion_model=resolved_frontier_model,
             discussion_client=discussion_client,
             index_context_hash=session_data.get("index_context_hash", ""),
             index_context_stale=session_data.get("index_context_stale", False),
@@ -606,6 +705,15 @@ class WebSessionManager:
             index_changed_files=session_data.get("index_changed_files", []),
             db_conn=conn,
             session_id=session_data["session_id"],
+        )
+        self.read_only_view = read_only
+        self.loaded_session_status = session_data.get("status", "active")
+
+        apply_tier_model_assignment(
+            self.state,
+            depth_mode=resolved_depth_mode,
+            frontier_model=resolved_frontier_model,
+            checker_model=resolved_checker_model,
         )
 
         self.current_index = session_data.get("current_index", 0)
@@ -627,7 +735,8 @@ class WebSessionManager:
             "glossary_issues": self.state.glossary_issues,
             "counts": {"critical": 0, "major": 0, "minor": 0},
             "lens_counts": {},
-            "lens_preferences": self.state.lens_preferences,
+            "read_only": self.read_only_view,
+            "session_status": self.loaded_session_status or "active",
         }
 
         for f in self.state.findings:
@@ -647,15 +756,12 @@ class WebSessionManager:
             "label": self.state.model_label,
         }
 
-        # Discussion model info (if set)
-        if self.state.discussion_model:
-            summary["discussion_model"] = {
-                "name": self.state.discussion_model,
-                "id": self.state.discussion_model_id,
-                "label": self.state.discussion_model_label,
-            }
-        else:
-            summary["discussion_model"] = None
+        # Discussion summary is pinned to the frontier tier model.
+        summary["discussion_model"] = {
+            "name": self.state.effective_frontier_model,
+            "id": resolve_model(self.state.effective_frontier_model)["id"],
+            "label": resolve_model(self.state.effective_frontier_model)["label"],
+        }
 
         # Learning info
         summary["learning"] = {
@@ -701,11 +807,17 @@ class WebSessionManager:
         """Check for scene file changes and apply line adjustments + re-evaluation."""
         if not self.state:
             return None
+        if self.is_read_only:
+            return None
+        # Re-evaluation path should stay on checker tier through the primary
+        # session execution client (`self.state.client`).
         return await detect_and_apply_scene_changes(self.state, self.current_index)
 
     async def check_index_changes(self) -> Optional[dict]:
         """Check for index-context changes and apply stale/prompt semantics."""
         if not self.state:
+            return None
+        if self.is_read_only:
             return None
         return detect_index_context_changes(self.state)
 
@@ -1094,6 +1206,8 @@ class WebSessionManager:
         self.results = None
         self.current_index = 0
         self.analysis_progress = None
+        self.read_only_view = False
+        self.loaded_session_status = None
         
         return {"cleared": True, "message": "Session abandoned"}
 

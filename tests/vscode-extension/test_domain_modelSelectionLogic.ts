@@ -2,8 +2,7 @@ import { strict as assert } from 'assert';
 
 import {
     buildAnalysisStartStatusMessage,
-    getConfiguredAnalysisModel,
-    resolvePreferredModel,
+    getConfiguredAnalysisMode,
 } from '../../vscode-extension/src/domain/modelSelectionLogic';
 
 function makeConfig(overrides: {
@@ -32,85 +31,29 @@ function makeConfig(overrides: {
 }
 
 describe('domain/modelSelectionLogic', () => {
-    it('uses analysisModel when explicitly configured', () => {
-        const config = makeConfig({
-            inspect: { workspaceValue: 'opus' },
-            values: { analysisModel: 'opus', model: 'haiku' },
-        });
-
-        assert.equal(getConfiguredAnalysisModel(config), 'opus');
+    it('uses deep as default analysis mode', () => {
+        const config = makeConfig({ values: {} });
+        assert.equal(getConfiguredAnalysisMode(config), 'deep');
     });
 
-    it('falls back to legacy model when analysisModel is not explicitly set', () => {
-        const config = makeConfig({
-            inspect: undefined,
-            values: { model: 'haiku' },
-        });
-
-        assert.equal(getConfiguredAnalysisModel(config), 'haiku');
+    it('returns configured analysis mode when valid', () => {
+        const config = makeConfig({ values: { analysisMode: 'quick' } });
+        assert.equal(getConfiguredAnalysisMode(config), 'quick');
     });
 
-    it('builds preset message with active lens count when weights exist', () => {
-        const message = buildAnalysisStartStatusMessage('balanced', {
-            api_key_configured: true,
-            available_models: {},
-            default_model: 'sonnet',
-            lens_presets: {
-                balanced: { prose: 1, structure: 0, dialogue: 1 },
-            },
-        });
-
-        assert.equal(message, 'Running 2 lenses (balanced preset)...');
+    it('falls back to deep for invalid analysis mode values', () => {
+        const config = makeConfig({ values: { analysisMode: 'turbo' } });
+        assert.equal(getConfiguredAnalysisMode(config), 'deep');
     });
 
-    it('falls back to generic preset message when no active lenses exist', () => {
-        const message = buildAnalysisStartStatusMessage('balanced', {
-            api_key_configured: true,
-            available_models: {},
-            default_model: 'sonnet',
-            lens_presets: {
-                balanced: { prose: 0, structure: 0 },
-            },
-        });
-
-        assert.equal(message, 'Running analysis (balanced preset)...');
+    it('builds quick status message', () => {
+        const message = buildAnalysisStartStatusMessage('quick');
+        assert.equal(message, 'Running quick analysis...');
     });
 
-    it('resolvePreferredModel keeps configured model when available', () => {
-        const selected = resolvePreferredModel('sonnet', {
-            api_key_configured: true,
-            available_models: {
-                sonnet: { label: 'Sonnet' },
-                opus: { label: 'Opus' },
-            },
-            default_model: 'opus',
-        });
-
-        assert.equal(selected, 'sonnet');
+    it('builds deep status message by default', () => {
+        const message = buildAnalysisStartStatusMessage();
+        assert.equal(message, 'Running deep analysis...');
     });
 
-    it('resolvePreferredModel falls back to backend default when configured missing', () => {
-        const selected = resolvePreferredModel('legacy-model', {
-            api_key_configured: true,
-            available_models: {
-                sonnet: { label: 'Sonnet' },
-                opus: { label: 'Opus' },
-            },
-            default_model: 'opus',
-        });
-
-        assert.equal(selected, 'opus');
-    });
-
-    it('resolvePreferredModel falls back to first available when default missing', () => {
-        const selected = resolvePreferredModel('legacy-model', {
-            api_key_configured: true,
-            available_models: {
-                sonnet: { label: 'Sonnet' },
-            },
-            default_model: 'ghost',
-        });
-
-        assert.equal(selected, 'sonnet');
-    });
 });

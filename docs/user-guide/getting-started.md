@@ -4,7 +4,7 @@ Welcome! This guide will walk you through setting up lit-critic (short for Liter
 
 ## What is lit-critic?
 
-lit-critic is an editorial review tool that reads your novel scenes and provides detailed feedback through six analytical "lenses":
+lit-critic is an editorial review tool that reads your novel scenes and provides detailed feedback through seven analytical "lenses":
 
 1. **Prose** Fluidity, rhythm, voice consistency
 2. **Structure** Pacing, scene objectives, narrative threads
@@ -12,8 +12,9 @@ lit-critic is an editorial review tool that reads your novel scenes and provides
 4. **Clarity** Reference clarity, grounding, legibility
 5. **Continuity** Term consistency, fact tracking, timeline coherence
 6. **Dialogue** Character voice distinctiveness, register consistency, and conversational dynamics
+7. **Horizon** Unexplored artistic possibilities — narrative strategies, structural patterns, voice registers, and craft techniques the scene systematically avoids
 
-The tool doesn't impose external standards—it checks your work against **your own rules** as defined in your index files.
+The tool doesn't impose external standards—it checks your work against **your own rules** as defined in CANON.md and STYLE.md (which you write) plus knowledge extracted automatically from your prose.
 
 ### Language Support
 
@@ -133,18 +134,17 @@ Create a folder for your novel (separate from the lit-critic installation):
 my-novel/
 ```
 
-### 2. Create Index Files
+### 2. Create Author-Authored Knowledge Files
 
-In your project root, create these six files:
+In your project root, create these two files:
 
-- **CANON.md** World rules and invariants
-- **CAST.md** Character facts and relationships
-- **GLOSSARY.md** Controlled vocabulary
-- **STYLE.md** Prose rules
-- **THREADS.md** Narrative promises
-- **TIMELINE.md** Scene sequence
+- **CANON.md** World rules and invariants (magic systems, physical laws, constraints)
+- **STYLE.md** Prose rules (tense, punctuation, terminology conventions)
 
-Don't worry if they're empty for now—you'll populate them as you write. See the **[Templates](templates/)** folder for starter files.
+Don't worry if they're empty for now—you'll populate them as you write.
+
+> **What about CAST.md, GLOSSARY.md, THREADS.md, TIMELINE.md?**
+> These are no longer needed as hand-maintained files. Characters, terms, threads, and timeline entries are extracted automatically from your prose when you run `knowledge refresh`. See the **[Knowledge Management Guide](index-files.md)** for details.
 
 ### 3. Create the Text Directory
 
@@ -153,40 +153,21 @@ Create a folder for your scene files:
 ```
 my-novel/
 ├── CANON.md
-├── CAST.md
-├── GLOSSARY.md
 ├── STYLE.md
-├── THREADS.md
-├── TIMELINE.md
 └── text/
     └── (your scene files go here)
 ```
 
 ### 4. Write Your First Scene
 
-Create your first scene file in the `text/` folder. Every scene must start with a `@@META` header.
+Create your first scene file in the `text/` folder. The `@@META ... @@END` block only needs `Prev` and `Next` — everything else is extracted automatically.
 
 **Example: text/01.01.01_opening.txt**
 
 ```
 @@META
-ID: 01.01.01
-Part: 01
-Chapter: 01
-Scene: 01
-Chrono: D0-Morning
-POV: Amelia
-Tense: Past
-Location: Sanctuary / Amelia's quarters
-Cast: Amelia (alone)
-Objective: Establish Amelia's situation and the sanctuary setting
-Threats: None (opening scene)
-Secrets: None
-ContAnchors: hematocrit=32%; sanctuary_wards=95%
-Terms: hematocrit; sanctuary wards
-Threads: None (opening scene)
 Prev: None
-Next: 01.01.02
+Next: 01.01.02_sanctuary_duty.txt
 @@END
 
 Amelia woke to the sound of bells. Three chimes, then silence—the morning call for sanctuary duty. She lay still for a moment, watching dust motes spiral in the narrow shaft of sunlight from the east window.
@@ -209,38 +190,42 @@ You can use lit-critic in three ways: **CLI (terminal)**, **Web UI (browser)**, 
 Open a terminal, navigate to the lit-critic installation directory, and run:
 
 ```bash
-python lit-critic.py analyze --scene path/to/your-novel/text/01.01.01_opening.txt --project path/to/your-novel/
+python -m cli sessions start --scene path/to/your-novel/text/01.01.01_opening.txt --project path/to/your-novel/ --mode deep
 ```
 
 **Example (Windows):**
 ```bash
-python lit-critic.py analyze --scene "C:\Users\YourName\my-novel\text\01.01.01_opening.txt" --project "C:\Users\YourName\my-novel\"
+python -m cli sessions start --scene "C:\Users\YourName\my-novel\text\01.01.01_opening.txt" --project "C:\Users\YourName\my-novel\" --mode deep
 ```
 
 **Example (macOS/Linux):**
 ```bash
-python lit-critic.py analyze --scene ~/my-novel/text/01.01.01_opening.txt --project ~/my-novel/
+python -m cli sessions start --scene ~/my-novel/text/01.01.01_opening.txt --project ~/my-novel/ --mode deep
 ```
 
 For consecutive multi-scene analysis in one session, use the Web UI or VS Code extension scene-set selector.
 
 ### What Happens Next
 
-1. **Loading** The tool loads your index files and scene text
-2. **Analysis** Six lenses run in parallel (takes 30–90 seconds)
+1. **Loading** The tool loads CANON.md, STYLE.md, and auto-extracted knowledge from the project database, plus your scene
+2. **Analysis** Seven lenses run in parallel (takes 30–90 seconds)
 3. **Findings** Results appear one at a time in priority order
 4. **Discussion** You can accept, reject, or discuss each finding
 
-### Choosing a Model
+### Choosing an Analysis Mode
 
-By default, lit-critic uses Sonnet (balanced speed and quality). You can choose a different model:
+Use `--mode` to control depth:
 
 ```bash
-python lit-critic.py analyze --scene scene.txt --project ~/my-novel/ --model opus        # Claude: Deepest analysis
-python lit-critic.py analyze --scene scene.txt --project ~/my-novel/ --model sonnet      # Claude: Default
-python lit-critic.py analyze --scene scene.txt --project ~/my-novel/ --model haiku       # Claude: Fastest & cheapest
-python lit-critic.py analyze --scene scene.txt --project ~/my-novel/ --model gpt-4o      # OpenAI: Balanced
-python lit-critic.py analyze --scene scene.txt --project ~/my-novel/ --model gpt-4o-mini # OpenAI: Fast & cheap
+python -m cli sessions start --scene scene.txt --project ~/my-novel/ --mode quick      # Faster LLM pass, lower cost
+python -m cli sessions start --scene scene.txt --project ~/my-novel/ --mode deep       # Default: deepest review
+```
+
+You can control which model each mode uses via persistent model slots:
+
+```bash
+python -m cli config set frontier=sonnet deep=sonnet quick=haiku
+python -m cli config show
 ```
 
 ---
@@ -250,7 +235,7 @@ python lit-critic.py analyze --scene scene.txt --project ~/my-novel/ --model gpt
 Each finding includes:
 
 - **Severity** Critical, Major, or Minor
-- **Lens** Which lens flagged it (Prose, Structure, Logic, Clarity, Continuity, Dialogue)
+- **Lens** Which lens flagged it (Prose, Structure, Logic, Clarity, Continuity, Dialogue, Horizon)
 - **Location** Line range in your scene (e.g., L042-L045)
 - **Evidence** The specific text or pattern
 - **Impact** Why it matters for the reader
@@ -273,93 +258,46 @@ See **[Working with Findings](working-with-findings.md)** for detailed guidance.
 
 ---
 
-## Populating Index Files
+## Maintaining Your Knowledge Files
 
-As you write more scenes, your index files will grow. Here's when to update each one:
+### CANON.md — you write this
+Update CANON.md whenever you establish a world rule that must never be violated.
 
-### CANON.md
-When you establish a world rule that must never be violated.
-
-**Example:**
 ```markdown
 # Canon
 
 ## Magic System
 - Sanctuaries block all magic within their wards
 - Ward strength degrades 5% per day without maintenance
+
+## Biological Constraints
+- Hematocrit below 25% causes loss of consciousness
 ```
 
-### CAST.md
-When you introduce a character or reveal new information about them.
+### STYLE.md — you write this
+Update STYLE.md whenever you establish a prose convention.
 
-**Example:**
-```markdown
-# Cast
-
-## Main Characters
-
-### Amelia Ashvale
-- **Age:** 24
-- **Role:** Sanctuary warden
-- **Key facts:**
-  - Trained by George since age 13
-  - Only surviving member of her squad
-```
-
-### GLOSSARY.md
-When you introduce a specialized term.
-
-**Example:**
-```markdown
-# Glossary
-
-### hematocrit
-**Definition:** Percentage of blood volume composed of red blood cells.  
-**First seen:** 01.01.01  
-**Notes:** Lowercase. Normal range: 38–50%.
-```
-
-### STYLE.md
-When you establish a prose convention.
-
-**Example:**
 ```markdown
 # Style Guide
 
 ## Tense Rules
-Past tense for present-time narrative.  
+Past tense for present-time narrative.
 Present tense for flashbacks (inverted convention).
+
+## Dialogue Tags
+Use "said" as the default neutral tag.
 ```
 
-### THREADS.md
-When you raise a narrative question or promise.
+### Characters, terms, threads, timeline — extracted automatically
+After writing or revising scenes, run:
 
-**Example:**
-```markdown
-# Threads
-
-## Active Threads
-
-### vault_mystery
-**Opened:** 01.02.01  
-**Question:** What's inside the vault?  
-**Status:** Active
+```bash
+python -m cli knowledge refresh --project ~/my-novel/
 ```
 
-### TIMELINE.md
-After writing or revising each scene.
+The tool extracts characters, terms, narrative threads, and timeline entries from your prose and stores them in the project database. You can then review what was extracted and add corrections via the Knowledge view.
 
-**Example:**
-```markdown
-# Timeline
-
-## Part 01
-
-**01.01.01** Amelia wakes. Hematocrit is 32%. Morning duty begins.  
-**01.01.02** Amelia patrols the sanctuary grounds. Notices ward strength declining.
-```
-
-See **[Index Files Guide](index-files.md)** for complete documentation.
+See the **[Knowledge Management Guide](index-files.md)** for the full workflow.
 
 ---
 
@@ -388,27 +326,27 @@ Check the **[Templates folder](templates/)** for annotated starter files for all
 - Make sure you've set the `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` environment variable
 - Or pass it directly: `--api-key your-key-here`
 
-### "Missing index files"
-- The tool shows warnings but continues without them
-- Create the six index files (even if empty) to get better results
+### "Missing knowledge files"
+- The tool shows warnings but continues without CANON.md and STYLE.md
+- Create CANON.md (even if empty) to get better continuity analysis
+- Knowledge extraction (characters, terms, threads) runs automatically on first `knowledge refresh`
 
 ### Analysis takes too long
-- Try `--model haiku` for faster analysis
-- Typical scene (3–4 pages) takes 30–90 seconds with Sonnet
+- Try `--mode quick` for faster, lower-cost LLM analysis
+- Typical scene (3–4 pages) takes ~30–90 seconds in deep mode
 
 ### Invalid scene format
-- Make sure your scene starts with `@@META` and ends with `@@END`
-- See **[Scene Format Guide](scene-format.md)** for requirements
+- Make sure your metadata block uses `@@META` and `@@END` delimiters correctly
+- See **[Scene Format Guide](scene-format.md)** for delimiter conventions and template recommendations
 
 ---
 
 ## Cost Estimate
 
-Each review costs approximately (examples using Anthropic models):
+Each review cost depends on your selected mode and model-slot assignments:
 
-- **Sonnet** (default): $0.10–0.15 per scene (3–4 pages)
-- **Opus**: $0.50–0.75 per scene (deepest analysis)
-- **Haiku**: $0.02–0.05 per scene (fastest)
+- **Quick mode**: lower cost, faster turnaround (uses your `quick` slot)
+- **Deep mode**: highest depth and typically highest cost (uses your `deep` slot)
 
 Costs depend on scene length and complexity.
 
@@ -417,7 +355,7 @@ Costs depend on scene length and complexity.
 ## See Also
 
 - **[Scene Format Guide](scene-format.md)** Complete @@META documentation
-- **[Index Files Guide](index-files.md)** CANON, CAST, GLOSSARY, etc.
+- **[Knowledge Management Guide](index-files.md)** CANON.md, STYLE.md, and auto-extracted knowledge
 - **[Using the Tool](using-the-tool.md)** CLI, Web UI, VS Code Extension
 - **[Working with Findings](working-with-findings.md)** Accept, reject, discuss
 - **[Learning System](learning-system.md)** How the tool learns your preferences

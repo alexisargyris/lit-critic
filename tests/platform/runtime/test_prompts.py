@@ -6,6 +6,8 @@ from lit_platform.runtime.prompts import (
     get_coordinator_prompt,
     get_discussion_system_prompt,
     build_discussion_messages,
+    get_index_extraction_prompt,
+    get_session_summary_prompt,
 )
 from lit_platform.runtime.models import Finding, LensResult
 
@@ -61,6 +63,15 @@ class TestGetLensPrompt:
         assert "DIALOGUE" in prompt
         assert "voice" in prompt.lower() or "register" in prompt.lower()
         assert "CAST.md" in prompt or "STYLE.md" in prompt
+
+    def test_horizon_lens_prompt(self, sample_indexes):
+        """Horizon lens prompt should describe artistic expansion schema."""
+        prompt = get_lens_prompt("horizon", "Test scene content", sample_indexes)
+
+        assert "HORIZON" in prompt
+        assert "NOT looking for problems" in prompt
+        assert "COMPLEMENT" in prompt
+        assert "category: \"opportunity\" | \"pattern\" | \"comfort-zone\"" in prompt
     
     def test_includes_all_indexes(self, sample_indexes):
         """Prompt should include all provided index content."""
@@ -168,6 +179,25 @@ class TestGetDiscussionSystemPrompt:
 
         assert "[PREFERENCE:" in prompt
 
+    def test_includes_editorial_independence_guidance(self, sample_finding):
+        """System prompt should include anti-sycophancy editorial-independence guidance."""
+        prompt = get_discussion_system_prompt(sample_finding, "Scene text")
+
+        assert "EDITORIAL INDEPENDENCE" in prompt
+        assert "steelman" in prompt.lower()
+        assert "first exchange" in prompt.lower() or "first turn" in prompt.lower()
+        assert "[REJECTED], not [CONCEDED]" in prompt
+
+    def test_includes_horizon_discussion_note(self, sample_finding):
+        """System prompt should include handling guidance for horizon-lens findings."""
+        sample_finding.lens = "horizon"
+        prompt = get_discussion_system_prompt(sample_finding, "Scene text")
+        lowered = prompt.lower()
+
+        assert "If this finding is from the HORIZON lens" in prompt
+        assert "not a problem to" in lowered and "defend" in lowered
+        assert "Do not pressure the author to change" in prompt
+
     def test_includes_prior_outcomes(self, sample_finding):
         """System prompt should include prior outcomes when provided."""
         prior = "- Finding #1 (prose, major): REJECTED — author says intentional"
@@ -254,3 +284,125 @@ class TestBuildDiscussionMessages:
 
         assert len(messages) == 1
         assert messages[0]["content"] == "Hello"
+
+
+class TestGraduatedLensPrompts:
+    """Tests for graduated confidence language in all 6 analytical lens prompts."""
+
+    ANALYTICAL_LENSES = ["prose", "structure", "logic", "clarity", "continuity", "dialogue"]
+
+    def test_all_analytical_lenses_contain_confidence_high(self, sample_indexes):
+        """All 6 analytical lenses should mention confidence: HIGH threshold."""
+        for lens in self.ANALYTICAL_LENSES:
+            prompt = get_lens_prompt(lens, "Test scene", sample_indexes)
+            assert "confidence: HIGH" in prompt, (
+                f"Lens '{lens}' is missing graduated 'confidence: HIGH' instruction"
+            )
+
+    def test_all_analytical_lenses_contain_confidence_low(self, sample_indexes):
+        """All 6 analytical lenses should mention confidence: LOW threshold."""
+        for lens in self.ANALYTICAL_LENSES:
+            prompt = get_lens_prompt(lens, "Test scene", sample_indexes)
+            assert "confidence: LOW" in prompt, (
+                f"Lens '{lens}' is missing graduated 'confidence: LOW' instruction"
+            )
+
+    def test_all_analytical_lenses_contain_blind_spot_note(self, sample_indexes):
+        """All 6 analytical lenses should instruct extra attention to blind spots."""
+        for lens in self.ANALYTICAL_LENSES:
+            prompt = get_lens_prompt(lens, "Test scene", sample_indexes)
+            assert "blind spots" in prompt.lower() or "EXTRA attention" in prompt, (
+                f"Lens '{lens}' is missing blind spot awareness note"
+            )
+
+    def test_horizon_lens_does_not_have_graduated_language(self, sample_indexes):
+        """Horizon lens should NOT use the same graduated suppression language."""
+        prompt = get_lens_prompt("horizon", "Test scene", sample_indexes)
+        # Horizon uses inverted logic — not the same graduated suppression
+        assert "confidence: HIGH" not in prompt
+        assert "confidence: LOW" not in prompt
+
+
+def test_index_extraction_prompt_includes_canon():
+    """Index extraction prompt should include CANON.md as reference context."""
+    indexes = {
+        "CANON.md": "## World Rules\n### Magic System\n- Magic requires blood.",
+        "CAST.md": "",
+        "GLOSSARY.md": "",
+        "THREADS.md": "",
+        "TIMELINE.md": "",
+    }
+
+    prompt = get_index_extraction_prompt(
+        "@@META\nID: 01.01.01\n@@\nScene text.",
+        indexes,
+    )
+
+    assert "CANON.md" in prompt
+    assert "Magic requires blood" in prompt
+    assert "REFERENCE CONTEXT" in prompt
+
+
+class TestSessionSummaryPrompt:
+    """Tests for get_session_summary_prompt (Change D)."""
+
+    def _make_finding(self, number=1, lens="prose", severity="major",
+                      status="rejected", evidence="Test evidence"):
+        """Create a minimal Finding object for testing."""
+        f = Finding(
+            number=number,
+            severity=severity,
+            lens=lens,
+            location="L001-L005",
+            evidence=evidence,
+            impact="Test impact",
+            options=["Fix it"],
+        )
+        f.status = status
+        return f
+
+    def test_contains_meta_observation(self):
+        """Prompt should instruct the LLM to produce a META-OBSERVATION."""
+        prompt = get_session_summary_prompt([self._make_finding()], "Scene text.")
+        assert "META-OBSERVATION" in prompt
+
+    def test_contains_anti_sycophancy_instruction(self):
+        """Prompt should explicitly forbid sycophantic praise."""
+        prompt = get_session_summary_prompt([self._make_finding()], "Scene text.")
+        assert "sycophantic" in prompt.lower()
+
+    def test_includes_findings_summary(self):
+        """Prompt should include a summary of session outcomes."""
+        findings = [
+            self._make_finding(1, "prose", "major", "rejected", "Rhythm problem"),
+            self._make_finding(2, "structure", "minor", "accepted", "Pacing issue"),
+        ]
+        prompt = get_session_summary_prompt(findings, "Scene text.")
+        assert "Finding #1" in prompt
+        assert "Finding #2" in prompt
+        assert "rejected" in prompt
+        assert "accepted" in prompt
+
+    def test_empty_findings_shows_placeholder(self):
+        """Empty findings list should show placeholder text."""
+        prompt = get_session_summary_prompt([], "Scene text.")
+        assert "[No findings recorded]" in prompt
+
+    def test_includes_learning_markdown_when_provided(self):
+        """Prompt should include learning markdown content when provided."""
+        prompt = get_session_summary_prompt(
+            [],
+            "Scene text.",
+            learning_markdown="## Preferences\n- [confidence: 0.7] [prose] fragments OK",
+        )
+        assert "fragments OK" in prompt
+
+    def test_uses_placeholder_when_no_learning(self):
+        """Prompt should show placeholder when no learning markdown provided."""
+        prompt = get_session_summary_prompt([], "Scene text.")
+        assert "[No preferences recorded yet]" in prompt
+
+    def test_includes_scene_content(self):
+        """Prompt should include numbered scene content."""
+        prompt = get_session_summary_prompt([], "The door creaked open.")
+        assert "door creaked open" in prompt

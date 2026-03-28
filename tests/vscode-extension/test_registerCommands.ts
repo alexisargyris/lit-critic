@@ -11,6 +11,8 @@
  */
 
 import { strict as assert } from 'assert';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const proxyquire = require('proxyquire').noCallThru();
 
@@ -58,15 +60,12 @@ function makeStubHandlers() {
     return {
         calls,
         cmdAnalyze: stub('cmdAnalyze'),
-        cmdResume: stub('cmdResume'),
         cmdNextFinding: stub('cmdNextFinding'),
         cmdAcceptFinding: stub('cmdAcceptFinding'),
         cmdRejectFinding: stub('cmdRejectFinding'),
         cmdDiscuss: stub('cmdDiscuss'),
         cmdSelectFinding: stub('cmdSelectFinding') as (index: number) => Promise<void>,
         cmdReviewFinding: stub('cmdReviewFinding'),
-        cmdClearSession: stub('cmdClearSession'),
-        cmdRerunAnalysis: stub('cmdRerunAnalysis'),
         cmdSelectModel: stub('cmdSelectModel'),
         cmdStopServer: () => { calls.push('cmdStopServer'); },
         cmdRefreshSessions: stub('cmdRefreshSessions'),
@@ -76,6 +75,13 @@ function makeStubHandlers() {
         cmdExportLearning: stub('cmdExportLearning'),
         cmdResetLearning: stub('cmdResetLearning'),
         cmdDeleteLearningEntry: stub('cmdDeleteLearningEntry') as (item: any) => Promise<void>,
+        cmdRefreshKnowledge: stub('cmdRefreshKnowledge'),
+        cmdReviewKnowledge: stub('cmdReviewKnowledge'),
+        cmdEditKnowledgeEntry: stub('cmdEditKnowledgeEntry') as (item: any) => Promise<void>,
+        cmdResetKnowledgeOverride: stub('cmdResetKnowledgeOverride') as (item?: any) => Promise<void>,
+        cmdOpenKnowledgeReviewPanel: stub('cmdOpenKnowledgeReviewPanel') as (item?: any) => Promise<void>,
+        cmdNextKnowledgeEntity: stub('cmdNextKnowledgeEntity'),
+        cmdPreviousKnowledgeEntity: stub('cmdPreviousKnowledgeEntity'),
     };
 }
 
@@ -85,15 +91,12 @@ function makeStubHandlers() {
 
 const EXPECTED_COMMAND_IDS = [
     'literaryCritic.analyze',
-    'literaryCritic.resume',
     'literaryCritic.nextFinding',
     'literaryCritic.acceptFinding',
     'literaryCritic.rejectFinding',
     'literaryCritic.discuss',
     'literaryCritic.selectFinding',
     'literaryCritic.reviewFinding',
-    'literaryCritic.clearSession',
-    'literaryCritic.rerunAnalysisWithUpdatedIndexes',
     'literaryCritic.selectModel',
     'literaryCritic.stopServer',
     'literaryCritic.refreshSessions',
@@ -103,6 +106,17 @@ const EXPECTED_COMMAND_IDS = [
     'literaryCritic.exportLearning',
     'literaryCritic.resetLearning',
     'literaryCritic.deleteLearningEntry',
+    'literaryCritic.refreshKnowledge',
+    'literaryCritic.editKnowledgeEntry',
+    'literaryCritic.resetKnowledgeOverride',
+    'literaryCritic.deleteKnowledgeEntity',
+    'literaryCritic.openKnowledgeReviewPanel',
+    'literaryCritic.nextKnowledgeEntity',
+    'literaryCritic.previousKnowledgeEntity',
+    'literaryCritic.toggleEntityLock',
+    'literaryCritic.keepFlaggedEntity',
+    'literaryCritic.deleteFlaggedEntity',
+    'literaryCritic.revealSessionInTree',
 ];
 
 describe('COMMAND_IDS', () => {
@@ -121,9 +135,49 @@ describe('COMMAND_IDS', () => {
         assert.equal(unique.size, mod.COMMAND_IDS.length, 'COMMAND_IDS must not contain duplicates');
     });
 
-    it('contains 19 command IDs', () => {
+    it('contains 27 command IDs', () => {
         const { mod } = loadModule();
-        assert.equal(mod.COMMAND_IDS.length, 19, 'Expected exactly 19 command IDs');
+        assert.equal(mod.COMMAND_IDS.length, 27, 'Expected exactly 27 command IDs');
+    });
+});
+
+describe('package.json command placement', () => {
+    it('places knowledge toolbar commands on their target views', () => {
+        const packagePath = path.resolve(__dirname, '../../vscode-extension/package.json');
+        const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf-8'));
+        const viewTitle = packageJson?.contributes?.menus?.['view/title'] ?? [];
+        const viewItemContext = packageJson?.contributes?.menus?.['view/item/context'] ?? [];
+
+        const hasRefreshKnowledgeOnIndexes = viewTitle.some(
+            (item: any) => item.command === 'literaryCritic.refreshKnowledge' && item.when === 'view == literaryCritic.indexes',
+        );
+        const hasReviewKnowledgeOnIndexes = viewTitle.some(
+            (item: any) => item.command === 'literaryCritic.reviewKnowledge' && item.when === 'view == literaryCritic.indexes',
+        );
+        const hasKnowledgePanelInlineAction = viewItemContext.some(
+            (item: any) => item.command === 'literaryCritic.openKnowledgeReviewPanel'
+                && item.when === 'view == literaryCritic.indexes && (viewItem == knowledgeEntity || viewItem == knowledgeEntityOverridden)'
+                && item.group === 'inline',
+        );
+        const hasResetKnowledgeOnOverriddenEntity = viewItemContext.some(
+            (item: any) => item.command === 'literaryCritic.resetKnowledgeOverride'
+                && item.when === 'view == literaryCritic.indexes && viewItem == knowledgeEntityOverridden',
+        );
+        const hasKnowledgePanelNavigationAction = viewItemContext.some(
+            (item: any) => item.command === 'literaryCritic.openKnowledgeReviewPanel'
+                && item.group === 'navigation',
+        );
+        const hasKnowledgeQuickEditContextAction = viewItemContext.some(
+            (item: any) => item.command === 'literaryCritic.editKnowledgeEntry'
+                && item.when === 'view == literaryCritic.indexes && (viewItem == knowledgeEntity || viewItem == knowledgeEntityOverridden)',
+        );
+
+        assert.equal(hasRefreshKnowledgeOnIndexes, true);
+        assert.equal(hasReviewKnowledgeOnIndexes, false);
+        assert.equal(hasKnowledgePanelInlineAction, false);
+        assert.equal(hasResetKnowledgeOnOverriddenEntity, true);
+        assert.equal(hasKnowledgePanelNavigationAction, false);
+        assert.equal(hasKnowledgeQuickEditContextAction, false);
     });
 });
 
@@ -202,11 +256,6 @@ describe('registerCommands()', () => {
             'analyze command should be wired to handlers.cmdAnalyze',
         );
         assert.equal(
-            handlerMap.get('literaryCritic.resume'),
-            handlers.cmdResume,
-            'resume command should be wired to handlers.cmdResume',
-        );
-        assert.equal(
             handlerMap.get('literaryCritic.stopServer'),
             handlers.cmdStopServer,
             'stopServer command should be wired to handlers.cmdStopServer',
@@ -217,9 +266,34 @@ describe('registerCommands()', () => {
             'deleteLearningEntry command should be wired to handlers.cmdDeleteLearningEntry',
         );
         assert.equal(
-            handlerMap.get('literaryCritic.rerunAnalysisWithUpdatedIndexes'),
-            handlers.cmdRerunAnalysis,
-            'rerunAnalysis command should be wired to handlers.cmdRerunAnalysis',
+            handlerMap.get('literaryCritic.refreshKnowledge'),
+            handlers.cmdRefreshKnowledge,
+            'refreshKnowledge command should be wired to handlers.cmdRefreshKnowledge',
+        );
+        assert.equal(
+            handlerMap.get('literaryCritic.editKnowledgeEntry'),
+            handlers.cmdEditKnowledgeEntry,
+            'editKnowledgeEntry command should be wired to handlers.cmdEditKnowledgeEntry',
+        );
+        assert.equal(
+            handlerMap.get('literaryCritic.resetKnowledgeOverride'),
+            handlers.cmdResetKnowledgeOverride,
+            'resetKnowledgeOverride command should be wired to handlers.cmdResetKnowledgeOverride',
+        );
+        assert.equal(
+            handlerMap.get('literaryCritic.openKnowledgeReviewPanel'),
+            handlers.cmdOpenKnowledgeReviewPanel,
+            'openKnowledgeReviewPanel command should be wired to handlers.cmdOpenKnowledgeReviewPanel',
+        );
+        assert.equal(
+            handlerMap.get('literaryCritic.nextKnowledgeEntity'),
+            handlers.cmdNextKnowledgeEntity,
+            'nextKnowledgeEntity command should be wired to handlers.cmdNextKnowledgeEntity',
+        );
+        assert.equal(
+            handlerMap.get('literaryCritic.previousKnowledgeEntity'),
+            handlers.cmdPreviousKnowledgeEntity,
+            'previousKnowledgeEntity command should be wired to handlers.cmdPreviousKnowledgeEntity',
         );
     });
 

@@ -20,6 +20,8 @@ describe('Extension (Real)', () => {
     let mockFindingsDecorationProvider: any;
     let mockSessionsTreeProvider: any;
     let mockLearningTreeProvider: any;
+    let mockKnowledgeTreeProvider: any;
+    let mockKnowledgeReviewPanel: any;
     let mockDiagnosticsProvider: any;
     let mockDiscussionPanel: any;
     let mockStatusBar: any;
@@ -28,8 +30,10 @@ describe('Extension (Real)', () => {
     let mockFs: any;
     let activate: any;
     let deactivate: any;
+    let lastKnowledgeReviewPanelState: any;
 
     beforeEach(() => {
+        lastKnowledgeReviewPanelState = null;
         mockVscode = createFreshMockVscode();
         if (!mockVscode.workspace.onDidChangeConfiguration) {
             mockVscode.workspace.onDidChangeConfiguration = () => ({ dispose: () => {} });
@@ -56,12 +60,23 @@ describe('Extension (Real)', () => {
             async getSession() {
                 return { active: false };
             }
+            async checkSession(_projectPath: string) {
+                return { exists: false };
+            }
+            async listSessions(_projectPath: string) {
+                return { sessions: [] };
+            }
             async getConfig() {
                 return {
                     api_key_configured: true,
                     available_models: { sonnet: { label: 'Sonnet' } },
                     default_model: 'sonnet',
                 };
+            }
+            // recheckStaleness() calls this during autoLoadSidebar — provide a no-op stub
+            // so tests don't receive a silent TypeError when the server is running.
+            async getInputStaleness(_projectPath: string) {
+                return { stale_inputs: [] };
             }
         };
         
@@ -73,6 +88,7 @@ describe('Extension (Real)', () => {
             setCurrentIndex(index: number) {
                 this.currentFindingItem = { id: `finding:${index + 1}` };
             }
+            setSessionContext(_session: any) {}
             clear() {}
             updateFinding() {}
             getCurrentFindingItem() {
@@ -104,6 +120,33 @@ describe('Extension (Real)', () => {
             setApiClient() {}
             setProjectPath() {}
             async refresh() {}
+        };
+
+        mockKnowledgeTreeProvider = class MockKnowledgeTreeProvider {
+            setApiClient() {}
+            setProjectPath() {}
+            async refresh() {}
+            getEntityPayload() {
+                return null;
+            }
+            getAdjacentEntityPayload() {
+                return null;
+            }
+        };
+
+        mockKnowledgeReviewPanel = class MockKnowledgeReviewPanel {
+            onAction: any;
+            show(state: any) {
+                lastKnowledgeReviewPanelState = state;
+            }
+            updateState(state: any) {
+                lastKnowledgeReviewPanelState = state;
+            }
+            getState() {
+                return lastKnowledgeReviewPanelState;
+            }
+            close() {}
+            dispose() {}
         };
         
         mockDiagnosticsProvider = class MockDiagnosticsProvider {
@@ -141,11 +184,13 @@ describe('Extension (Real)', () => {
         // Mock path module
         mockPath = require('path');
         
-        // Mock fs module (for findRepoRoot)
+        // Mock fs module (for findRepoRoot).
+        // Use only the filename check — not a forward-slash directory check — so
+        // the default is platform-agnostic on both Unix and Windows (where
+        // path.join produces backslash separators that break '/test/repo' checks).
         mockFs = {
-            existsSync: (path: string) => {
-                // Simulate lit-critic-web.py exists in /test/repo
-                return path.includes('lit-critic-web.py') && path.includes('/test/repo');
+            existsSync: (p: string) => {
+                return p.includes('lit-critic-web.py');
             },
         };
     });
@@ -165,6 +210,12 @@ describe('Extension (Real)', () => {
             { vscode: mockVscode },
         );
 
+        // Pre-load sceneDiscoveryConfig so its `import * as vscode` is shimmed.
+        const sceneDiscoveryConfigMod = proxyquire(
+            '../../vscode-extension/src/bootstrap/sceneDiscoveryConfig',
+            { vscode: mockVscode },
+        );
+
         const module = proxyquire('../../vscode-extension/src/extension', {
             'vscode': mockVscode,
             './serverManager': { ServerManager: mockServerManager },
@@ -175,13 +226,17 @@ describe('Extension (Real)', () => {
             },
             './sessionsTreeProvider': { SessionsTreeProvider: mockSessionsTreeProvider },
             './learningTreeProvider': { LearningTreeProvider: mockLearningTreeProvider },
+            './scenesTreeProvider': { ScenesTreeProvider: mockLearningTreeProvider },
+            './knowledgeTreeProvider': { KnowledgeTreeProvider: mockKnowledgeTreeProvider },
+            './knowledgeReviewViewProvider': { KnowledgeReviewViewProvider: mockKnowledgeReviewPanel },
             './diagnosticsProvider': { DiagnosticsProvider: mockDiagnosticsProvider },
-            './discussionPanel': { DiscussionPanel: mockDiscussionPanel },
+            './discussionViewProvider': { DiscussionViewProvider: mockDiscussionPanel },
             './statusBar': { StatusBar: mockStatusBar },
             './operationTracker': { OperationTracker: mockOperationTracker },
             'path': mockPath,
             'fs': mockFs,
             './commands/registerCommands': registerCommandsMod,
+            './bootstrap/sceneDiscoveryConfig': sceneDiscoveryConfigMod,
         });
         activate = module.activate;
         deactivate = module.deactivate;
@@ -191,31 +246,38 @@ describe('Extension (Real)', () => {
     describe('activation', () => {
         it('should register all commands', async () => {
             const registeredCommands: string[] = [];
-            
+
             mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
                 registeredCommands.push(cmd);
                 return { dispose: () => {} };
             };
-            
+
+            // Disable auto-start so activation does not attempt server recovery,
+            // which requires a configured repo root we do not provide in this test.
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return false;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
             loadExtension();
-            
+
             const context = {
                 subscriptions: [],
             };
-            
+
             await activate(context);
             
             // Verify all commands are registered
             assert.ok(registeredCommands.includes('literaryCritic.analyze'));
-            assert.ok(registeredCommands.includes('literaryCritic.resume'));
             assert.ok(registeredCommands.includes('literaryCritic.nextFinding'));
             assert.ok(registeredCommands.includes('literaryCritic.acceptFinding'));
             assert.ok(registeredCommands.includes('literaryCritic.rejectFinding'));
             assert.ok(registeredCommands.includes('literaryCritic.discuss'));
             assert.ok(registeredCommands.includes('literaryCritic.selectFinding'));
             assert.ok(registeredCommands.includes('literaryCritic.reviewFinding'));
-            assert.ok(registeredCommands.includes('literaryCritic.clearSession'));
-            assert.ok(registeredCommands.includes('literaryCritic.rerunAnalysisWithUpdatedIndexes'));
             assert.ok(registeredCommands.includes('literaryCritic.selectModel'));
             assert.ok(registeredCommands.includes('literaryCritic.stopServer'));
             assert.ok(registeredCommands.includes('literaryCritic.refreshSessions'));
@@ -225,48 +287,158 @@ describe('Extension (Real)', () => {
             assert.ok(registeredCommands.includes('literaryCritic.exportLearning'));
             assert.ok(registeredCommands.includes('literaryCritic.resetLearning'));
             assert.ok(registeredCommands.includes('literaryCritic.deleteLearningEntry'));
-            
-            assert.ok(registeredCommands.length >= 19, `Expected at least 19 commands, got ${registeredCommands.length}`);
+            assert.ok(registeredCommands.includes('literaryCritic.refreshKnowledge'));
+            assert.ok(registeredCommands.includes('literaryCritic.deleteKnowledgeEntity'));
+
+            assert.ok(registeredCommands.length >= 15, `Expected at least 15 commands, got ${registeredCommands.length}`);
         });
 
         it('should create all UI components', async () => {
+            // Disable auto-start so activation does not attempt server recovery,
+            // which requires a configured repo root we do not provide in this test.
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return false;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
             loadExtension();
-            
+
             const context = {
                 subscriptions: [],
             };
-            
+
             await activate(context);
-            
+
             // At least 3 tree views + status bar + diagnostics provider should be pushed
-            assert.ok(context.subscriptions.length >= 5, 
+            assert.ok(context.subscriptions.length >= 5,
                 `Expected at least 5 subscriptions, got ${context.subscriptions.length}`);
         });
 
-        it('should create tree views for findings, sessions, and learning', async () => {
+        it('should create tree views for findings, sessions, learning, scenes, and indexes', async () => {
             const createdViews: string[] = [];
-            
+
             mockVscode.window.createTreeView = (viewId: string, options: any) => {
                 createdViews.push(viewId);
                 return { dispose: () => {} };
             };
-            
+
+            // Disable auto-start so activation does not attempt server recovery,
+            // which requires a configured repo root we do not provide in this test.
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return false;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
             loadExtension();
-            
+
             const context = {
                 subscriptions: [],
             };
-            
+
             await activate(context);
             
             assert.ok(createdViews.includes('literaryCritic.findings'));
             assert.ok(createdViews.includes('literaryCritic.sessions'));
             assert.ok(createdViews.includes('literaryCritic.learning'));
+            assert.ok(createdViews.includes('literaryCritic.scenes'));
+            assert.ok(createdViews.includes('literaryCritic.indexes'));
+        });
+
+        it('hydrates the knowledge review panel from a tree-item launch payload', async () => {
+            const registeredCommands = new Map<string, (...args: any[]) => any>();
+
+            mockVscode.commands.registerCommand = (cmd: string, callback: (...args: any[]) => any) => {
+                registeredCommands.set(cmd, callback);
+                return { dispose: () => {} };
+            };
+            mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/repo' } }];
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return false;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
+            mockFs = {
+                existsSync: (candidatePath: string) => (
+                    (candidatePath.includes('CANON.md') || candidatePath.includes('lit-critic-web.py'))
+                    && candidatePath.includes('/test/repo')
+                ),
+            };
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) {
+                    return { ok: true };
+                }
+                async getSession() {
+                    return { active: false };
+                }
+                async checkSession(_projectPath: string) {
+                    return { exists: false };
+                }
+                async listSessions(_projectPath: string) {
+                    return { sessions: [] };
+                }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                    };
+                }
+                async getKnowledgeReview() {
+                    return {
+                        entities: [
+                            { entity_key: 'char:alice', name: 'Alice', role: 'Lead' },
+                        ],
+                        overrides: [
+                            { entity_key: 'char:alice', field_name: 'role', override_value: 'Protagonist' },
+                        ],
+                    };
+                }
+            };
+
+            loadExtension();
+
+            const context = {
+                subscriptions: [],
+            };
+
+            await activate(context);
+
+            const openKnowledgeReviewPanel = registeredCommands.get('literaryCritic.openKnowledgeReviewPanel');
+            assert.ok(openKnowledgeReviewPanel, 'Expected openKnowledgeReviewPanel command to be registered');
+
+            await openKnowledgeReviewPanel?.({
+                payload: {
+                    category: 'characters',
+                    entityKey: 'char:alice',
+                    label: 'Alice',
+                    entity: { entity_key: 'char:alice', name: 'Alice', role: 'Lead' },
+                    overrideFields: ['role'],
+                    overrideCount: 1,
+                    hasOverrides: true,
+                },
+            });
+
+            assert.ok(lastKnowledgeReviewPanelState, 'Expected knowledge review panel state to be created');
+            assert.equal(lastKnowledgeReviewPanelState.entityLabel, 'Alice');
+            const roleField = lastKnowledgeReviewPanelState.fields.find((field: any) => field.fieldName === 'role');
+            assert.ok(roleField, 'Expected hydrated panel state to include the role field');
+            assert.equal(roleField.extractedValue, 'Lead');
+            assert.equal(roleField.hasOverride, true);
         });
     });
 
     describe('auto-start behavior', () => {
-        it('should use native TreeView reveal selection for current session and finding during auto-load', async () => {
+        it('should use native TreeView reveal selection for current session during passive auto-load startup', async () => {
             const sessionRevealCalls: Array<{ item: any; options: any }> = [];
             const findingRevealCalls: Array<{ item: any; options: any }> = [];
 
@@ -340,20 +512,20 @@ describe('Extension (Real)', () => {
             await activate({ subscriptions: [] });
 
             assert.ok(sessionRevealCalls.length > 0, 'Expected native session TreeView reveal call');
-            assert.ok(findingRevealCalls.length > 0, 'Expected native finding TreeView reveal call');
+            assert.equal(
+                findingRevealCalls.length,
+                0,
+                'Expected no finding TreeView reveal during passive startup auto-load',
+            );
             assert.equal(sessionRevealCalls[0].options?.select, true);
-            assert.equal(findingRevealCalls[0].options?.select, true);
             assert.equal(sessionRevealCalls[0].options?.focus, false);
-            assert.equal(findingRevealCalls[0].options?.focus, false);
         });
 
         it('should show an immediate startup hint before startup progress notification', async () => {
             const timeline: string[] = [];
 
-            mockVscode.window.setStatusBarMessage = (text: string) => {
-                timeline.push(`status:${text}`);
-                return { dispose: () => {} };
-            };
+            // Transient setStatusBarMessage calls were removed; startup uses a progress notification only.
+            mockVscode.window.setStatusBarMessage = () => ({ dispose: () => {} });
             mockVscode.window.withProgress = async (options: any, task: any) => {
                 timeline.push(`progress:${options?.title || ''}`);
                 return task(
@@ -384,15 +556,9 @@ describe('Extension (Real)', () => {
             loadExtension();
             await activate({ subscriptions: [] });
 
-            const hintIndex = timeline.indexOf('status:lit-critic: Preparing startup...');
-            const progressIndex = timeline.indexOf('progress:lit-critic: Starting server');
+            const progressIndex = timeline.indexOf('progress:lit-critic');
 
-            assert.ok(hintIndex >= 0, 'Expected an immediate startup hint status message');
             assert.ok(progressIndex >= 0, 'Expected startup progress notification to be shown');
-            assert.ok(
-                hintIndex < progressIndex,
-                'Expected startup hint to appear before startup progress notification',
-            );
         });
 
         it('should reset status bar to ready after startup completes', async () => {
@@ -437,13 +603,36 @@ describe('Extension (Real)', () => {
             );
         });
 
-        it('should show startup progress notification when auto-starting server', async () => {
+        it('should show staged startup progress messages when auto-starting server', async () => {
             const progressTitles: string[] = [];
+            const progressMessages: string[] = [];
+
+            mockServerManager = class MockStagedServerManager {
+                isRunning = false;
+                baseUrl = 'http://localhost:8000';
+                port = 8000;
+                async start(onStage?: (stage: 'checking' | 'launching' | 'waiting' | 'ready') => void) {
+                    onStage?.('launching');
+                    onStage?.('waiting');
+                    onStage?.('ready');
+                    this.isRunning = true;
+                }
+                stop() {
+                    this.isRunning = false;
+                }
+                dispose() {}
+            };
 
             mockVscode.window.withProgress = async (options: any, task: any) => {
                 progressTitles.push(options?.title || '');
                 return task(
-                    { report: (_value: any) => {} },
+                    {
+                        report: (value: any) => {
+                            if (value?.message) {
+                                progressMessages.push(value.message);
+                            }
+                        },
+                    },
                     {
                         isCancellationRequested: false,
                         onCancellationRequested: (_listener: any) => ({ dispose: () => {} }),
@@ -471,8 +660,136 @@ describe('Extension (Real)', () => {
             await activate({ subscriptions: [] });
 
             assert.ok(
-                progressTitles.includes('lit-critic: Starting server'),
+                progressTitles.includes('lit-critic'),
                 'Expected startup notification progress to be shown during auto-start',
+            );
+            assert.ok(
+                progressMessages.includes('Checking for a running backend...'),
+                'Expected startup progress to include existing-instance check stage',
+            );
+            assert.ok(
+                progressMessages.includes('Launching backend process...'),
+                'Expected startup progress to include backend launch stage',
+            );
+            assert.ok(
+                progressMessages.includes('Waiting for server readiness...'),
+                'Expected startup progress to include readiness-check stage',
+            );
+            assert.ok(
+                progressMessages.includes('Loading project data...'),
+                'Expected startup progress to include loading stage',
+            );
+        });
+
+        it('should check input staleness before loading scenes and indexes during auto-load startup', async () => {
+            // After commit 1d847d5, autoLoadSidebar calls recheckStaleness() (which calls
+            // getInputStaleness) instead of the old refreshProjectKnowledge path.
+            const getInputStalenessCalls: string[] = [];
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) {
+                    return { ok: true };
+                }
+                async getSession() {
+                    return { active: false };
+                }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                    };
+                }
+                async getInputStaleness(projectPath: string) {
+                    getInputStalenessCalls.push(projectPath);
+                    return { stale_inputs: [] };
+                }
+            };
+
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
+            mockVscode.workspace.workspaceFolders = [
+                { uri: { fsPath: '/test/repo' } },
+            ];
+
+            mockFs.existsSync = (filePath: string) => {
+                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+            };
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+
+            assert.ok(
+                getInputStalenessCalls.includes('/test/repo'),
+                'Expected startup auto-load to check input staleness via recheckStaleness before tree population',
+            );
+        });
+
+        it('should sync scene discovery settings from extension config to server during auto-start', async () => {
+            const updateConfigCalls: any[] = [];
+
+            mockApiClient = class MockApiClient {
+                async updateRepoPath(_repoPath: string) {
+                    return { ok: true };
+                }
+                async updateConfig(payload: any) {
+                    updateConfigCalls.push(payload);
+                    return { ok: true };
+                }
+                async getSession() {
+                    return { active: false };
+                }
+                async getConfig() {
+                    return {
+                        api_key_configured: true,
+                        available_models: { sonnet: { label: 'Sonnet' } },
+                        default_model: 'sonnet',
+                    };
+                }
+                async refreshProjectKnowledge() {
+                    return {
+                        scenes: { total: 0, refreshed: 0, stale: 0, stale_paths: [] },
+                        indexes: { total: 0, refreshed: 0, stale: 0, stale_names: [] },
+                    };
+                }
+            };
+
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    if (key === 'sceneFolder') return 'story/scenes';
+                    if (key === 'sceneExtensions') return ['md', 'txt'];
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
+            mockVscode.workspace.workspaceFolders = [
+                { uri: { fsPath: '/test/repo' } },
+            ];
+
+            mockFs.existsSync = (filePath: string) => {
+                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+            };
+
+            loadExtension();
+            await activate({ subscriptions: [] });
+
+            assert.ok(
+                updateConfigCalls.some((payload) => (
+                    payload.scene_folder === 'story/scenes'
+                    && Array.isArray(payload.scene_extensions)
+                    && payload.scene_extensions.length === 2
+                    && payload.scene_extensions[0] === 'md'
+                    && payload.scene_extensions[1] === 'txt'
+                )),
+                'Expected startup to push configured scene discovery settings to backend config',
             );
         });
 
@@ -602,7 +919,7 @@ describe('Extension (Real)', () => {
             );
         });
 
-        it('should not reveal lit-critic activity view after auto-start when CANON.md is missing', async () => {
+        it('should reveal lit-critic activity view after auto-start when repo root exists but CANON.md is missing', async () => {
             const executeCommandCalls: string[] = [];
 
             mockVscode.commands.executeCommand = async (command: string, ..._rest: any[]) => {
@@ -630,8 +947,44 @@ describe('Extension (Real)', () => {
             await activate({ subscriptions: [] });
 
             assert.ok(
+                executeCommandCalls.includes('workbench.view.extension.lit-critic'),
+                'Expected lit-critic activity view to be revealed when repo root is detected even if CANON.md is missing',
+            );
+        });
+
+        it('should not reveal lit-critic activity view after auto-start when neither CANON.md nor repo root marker is present', async () => {
+            const executeCommandCalls: string[] = [];
+
+            mockVscode.commands.executeCommand = async (command: string, ..._rest: any[]) => {
+                executeCommandCalls.push(command);
+            };
+
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
+            mockVscode.workspace.workspaceFolders = [
+                { uri: { fsPath: '/test/repo' } },
+            ];
+
+            mockFs.existsSync = (_filePath: string) => false;
+
+            // No repo marker found → activation enters ensureRepoRootWithRecovery().
+            // Return undefined to simulate the user dismissing the dialog, which causes
+            // the recovery loop to throw and activation to complete without hanging.
+            mockVscode.window.showErrorMessage = async () => undefined;
+
+            loadExtension();
+
+            await activate({ subscriptions: [] });
+
+            assert.ok(
                 !executeCommandCalls.includes('workbench.view.extension.lit-critic'),
-                'Expected lit-critic activity view not to be revealed when CANON.md is missing',
+                'Expected lit-critic activity view not to be revealed when no project path can be detected',
             );
         });
 
@@ -679,18 +1032,25 @@ describe('Extension (Real)', () => {
         });
 
         it('should handle missing repo root gracefully', async () => {
-            // No workspace folders
+            // No workspace folders, no auto-start: verify UI components are still registered.
             mockVscode.workspace.workspaceFolders = undefined;
-            
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return false;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
             loadExtension();
-            
+
             const context = {
                 subscriptions: [],
             };
-            
+
             // Should not throw
             await activate(context);
-            
+
             // UI components should still be registered
             assert.ok(context.subscriptions.length > 0);
         });
@@ -744,10 +1104,25 @@ describe('Extension (Real)', () => {
             mockVscode.workspace.workspaceFolders = [
                 { uri: { fsPath: '/test/repo' } },
             ];
-            
-            mockFs.existsSync = (path: string) => {
-                return path.includes('/test/repo') && path.includes('lit-critic-web.py');
+
+            // Use a platform-agnostic filename-only check so this works on
+            // both Unix (forward slashes) and Windows (backslashes from path.join).
+            mockFs.existsSync = (p: string) => {
+                return p.includes('lit-critic-web.py');
             };
+
+            // Disable auto-start: this test only verifies that findRepoRoot() can
+            // discover the repo from workspace folders. Auto-start is not needed and,
+            // without an explicit autoStartServer:false, the default config would pass
+            // true, which could trigger the recovery loop on machines where path
+            // resolution behaves unexpectedly.
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return false;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
             
             loadExtension();
             
@@ -796,23 +1171,34 @@ describe('Extension (Real)', () => {
             mockVscode.workspace.workspaceFolders = [
                 { uri: { fsPath: '/test/project' } },
             ];
-            
+
             mockFs.existsSync = (path: string) => {
-                // CANON.md exists in the workspace
+                // CANON.md exists in the workspace, but no lit-critic-web.py
+                // (so findRepoRoot returns undefined — auto-start disabled to avoid recovery loop)
                 if (path.includes('CANON.md') && path.includes('/test/project')) {
                     return true;
                 }
                 return false;
             };
-            
+
+            // Without lit-critic-web.py, findRepoRoot() returns undefined.
+            // Disable auto-start so activation does not enter the repo recovery loop.
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return false;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+
             loadExtension();
-            
+
             const context = {
                 subscriptions: [],
             };
-            
+
             await activate(context);
-            
+
             // detectProjectPath is called during auto-load
             assert.ok(true); // Should handle project detection gracefully
         });
@@ -823,10 +1209,8 @@ describe('Extension (Real)', () => {
             let analyzeCallback: any;
             const statusMessages: string[] = [];
 
-            mockVscode.window.setStatusBarMessage = (text: string) => {
-                statusMessages.push(text);
-                return { dispose: () => {} };
-            };
+            // Transient setStatusBarMessage calls were removed; startup uses a progress notification only.
+            mockVscode.window.setStatusBarMessage = () => ({ dispose: () => {} });
 
             mockApiClient = class MockApiClient {
                 async updateRepoPath(_repoPath: string) {
@@ -843,9 +1227,6 @@ describe('Extension (Real)', () => {
                         api_key_configured: true,
                         available_models: { sonnet: { label: 'Sonnet' } },
                         default_model: 'sonnet',
-                        lens_presets: {
-                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
-                        },
                     };
                 }
                 async analyze() {
@@ -891,7 +1272,6 @@ describe('Extension (Real)', () => {
             mockVscode.workspace.getConfiguration = () => ({
                 get: (key: string, defaultValue: any) => {
                     if (key === 'autoStartServer') return false;
-                    if (key === 'lensPreset') return 'balanced';
                     return defaultValue;
                 },
                 update: async () => {},
@@ -906,10 +1286,6 @@ describe('Extension (Real)', () => {
             await activate({ subscriptions: [] });
             await analyzeCallback();
 
-            assert.ok(
-                statusMessages.includes('lit-critic: Preparing startup...'),
-                'Expected analyze-triggered startup to show immediate startup hint',
-            );
         });
 
         it('should show analysis startup progress notification during analyze handoff', async () => {
@@ -945,9 +1321,6 @@ describe('Extension (Real)', () => {
                         api_key_configured: true,
                         available_models: { sonnet: { label: 'Sonnet' } },
                         default_model: 'sonnet',
-                        lens_presets: {
-                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
-                        },
                     };
                 }
                 async analyze() {
@@ -996,7 +1369,6 @@ describe('Extension (Real)', () => {
             mockVscode.workspace.getConfiguration = () => ({
                 get: (key: string, defaultValue: any) => {
                     if (key === 'autoStartServer') return true;
-                    if (key === 'lensPreset') return 'balanced';
                     return defaultValue;
                 },
                 update: async () => {},
@@ -1034,9 +1406,6 @@ describe('Extension (Real)', () => {
                         api_key_configured: true,
                         available_models: { sonnet: { label: 'Sonnet' } },
                         default_model: 'sonnet',
-                        lens_presets: {
-                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
-                        },
                     };
                 }
                 async checkSession() {
@@ -1107,7 +1476,6 @@ describe('Extension (Real)', () => {
             mockVscode.workspace.getConfiguration = () => ({
                 get: (key: string, defaultValue: any) => {
                     if (key === 'autoStartServer') return true;
-                    if (key === 'lensPreset') return 'balanced';
                     return defaultValue;
                 },
                 update: async () => {},
@@ -1137,9 +1505,10 @@ describe('Extension (Real)', () => {
             assert.deepEqual(resumedSessionIds, [11]);
         });
 
-        it('should show preset-aware lens count instead of hardcoded five lenses', async () => {
+        it('should show quick mode status message instead of hardcoded lens-count text', async () => {
             let analyzeCallback: any;
             const statusMessages: string[] = [];
+            let analyzeMode: 'quick' | 'deep' | undefined;
 
             mockStatusBar = class MockStatusBar {
                 setReady() {}
@@ -1170,19 +1539,16 @@ describe('Extension (Real)', () => {
                         api_key_configured: true,
                         available_models: { sonnet: { label: 'Sonnet' } },
                         default_model: 'sonnet',
-                        lens_presets: {
-                            'clarity-pass': {
-                                prose: 0,
-                                structure: 0,
-                                logic: 1,
-                                clarity: 1,
-                                continuity: 1,
-                                dialogue: 1,
-                            },
-                        },
                     };
                 }
-                async analyze() {
+                async analyze(
+                    _scenePath: string,
+                    _projectPath: string,
+                    _apiKey: string | undefined,
+                    _scenePaths?: string[],
+                    mode?: 'quick' | 'deep',
+                ) {
+                    analyzeMode = mode;
                     return {
                         scene_path: '/test/repo/scene-a.txt',
                         scene_name: 'scene-a.txt',
@@ -1217,7 +1583,7 @@ describe('Extension (Real)', () => {
             mockVscode.workspace.getConfiguration = () => ({
                 get: (key: string, defaultValue: any) => {
                     if (key === 'autoStartServer') return true;
-                    if (key === 'lensPreset') return 'clarity-pass';
+                    if (key === 'analysisMode') return 'quick';
                     return defaultValue;
                 },
                 update: async () => {},
@@ -1236,306 +1602,23 @@ describe('Extension (Real)', () => {
                 return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
             };
 
-            loadExtension();
-            await activate({ subscriptions: [] });
-            await analyzeCallback();
-
-            assert.ok(
-                statusMessages.some((message) => message.includes('Running 4 lenses (clarity-pass preset)...')),
-                'Expected status bar to include preset-aware lens count',
-            );
-            assert.ok(
-                statusMessages.every((message) => !message.includes('Running 5 lenses')),
-                'Expected no hardcoded "Running 5 lenses" status',
-            );
-        });
-
-        it('should resolve auto lens preset to single-scene for single-scene analyze', async () => {
-            let analyzeCallback: any;
-            let analyzeLensPreset: string | undefined;
-            const statusMessages: string[] = [];
-
-            mockStatusBar = class MockStatusBar {
-                setReady() {}
-                setAnalyzing(message?: string) { statusMessages.push(message || ''); }
-                setProgress() {}
-                setComplete() {}
-                setError() {}
-                dispose() {}
-            };
-
-            mockApiClient = class MockApiClient {
-                async updateRepoPath(_repoPath: string) { return { ok: true }; }
-                async getSession() { return { active: false }; }
-                async checkSession() { return { exists: false }; }
-                async listSessions() { return { sessions: [] }; }
-                async getConfig() {
-                    return {
-                        api_key_configured: true,
-                        available_models: { sonnet: { label: 'Sonnet' } },
-                        default_model: 'sonnet',
-                        lens_presets: {
-                            'single-scene': { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
-                            'multi-scene': { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
-                        },
-                    };
-                }
-                async analyze(
-                    _scenePath: string,
-                    _projectPath: string,
-                    _model: string,
-                    _discussionModel: string | undefined,
-                    _apiKey: string | undefined,
-                    lensPrefs: any,
-                ) {
-                    analyzeLensPreset = lensPrefs?.preset;
-                    return {
-                        scene_path: '/test/repo/scene-a.txt',
-                        scene_name: 'scene-a.txt',
-                        project_path: '/test/repo',
-                        total_findings: 0,
-                        current_index: 0,
-                        glossary_issues: [],
-                        counts: { critical: 0, major: 0, minor: 0 },
-                        lens_counts: {},
-                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
-                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
-                        findings_status: [],
-                    };
-                }
-                streamAnalysisProgress(_onEvent: any, onDone: any, _onError: any) {
-                    setTimeout(() => onDone(), 0);
-                    return () => {};
-                }
-                async getCurrentFinding() { return { complete: true }; }
-            };
-
-            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
-                if (cmd === 'literaryCritic.analyze') {
-                    analyzeCallback = callback;
-                }
-                return { dispose: () => {} };
-            };
-
-            mockVscode.window.activeTextEditor = undefined;
-            mockVscode.window.visibleTextEditors = [];
+            // _resolveSceneFiles always shows the open dialog for a start-new flow.
             mockVscode.window.showOpenDialog = async () => [{ fsPath: '/test/repo/scene-a.txt' }];
-            mockVscode.window.showTextDocument = async () => ({
-                document: { uri: { fsPath: '/test/repo/scene-a.txt' } },
-                viewColumn: 1,
-            });
-
-            mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/repo' } }];
-            mockVscode.workspace.getConfiguration = () => ({
-                get: (key: string, defaultValue: any) => {
-                    if (key === 'autoStartServer') return true;
-                    if (key === 'lensPreset') return 'auto';
-                    return defaultValue;
-                },
-                update: async () => {},
-                inspect: () => ({ workspaceValue: undefined, globalValue: undefined, workspaceFolderValue: undefined }),
-            });
-
-            mockFs.existsSync = (filePath: string) => filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
+            mockVscode.window.showTextDocument = async () => ({ viewColumn: 1 });
 
             loadExtension();
             await activate({ subscriptions: [] });
             await analyzeCallback();
 
-            assert.equal(analyzeLensPreset, 'single-scene');
+            assert.equal(analyzeMode, 'quick');
             assert.ok(
-                statusMessages.some((message) => message.includes('(single-scene preset)')),
-                'Expected analysis status to reflect resolved single-scene preset',
+                statusMessages.some((message) => message.includes('Running quick analysis...')),
+                'Expected status bar to include mode-aware quick analysis status',
             );
-        });
-
-        it('should resolve auto lens preset to multi-scene for multi-scene analyze', async () => {
-            let analyzeCallback: any;
-            let analyzeLensPreset: string | undefined;
-            const statusMessages: string[] = [];
-
-            mockStatusBar = class MockStatusBar {
-                setReady() {}
-                setAnalyzing(message?: string) { statusMessages.push(message || ''); }
-                setProgress() {}
-                setComplete() {}
-                setError() {}
-                dispose() {}
-            };
-
-            mockApiClient = class MockApiClient {
-                async updateRepoPath(_repoPath: string) { return { ok: true }; }
-                async getSession() { return { active: false }; }
-                async checkSession() { return { exists: false }; }
-                async listSessions() { return { sessions: [] }; }
-                async getConfig() {
-                    return {
-                        api_key_configured: true,
-                        available_models: { sonnet: { label: 'Sonnet' } },
-                        default_model: 'sonnet',
-                        lens_presets: {
-                            'single-scene': { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
-                            'multi-scene': { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
-                        },
-                    };
-                }
-                async analyze(
-                    _scenePath: string,
-                    _projectPath: string,
-                    _model: string,
-                    _discussionModel: string | undefined,
-                    _apiKey: string | undefined,
-                    lensPrefs: any,
-                ) {
-                    analyzeLensPreset = lensPrefs?.preset;
-                    return {
-                        scene_path: '/test/repo/scene-a.txt',
-                        scene_name: 'scene-a.txt',
-                        project_path: '/test/repo',
-                        total_findings: 0,
-                        current_index: 0,
-                        glossary_issues: [],
-                        counts: { critical: 0, major: 0, minor: 0 },
-                        lens_counts: {},
-                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
-                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
-                        findings_status: [],
-                    };
-                }
-                streamAnalysisProgress(_onEvent: any, onDone: any, _onError: any) {
-                    setTimeout(() => onDone(), 0);
-                    return () => {};
-                }
-                async getCurrentFinding() { return { complete: true }; }
-            };
-
-            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
-                if (cmd === 'literaryCritic.analyze') {
-                    analyzeCallback = callback;
-                }
-                return { dispose: () => {} };
-            };
-
-            mockVscode.window.activeTextEditor = undefined;
-            mockVscode.window.visibleTextEditors = [];
-            mockVscode.window.showOpenDialog = async () => [
-                { fsPath: '/test/repo/scene-a.txt' },
-                { fsPath: '/test/repo/scene-b.txt' },
-            ];
-            mockVscode.window.showTextDocument = async (docOrUri: any) => ({
-                document: { uri: docOrUri },
-                viewColumn: 1,
-            });
-
-            mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/repo' } }];
-            mockVscode.workspace.getConfiguration = () => ({
-                get: (key: string, defaultValue: any) => {
-                    if (key === 'autoStartServer') return true;
-                    if (key === 'lensPreset') return 'auto';
-                    return defaultValue;
-                },
-                update: async () => {},
-                inspect: () => ({ workspaceValue: undefined, globalValue: undefined, workspaceFolderValue: undefined }),
-            });
-
-            mockFs.existsSync = (filePath: string) => filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
-
-            loadExtension();
-            await activate({ subscriptions: [] });
-            await analyzeCallback();
-
-            assert.equal(analyzeLensPreset, 'multi-scene');
             assert.ok(
-                statusMessages.some((message) => message.includes('(multi-scene preset)')),
-                'Expected analysis status to reflect resolved multi-scene preset',
+                statusMessages.every((message) => !message.includes('preset')),
+                'Expected no preset-oriented status text',
             );
-        });
-
-        it('should keep manual lens preset unchanged regardless of scene count', async () => {
-            let analyzeCallback: any;
-            let analyzeLensPreset: string | undefined;
-
-            mockApiClient = class MockApiClient {
-                async updateRepoPath(_repoPath: string) { return { ok: true }; }
-                async getSession() { return { active: false }; }
-                async checkSession() { return { exists: false }; }
-                async listSessions() { return { sessions: [] }; }
-                async getConfig() {
-                    return {
-                        api_key_configured: true,
-                        available_models: { sonnet: { label: 'Sonnet' } },
-                        default_model: 'sonnet',
-                        lens_presets: {
-                            'prose-first': { prose: 1.6, structure: 1.1, logic: 0.9, clarity: 0.9, continuity: 0.8, dialogue: 1.1 },
-                        },
-                    };
-                }
-                async analyze(
-                    _scenePath: string,
-                    _projectPath: string,
-                    _model: string,
-                    _discussionModel: string | undefined,
-                    _apiKey: string | undefined,
-                    lensPrefs: any,
-                ) {
-                    analyzeLensPreset = lensPrefs?.preset;
-                    return {
-                        scene_path: '/test/repo/scene-a.txt',
-                        scene_name: 'scene-a.txt',
-                        project_path: '/test/repo',
-                        total_findings: 0,
-                        current_index: 0,
-                        glossary_issues: [],
-                        counts: { critical: 0, major: 0, minor: 0 },
-                        lens_counts: {},
-                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
-                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
-                        findings_status: [],
-                    };
-                }
-                streamAnalysisProgress(_onEvent: any, onDone: any, _onError: any) {
-                    setTimeout(() => onDone(), 0);
-                    return () => {};
-                }
-                async getCurrentFinding() { return { complete: true }; }
-            };
-
-            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
-                if (cmd === 'literaryCritic.analyze') {
-                    analyzeCallback = callback;
-                }
-                return { dispose: () => {} };
-            };
-
-            mockVscode.window.activeTextEditor = undefined;
-            mockVscode.window.visibleTextEditors = [];
-            mockVscode.window.showOpenDialog = async () => [
-                { fsPath: '/test/repo/scene-a.txt' },
-                { fsPath: '/test/repo/scene-b.txt' },
-            ];
-            mockVscode.window.showTextDocument = async (docOrUri: any) => ({
-                document: { uri: docOrUri },
-                viewColumn: 1,
-            });
-
-            mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/repo' } }];
-            mockVscode.workspace.getConfiguration = () => ({
-                get: (key: string, defaultValue: any) => {
-                    if (key === 'autoStartServer') return true;
-                    if (key === 'lensPreset') return 'prose-first';
-                    return defaultValue;
-                },
-                update: async () => {},
-                inspect: () => ({ workspaceValue: undefined, globalValue: undefined, workspaceFolderValue: undefined }),
-            });
-
-            mockFs.existsSync = (filePath: string) => filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
-
-            loadExtension();
-            await activate({ subscriptions: [] });
-            await analyzeCallback();
-
-            assert.equal(analyzeLensPreset, 'prose-first');
         });
 
         it('should sync backend repo path after repo-path recovery during analyze startup', async () => {
@@ -1711,8 +1794,9 @@ describe('Extension (Real)', () => {
             mockVscode.window.activeTextEditor = undefined;
             mockVscode.window.visibleTextEditors = [];
 
+            // detectProjectPath() requires CANON.md in the workspace folder.
             mockFs.existsSync = (filePath: string) => {
-                return filePath.includes('lit-critic-web.py');
+                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
             };
 
             loadExtension();
@@ -1752,12 +1836,9 @@ describe('Extension (Real)', () => {
                         api_key_configured: true,
                         available_models: { sonnet: { label: 'Sonnet' } },
                         default_model: 'sonnet',
-                        lens_presets: {
-                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
-                        },
                     };
                 }
-                async analyze(_scenePath: string, _projectPath: string, _model: string, _discussionModel: string | undefined, _apiKey: string | undefined, _lensPrefs: any, scenePaths?: string[]) {
+                async analyze(_scenePath: string, _projectPath: string, _apiKey: string | undefined, scenePaths?: string[], _mode?: 'quick' | 'deep') {
                     analyzedScenePaths = scenePaths;
                     return {
                         scene_path: '/test/repo/scene-picked.md',
@@ -1843,8 +1924,8 @@ describe('Extension (Real)', () => {
 
             assert.equal(showOpenDialogCalls, 1, 'Expected a single picker invocation');
             assert.equal(showTextDocumentCalls.length, 2, 'Expected all selected picker files to be opened');
-            assert.equal(showTextDocumentCalls[0].docOrUri, selectedFileUri);
-            assert.equal(showTextDocumentCalls[1].docOrUri, selectedFileUri2);
+            assert.equal(showTextDocumentCalls[0].docOrUri.fsPath, selectedFileUri.fsPath);
+            assert.equal(showTextDocumentCalls[1].docOrUri.fsPath, selectedFileUri2.fsPath);
             assert.deepEqual(
                 analyzedScenePaths,
                 ['/test/repo/scene-picked.md', '/test/repo/scene-picked-2.md'],
@@ -1894,12 +1975,9 @@ describe('Extension (Real)', () => {
                         api_key_configured: true,
                         available_models: { sonnet: { label: 'Sonnet' } },
                         default_model: 'sonnet',
-                        lens_presets: {
-                            balanced: { prose: 1, structure: 1, logic: 1, clarity: 1, continuity: 1, dialogue: 1 },
-                        },
                     };
                 }
-                async analyze(scenePath: string, _projectPath: string, _model: string, _discussionModel: string | undefined, _apiKey: string | undefined, _lensPrefs: any, scenePaths?: string[]) {
+                async analyze(scenePath: string, _projectPath: string, _apiKey: string | undefined, scenePaths?: string[], _mode?: 'quick' | 'deep') {
                     analyzedScenePath = scenePath;
                     analyzedScenePaths = scenePaths;
                     return {
@@ -2105,6 +2183,8 @@ describe('Extension (Real)', () => {
                 close() {}
                 dispose() {}
                 notifySceneChange() {}
+                clearIndexChangeNotice() {}
+                notifyIndexChange() {}
             };
 
             mockApiClient = class MockApiClient {
@@ -2235,6 +2315,7 @@ describe('Extension (Real)', () => {
                     setCurrentSessionCalls.push(sessionId);
                 }
                 setCurrentSessionByScenePath() {}
+                getCurrentSessionItem() { return undefined; }
             };
 
             mockDiscussionPanel = class MockDiscussionPanel {
@@ -2244,6 +2325,8 @@ describe('Extension (Real)', () => {
                 close() {}
                 dispose() {}
                 notifySceneChange() {}
+                clearIndexChangeNotice() {}
+                notifyIndexChange() {}
             };
 
             mockApiClient = class MockApiClient {
@@ -2423,6 +2506,7 @@ describe('Extension (Real)', () => {
                     setCurrentSessionCalls.push(sessionId);
                 }
                 setCurrentSessionByScenePath() {}
+                getCurrentSessionItem() { return undefined; }
             };
 
             mockDiscussionPanel = class MockDiscussionPanel {
@@ -2432,6 +2516,8 @@ describe('Extension (Real)', () => {
                 close() {}
                 dispose() {}
                 notifySceneChange() {}
+                clearIndexChangeNotice() {}
+                notifyIndexChange() {}
             };
 
             mockApiClient = class MockApiClient {
@@ -2568,6 +2654,8 @@ describe('Extension (Real)', () => {
                 close() {}
                 dispose() {}
                 notifySceneChange() {}
+                clearIndexChangeNotice() {}
+                notifyIndexChange() {}
             };
 
             mockApiClient = class MockApiClient {
@@ -2732,125 +2820,6 @@ describe('Extension (Real)', () => {
                 'Expected findings tree to select finding #1 when getCurrentFinding omits index',
             );
             assert.equal(lastFindingReveal.options?.select, true);
-        });
-
-        it('should close discussion panel before presenting refreshed findings on rerun analysis', async () => {
-            let rerunCallback: any;
-            let discussCallback: any;
-            const callOrder: string[] = [];
-
-            mockDiscussionPanel = class MockDiscussionPanel {
-                onFindingAction: any;
-                onDiscussionResult: any;
-                show() { callOrder.push('show'); }
-                close() { callOrder.push('close'); }
-                dispose() {}
-                notifySceneChange() {}
-                clearIndexChangeNotice() {}
-                notifyIndexChange() {}
-            };
-
-            mockApiClient = class MockApiClient {
-                async updateRepoPath(_repoPath: string) {
-                    return { ok: true };
-                }
-                async getSession() {
-                    return { active: false, findings_status: [] };
-                }
-                async getConfig() {
-                    return {
-                        api_key_configured: true,
-                        available_models: { sonnet: { label: 'Sonnet' } },
-                        default_model: 'sonnet',
-                    };
-                }
-                async rerunAnalysis() {
-                    return {
-                        scene_path: '/test/repo/scene-a.txt',
-                        scene_name: 'scene-a.txt',
-                        project_path: '/test/repo',
-                        total_findings: 1,
-                        current_index: 0,
-                        glossary_issues: [],
-                        counts: { critical: 0, major: 1, minor: 0 },
-                        lens_counts: { prose: { critical: 0, major: 1, minor: 0 } },
-                        model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
-                        learning: { review_count: 0, preferences: 0, blind_spots: 0 },
-                        findings_status: [
-                            {
-                                number: 1,
-                                severity: 'major',
-                                lens: 'prose',
-                                status: 'pending',
-                                location: 'L1',
-                                evidence: 'example',
-                                line_start: 1,
-                                line_end: 1,
-                            },
-                        ],
-                    };
-                }
-                async getCurrentFinding() {
-                    return {
-                        complete: false,
-                        finding: {
-                            number: 1,
-                            severity: 'major',
-                            lens: 'prose',
-                            location: 'L1',
-                            line_start: 1,
-                            line_end: 1,
-                            evidence: 'example',
-                            impact: '',
-                            options: [],
-                            flagged_by: [],
-                            ambiguity_type: null,
-                            stale: false,
-                            status: 'pending',
-                        },
-                        index: 0,
-                        current: 1,
-                        total: 1,
-                        is_ambiguity: false,
-                    };
-                }
-            };
-
-            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
-                if (cmd === 'literaryCritic.rerunAnalysisWithUpdatedIndexes') {
-                    rerunCallback = callback;
-                }
-                if (cmd === 'literaryCritic.discuss') {
-                    discussCallback = callback;
-                }
-                return { dispose: () => {} };
-            };
-
-            mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/repo' } }];
-            mockVscode.workspace.getConfiguration = () => ({
-                get: (key: string, defaultValue: any) => {
-                    if (key === 'autoStartServer') return true;
-                    return defaultValue;
-                },
-                update: async () => {},
-            });
-
-            mockFs.existsSync = (filePath: string) => {
-                return filePath.includes('lit-critic-web.py') || filePath.includes('CANON.md');
-            };
-
-            loadExtension();
-            await activate({ subscriptions: [] });
-
-            // Ensure panel exists before rerun.
-            await discussCallback();
-            await rerunCallback();
-
-            const closeIndex = callOrder.indexOf('close');
-            const lastShowIndex = callOrder.lastIndexOf('show');
-
-            assert.ok(closeIndex >= 0, 'Expected rerun to close the discussion panel');
-            assert.ok(lastShowIndex > closeIndex, 'Expected refreshed finding UI to show after panel close');
         });
 
         it('should handle stopServer command', async () => {

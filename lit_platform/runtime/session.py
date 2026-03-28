@@ -126,7 +126,6 @@ def create_session(state: SessionState, glossary_issues: list[str] | None = None
         model=state.model,
         glossary_issues=glossary_issues or state.glossary_issues,
         discussion_model=state.discussion_model,
-        lens_preferences=state.lens_preferences,
     )
     state.session_id = session_id
 
@@ -170,7 +169,6 @@ def check_active_session(project_path: Path) -> Optional[dict]:
             "total_findings": len(findings),
             "model": session_data.get("model", ""),
             "discussion_model": session_data.get("discussion_model"),
-            "lens_preferences": session_data.get("lens_preferences", {}),
         }
     finally:
         conn.close()
@@ -205,7 +203,6 @@ def load_active_session(project_path: Path) -> Optional[dict]:
         "scene_hash": session_data.get("scene_hash", ""),
         "model": session_data.get("model", ""),
         "discussion_model": session_data.get("discussion_model"),  # None = use analysis model
-        "lens_preferences": session_data.get("lens_preferences", {}),
         "current_index": session_data.get("current_index", 0),
         "glossary_issues": session_data.get("glossary_issues", []),
         "discussion_history": session_data.get("discussion_history", []),
@@ -244,7 +241,6 @@ def load_session_by_id(project_path: Path, session_id: int) -> Optional[dict]:
         "scene_hash": session_data.get("scene_hash", ""),
         "model": session_data.get("model", ""),
         "discussion_model": session_data.get("discussion_model"),
-        "lens_preferences": session_data.get("lens_preferences", {}),
         "current_index": session_data.get("current_index", 0),
         "glossary_issues": session_data.get("glossary_issues", []),
         "discussion_history": session_data.get("discussion_history", []),

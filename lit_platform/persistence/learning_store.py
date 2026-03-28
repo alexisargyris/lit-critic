@@ -57,7 +57,7 @@ class LearningStore:
         result = dict(row)
         for cat in ALL_CATEGORIES:
             entries = conn.execute(
-                "SELECT id, description, created_at FROM learning_entry "
+                "SELECT id, description, created_at, confidence FROM learning_entry "
                 "WHERE learning_id = ? AND category = ? ORDER BY id",
                 (row["id"], cat),
             ).fetchall()
@@ -95,24 +95,25 @@ class LearningStore:
         entries = []
         for desc_dict in learning_data.preferences:
             desc = desc_dict.get("description", str(desc_dict))
-            entries.append((learning_id, CATEGORY_PREFERENCE, desc, now))
+            confidence = float(desc_dict.get("confidence", 0.5))
+            entries.append((learning_id, CATEGORY_PREFERENCE, desc, now, confidence))
         for desc_dict in learning_data.blind_spots:
             desc = desc_dict.get("description", str(desc_dict))
-            entries.append((learning_id, CATEGORY_BLIND_SPOT, desc, now))
+            entries.append((learning_id, CATEGORY_BLIND_SPOT, desc, now, 0.5))
         for desc_dict in learning_data.resolutions:
             desc = desc_dict.get("description", str(desc_dict))
-            entries.append((learning_id, CATEGORY_RESOLUTION, desc, now))
+            entries.append((learning_id, CATEGORY_RESOLUTION, desc, now, 0.5))
         for desc_dict in learning_data.ambiguity_intentional:
             desc = desc_dict.get("description", str(desc_dict))
-            entries.append((learning_id, CATEGORY_AMBIGUITY_INTENTIONAL, desc, now))
+            entries.append((learning_id, CATEGORY_AMBIGUITY_INTENTIONAL, desc, now, 0.5))
         for desc_dict in learning_data.ambiguity_accidental:
             desc = desc_dict.get("description", str(desc_dict))
-            entries.append((learning_id, CATEGORY_AMBIGUITY_ACCIDENTAL, desc, now))
+            entries.append((learning_id, CATEGORY_AMBIGUITY_ACCIDENTAL, desc, now, 0.5))
 
         if entries:
             conn.executemany(
-                "INSERT INTO learning_entry (learning_id, category, description, created_at) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT INTO learning_entry (learning_id, category, description, created_at, confidence) "
+                "VALUES (?, ?, ?, ?, ?)",
                 entries,
             )
 
@@ -120,22 +121,28 @@ class LearningStore:
 
     @staticmethod
     def add_entry(conn: sqlite3.Connection, category: str,
-                  description: str) -> int:
+                  description: str, confidence: float = 0.5) -> int:
         """Add a single learning entry. Returns the entry id."""
         learning_id = LearningStore.ensure_exists(conn)
         now = datetime.now().isoformat()
         cursor = conn.execute(
-            "INSERT INTO learning_entry (learning_id, category, description, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (learning_id, category, description, now),
+            "INSERT INTO learning_entry (learning_id, category, description, created_at, confidence) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (learning_id, category, description, now, confidence),
         )
         conn.commit()
         return cursor.lastrowid
 
     @staticmethod
-    def add_preference(conn: sqlite3.Connection, description: str) -> int:
+    def add_preference(conn: sqlite3.Connection, description: str,
+                       confidence: float = 0.5) -> int:
         """Add a preference entry. Returns the entry id."""
-        return LearningStore.add_entry(conn, CATEGORY_PREFERENCE, description)
+        return LearningStore.add_entry(
+            conn,
+            CATEGORY_PREFERENCE,
+            description,
+            confidence=confidence,
+        )
 
     @staticmethod
     def add_blind_spot(conn: sqlite3.Connection, description: str) -> int:
@@ -153,6 +160,16 @@ class LearningStore:
         """Add an ambiguity entry (intentional or accidental)."""
         category = CATEGORY_AMBIGUITY_INTENTIONAL if intentional else CATEGORY_AMBIGUITY_ACCIDENTAL
         return LearningStore.add_entry(conn, category, description)
+
+    @staticmethod
+    def update_confidence(conn: sqlite3.Connection, entry_id: int,
+                          new_confidence: float) -> None:
+        """Update confidence for a single learning entry."""
+        conn.execute(
+            "UPDATE learning_entry SET confidence = ? WHERE id = ?",
+            (float(new_confidence), entry_id),
+        )
+        conn.commit()
 
     @staticmethod
     def remove_entry(conn: sqlite3.Connection, entry_id: int) -> bool:
@@ -219,14 +236,19 @@ class LearningStore:
         prefs = data.get("preferences", [])
         if prefs:
             for p in prefs:
-                lines.append(f"- {p.get('description', p)}")
+                confidence = float(p.get("confidence", 0.5))
+                lines.append(
+                    f"- [confidence: {confidence:.1f}] {p.get('description', p)}"
+                )
         else:
             lines.append("[none yet]")
 
         lines.extend(["", "## Blind Spots", ""])
         spots = data.get("blind_spots", [])
-        if spots:
-            for s in spots:
+        # Exclude "acceptance:" tracking entries — those are housekeeping, not user-visible content
+        visible_spots = [s for s in spots if not s.get("description", "").startswith("acceptance:")]
+        if visible_spots:
+            for s in visible_spots:
                 lines.append(f"- {s.get('description', s)}")
         else:
             lines.append("[none yet]")

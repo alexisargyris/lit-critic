@@ -53,6 +53,7 @@ lit-critic is designed for authors who may not be technical. These docs explain 
 4. **[Using the Tool](using-the-tool.md)** Choose CLI, Web UI, or VS Code Extension
 5. **[Working with Findings](working-with-findings.md)** Accept, reject, or discuss feedback
 6. **[Learning System](learning-system.md)** How the tool adapts to your style
+7. **[Sycophancy & Editorial Independence](sycophancy.md)** Why LLMs are sycophantic and how lit-critic protects you
 
 ---
 
@@ -62,8 +63,10 @@ lit-critic is designed for authors who may not be technical. These docs explain 
 
 Every scene needs:
 - **File name** with Scene ID: `01.03.01_vault.txt`
-- **@@META header** with 17 metadata keys
+- **@@META ... @@END metadata block** (template is adaptable)
 - **Scene text** after `@@END`
+
+The 17-key template shown in the docs is a recommended baseline, not a strict schema. You can rename/reorder/add metadata fields without breaking lit-critic.
 
 See **[Scene Format Guide](scene-format.md)** and **[scene-template.txt](templates/scene-template.txt)** for details.
 
@@ -147,6 +150,7 @@ docs/user-guide/
 ├── using-the-tool.md            # CLI, Web UI, VS Code
 ├── working-with-findings.md     # Accept, reject, discuss
 ├── learning-system.md           # Adaptation to your style
+├── sycophancy.md                # Sycophancy explained; anti-sycophancy design
 └── templates/
     ├── scene-template.txt       # Annotated scene template
     ├── CANON-template.md        # World rules template

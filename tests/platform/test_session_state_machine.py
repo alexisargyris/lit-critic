@@ -1,6 +1,9 @@
 """Tests for platform session state-machine helpers."""
 
+from pathlib import Path
+
 from lit_platform.session_state_machine import (
+    apply_tier_model_assignment,
     apply_acceptance,
     apply_discussion_outcome_reason,
     apply_finding_revision,
@@ -22,6 +25,7 @@ from lit_platform.session_state_machine import (
 )
 from lit_platform.runtime.models import LearningData
 from lit_platform.runtime.models import Finding
+from lit_platform.runtime.models import SessionState
 
 
 def _finding(status: str = "pending") -> Finding:
@@ -36,6 +40,18 @@ def _finding(status: str = "pending") -> Finding:
         flagged_by=["prose"],
         status=status,
     )
+
+
+def _session(**overrides) -> SessionState:
+    base = {
+        "client": object(),
+        "scene_content": "Scene",
+        "scene_path": "chapter1.txt",
+        "project_path": Path("."),
+        "indexes": {},
+    }
+    base.update(overrides)
+    return SessionState(**base)
 
 
 def test_is_terminal_status():
@@ -353,3 +369,46 @@ def test_learning_session_payload_returns_serializable_shape():
         "session_acceptances": [{"lens": "clarity", "pattern": "E"}],
         "session_ambiguity_answers": [{"location": "P1", "intentional": True}],
     }
+
+
+def test_session_state_post_init_sets_canonical_tier_fields_from_legacy_defaults():
+    session = _session()
+
+    assert session.depth_mode == "deep"
+    assert session.checker_model == session.model
+    assert session.frontier_model == session.discussion_model
+    assert session.effective_checker_model == session.model
+    assert session.effective_frontier_model == session.discussion_model
+
+
+def test_session_state_post_init_respects_tier_fields_and_aligns_legacy_aliases():
+    session = _session(
+        depth_mode="quick",
+        checker_model="checker-tier-model",
+        frontier_model="frontier-tier-model",
+        model="legacy-analysis-model",
+        discussion_model="legacy-discussion-model",
+    )
+
+    assert session.depth_mode == "quick"
+    assert session.checker_model == "checker-tier-model"
+    assert session.frontier_model == "frontier-tier-model"
+    assert session.model == "checker-tier-model"
+    assert session.discussion_model == "frontier-tier-model"
+
+
+def test_apply_tier_model_assignment_sets_canonical_and_legacy_fields():
+    session = _session()
+
+    apply_tier_model_assignment(
+        session,
+        depth_mode="quick",
+        frontier_model="frontier-assigned",
+        checker_model="checker-assigned",
+    )
+
+    assert session.depth_mode == "quick"
+    assert session.frontier_model == "frontier-assigned"
+    assert session.checker_model == "checker-assigned"
+    assert session.model == "checker-assigned"
+    assert session.discussion_model == "frontier-assigned"

@@ -2,7 +2,10 @@
 
 import json
 import sqlite3
+from pathlib import Path
 from typing import Optional
+
+from lit_platform.persistence.path_utils import to_absolute, to_relative
 
 
 class FindingStore:
@@ -10,7 +13,7 @@ class FindingStore:
 
     @staticmethod
     def save_all(conn: sqlite3.Connection, session_id: int,
-                 findings: list[dict]) -> None:
+                 findings: list[dict], project_path: Path | None = None) -> None:
         """Insert all findings for a session (bulk insert after analysis).
 
         Each dict should match the Finding.to_dict(include_state=True) shape.
@@ -25,7 +28,7 @@ class FindingStore:
                 f.get("location", ""),
                 f.get("line_start"),
                 f.get("line_end"),
-                f.get("scene_path"),
+                to_relative(project_path, f.get("scene_path")),
                 f.get("evidence", ""),
                 f.get("impact", ""),
                 json.dumps(f.get("options", [])),
@@ -37,6 +40,7 @@ class FindingStore:
                 json.dumps(f.get("discussion_turns", [])),
                 json.dumps(f.get("revision_history", [])),
                 f.get("outcome_reason", ""),
+                f.get("origin", "legacy"),
             ))
 
         conn.executemany(
@@ -45,24 +49,24 @@ class FindingStore:
                 line_start, line_end, scene_path, evidence, impact, options,
                 flagged_by, ambiguity_type, stale, status,
                 author_response, discussion_turns, revision_history,
-                outcome_reason)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                outcome_reason, origin)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             rows,
         )
         conn.commit()
 
     @staticmethod
-    def load_all(conn: sqlite3.Connection, session_id: int) -> list[dict]:
+    def load_all(conn: sqlite3.Connection, session_id: int, project_path: Path | None = None) -> list[dict]:
         """Load all findings for a session, ordered by number."""
         rows = conn.execute(
             "SELECT * FROM finding WHERE session_id = ? ORDER BY number",
             (session_id,),
         ).fetchall()
-        return [FindingStore._row_to_dict(r) for r in rows]
+        return [FindingStore._row_to_dict(r, project_path=project_path) for r in rows]
 
     @staticmethod
     def get(conn: sqlite3.Connection, session_id: int,
-            number: int) -> Optional[dict]:
+            number: int, project_path: Path | None = None) -> Optional[dict]:
         """Load a single finding by session and number."""
         row = conn.execute(
             "SELECT * FROM finding WHERE session_id = ? AND number = ?",
@@ -70,7 +74,7 @@ class FindingStore:
         ).fetchone()
         if row is None:
             return None
-        return FindingStore._row_to_dict(row)
+        return FindingStore._row_to_dict(row, project_path=project_path)
 
     @staticmethod
     def update(conn: sqlite3.Connection, session_id: int, number: int,
@@ -122,7 +126,8 @@ class FindingStore:
 
     @staticmethod
     def remap_scene_paths(conn: sqlite3.Connection, session_id: int,
-                          remap: dict[str, str]) -> None:
+                          remap: dict[str, str],
+                          project_path: Path | None = None) -> None:
         """Rewrite finding.scene_path values for a session using an old->new map."""
         if not remap:
             return
@@ -131,11 +136,13 @@ class FindingStore:
         for old_path, new_path in remap.items():
             if not old_path or not new_path or old_path == new_path:
                 continue
+            stored_old = to_relative(project_path, old_path)
+            stored_new = to_relative(project_path, new_path)
             conn.execute(
                 """UPDATE finding
                    SET scene_path = ?
                    WHERE session_id = ? AND scene_path = ?""",
-                (new_path, session_id, old_path),
+                (stored_new, session_id, stored_old),
             )
             updated = True
 
@@ -143,7 +150,7 @@ class FindingStore:
             conn.commit()
 
     @staticmethod
-    def _row_to_dict(row: sqlite3.Row) -> dict:
+    def _row_to_dict(row: sqlite3.Row, project_path: Path | None = None) -> dict:
         """Convert a finding row to a plain dict, deserialising JSON columns."""
         d = dict(row)
         for key in ("options", "flagged_by", "discussion_turns", "revision_history"):
@@ -154,6 +161,10 @@ class FindingStore:
                     d[key] = []
         if "stale" in d:
             d["stale"] = bool(d["stale"])
+        if project_path is not None and d.get("scene_path"):
+            abs_path = to_absolute(project_path, d["scene_path"])
+            if abs_path is not None:
+                d["scene_path"] = str(abs_path)
         return d
 
 

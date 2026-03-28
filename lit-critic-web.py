@@ -35,8 +35,8 @@ def main():
 
     args = parser.parse_args()
 
-    print(f"\n  lit-critic — Web UI")
-    print(f"  Open http://{args.host}:{args.port} in your browser\n")
+    print(f"\n  lit-critic — Web UI", flush=True)
+    print(f"  Open http://{args.host}:{args.port} in your browser\n", flush=True)
 
     uvicorn.run(
         "web.app:app",

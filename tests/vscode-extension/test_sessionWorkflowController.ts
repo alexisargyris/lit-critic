@@ -42,6 +42,10 @@ function makeApiClient(overrides: Record<string, (...args: any[]) => any> = {}):
         markAmbiguity: async () => ({}),
         gotoFinding: async () => ({ complete: false, finding: null }),
         reviewFinding: async () => ({ complete: false, finding: null }),
+        refreshKnowledge: async () => ({ scene_updated: 0, index_updated: 0 }),
+        getKnowledgeReview: async () => ({ entities: [], overrides: [] }),
+        auditScene: async () => ({ deterministic: [], semantic: [], deep: false, model: 'sonnet' }),
+        auditIndexes: async () => ({ deterministic: [], semantic: [], placeholder_census: {}, formatted_report: '', deep: false, model: 'sonnet' }),
         updateRepoPath: async () => ({}),
         ...overrides,
     };
@@ -83,6 +87,7 @@ function makeFindingsTreeProvider(): any {
         updateFinding: () => {},
         clear: () => {},
         getCurrentFindingItem: () => undefined,
+        setSessionContext: () => {},
     };
 }
 
@@ -98,6 +103,14 @@ function makeSessionsTreeProvider(): any {
 }
 
 function makeLearningTreeProvider(): any {
+    return {
+        setApiClient: () => {},
+        setProjectPath: () => {},
+        refresh: async () => {},
+    };
+}
+
+function makeKnowledgeTreeProvider(): any {
     return {
         setApiClient: () => {},
         setProjectPath: () => {},
@@ -131,7 +144,6 @@ function makeUiPort(overrides: Partial<WorkflowUiPort> = {}): WorkflowUiPort {
         showOpenDialog: async () => undefined,
         showTextDocument: async () => undefined,
         withProgress: async (_title: string, task: any) => { await task({ report: () => {} }); },
-        setStatusBarMessage: (_m: string, _t: number) => ({ dispose: () => {} }),
         navigateToFindingLine: async () => {},
         pathExists: () => false,
         getOpenTextDocumentPaths: () => [],
@@ -168,6 +180,7 @@ function makeDeps(overrides: {
         findingsTreeProvider: makeFindingsTreeProvider(),
         sessionsTreeProvider: makeSessionsTreeProvider(),
         learningTreeProvider: makeLearningTreeProvider(),
+        knowledgeTreeProvider: makeKnowledgeTreeProvider(),
         diagnosticsProvider: makeDiagnosticsProvider(),
         ensureDiscussionPanel: () => panel,
         getDiscussionPanel: () => panel,
@@ -195,9 +208,10 @@ describe('SessionWorkflowController.cmdAnalyze', () => {
 
     it('resumes selected active session by id when user picks Resume', async () => {
         let resumeByIdCalled = false;
+        let capturedItems: any[] | undefined;
         const api = makeApiClient({
             checkSession: async () => ({ exists: true, session_id: undefined }),
-            listSessions: async () => ({ sessions: [{ id: 1, status: 'active', scene_path: '/s.md', created_at: 't' }] }),
+            listSessions: async () => ({ sessions: [{ id: 1, status: 'active', depth_mode: 'quick', scene_path: '/s.md', created_at: 't' }] }),
             resumeSessionByIdWithRecovery: async () => {
                 resumeByIdCalled = true;
                 return { error: null, total_findings: 1, current_index: 0, scene_path: '/s.md', findings_status: [], counts: {}, model: { label: 'm' } };
@@ -205,6 +219,7 @@ describe('SessionWorkflowController.cmdAnalyze', () => {
         });
         const ui = makeUiPort({
             showQuickPick: async (items: any[]) => {
+                capturedItems = items;
                 // User picks 'Resume' option
                 return items.find(i => (typeof i === 'string' ? i : i.label ?? i).toString().startsWith('Resume'));
             },
@@ -215,6 +230,52 @@ describe('SessionWorkflowController.cmdAnalyze', () => {
         await ctrl.cmdAnalyze();
 
         assert.ok(resumeByIdCalled, 'should have called resumeSessionByIdWithRecovery');
+        assert.ok(Array.isArray(capturedItems));
+        assert.ok(
+            String(capturedItems?.[0] ?? '').includes('Quick'),
+            'single active-session quick pick entry should include session type',
+        );
+    });
+
+    it('includes session type metadata in multi-active-session quick pick entries', async () => {
+        let capturedItems: any[] = [];
+        const api = makeApiClient({
+            checkSession: async () => ({ exists: true, session_id: undefined }),
+            listSessions: async () => ({
+                sessions: [
+                    { id: 1, status: 'active', depth_mode: 'quick', scene_path: '/quick.md', created_at: 't1' },
+                    { id: 2, status: 'active', depth_mode: 'deep', scene_path: '/deep.md', created_at: 't2' },
+                ],
+            }),
+            resumeSessionByIdWithRecovery: async () => ({
+                error: null,
+                total_findings: 1,
+                current_index: 0,
+                scene_path: '/quick.md',
+                findings_status: [],
+                counts: {},
+                model: { label: 'm' },
+            }),
+            getCurrentFinding: async () => ({ complete: true }),
+        });
+
+        const ui = makeUiPort({
+            showQuickPick: async (items: any[]) => {
+                capturedItems = items;
+                return items[0];
+            },
+        });
+        const deps = makeDeps({ apiClient: api, ui });
+        const ctrl = new SessionWorkflowController(deps);
+
+        await ctrl.cmdAnalyze();
+
+        const firstResumeItem = capturedItems.find((item) => typeof item === 'object' && String(item.label || '').startsWith('Resume '));
+        assert.ok(firstResumeItem, 'expected a resume quick-pick item');
+        assert.ok(
+            String(firstResumeItem.description || '').includes('Type: Quick'),
+            'resume quick-pick description should include type metadata',
+        );
     });
 
     it('shows file picker when user picks start-new', async () => {
@@ -244,18 +305,183 @@ describe('SessionWorkflowController.cmdAnalyze', () => {
 
         assert.ok(messages.some(m => m.includes('No scene file selected')));
     });
+
+    it('passes configured analysis mode and syncs model slots before analyze', async () => {
+        let capturedMode: string | undefined;
+        let capturedSlots: { frontier: string; deep: string; quick: string } | undefined;
+
+        const api = makeApiClient({
+            checkSession: async () => ({ exists: false }),
+            getConfig: async () => ({
+                available_models: { sonnet: { label: 'Sonnet' }, opus: { label: 'Opus' } },
+                default_model: 'sonnet',
+                analysis_modes: ['quick', 'deep'],
+                model_slots: { frontier: 'sonnet', deep: 'sonnet', quick: 'haiku' },
+                default_model_slots: { frontier: 'sonnet', deep: 'sonnet', quick: 'haiku' },
+                mode_cost_hints: {
+                    quick: 'Moderate cost (~1.5x quick check baseline)',
+                },
+            }),
+            updateConfigModels: async (slots: { frontier: string; deep: string; quick: string }) => {
+                capturedSlots = slots;
+                return { model_slots: slots };
+            },
+            analyze: async (
+                _scenePath: string,
+                _projectPath: string,
+                _apiKey: string | undefined,
+                _scenePaths: string[] | undefined,
+                mode?: 'quick' | 'deep',
+            ) => {
+                capturedMode = mode;
+                return {
+                    scene_path: '/scene.md',
+                    scene_name: 'scene.md',
+                    project_path: '/project',
+                    total_findings: 0,
+                    current_index: 0,
+                    glossary_issues: [],
+                    counts: { critical: 0, major: 0, minor: 0 },
+                    lens_counts: {},
+                    model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
+                    learning: { review_count: 0, preferences: 0, blind_spots: 0 },
+                    findings_status: [],
+                    tier_cost_summary: 'checker tiers only; frontier used for summary/discussion',
+                };
+            },
+            streamAnalysisProgress: (_onEvent: any, onDone: any, _onError: any) => {
+                onDone();
+                return () => {};
+            },
+            getCurrentFinding: async () => ({ complete: true }),
+        });
+
+        const ui = makeUiPort({
+            showOpenDialog: async () => [{ fsPath: '/scene.md' }],
+            showTextDocument: async () => undefined,
+            getExtensionConfig: () => ({
+                inspect: () => undefined,
+                get: (key: string, def: any) => {
+                    if (key === 'analysisMode') {
+                        return 'quick';
+                    }
+                    if (key === 'modelSlotFrontier') {
+                        return 'opus';
+                    }
+                    if (key === 'modelSlotDeep') {
+                        return 'sonnet';
+                    }
+                    if (key === 'modelSlotQuick') {
+                        return 'haiku';
+                    }
+                    return def;
+                },
+            } as any),
+        });
+
+        const deps = makeDeps({ apiClient: api, ui });
+        const ctrl = new SessionWorkflowController(deps);
+        const messages: string[] = (ui as any)._messages;
+
+        await ctrl.cmdAnalyze();
+
+        assert.equal(capturedMode, 'quick');
+        assert.deepEqual(capturedSlots, { frontier: 'opus', deep: 'sonnet', quick: 'haiku' });
+        assert.ok(
+            messages.some((m) => m.includes('Cost hint (quick): Moderate cost')),
+            'Expected pre-run mode cost hint message',
+        );
+        assert.ok(
+            messages.some((m) => m.includes('Tier cost summary: checker tiers only; frontier used for summary/discussion')),
+            'Expected post-run tier cost summary message',
+        );
+    });
+
+    it('warns and continues when model-slot sync fails before analyze', async () => {
+        let analyzeCalled = false;
+
+        const api = makeApiClient({
+            checkSession: async () => ({ exists: false }),
+            getConfig: async () => ({
+                available_models: { sonnet: { label: 'Sonnet' }, opus: { label: 'Opus' } },
+                default_model: 'sonnet',
+                analysis_modes: ['quick', 'deep'],
+                model_slots: { frontier: 'sonnet', deep: 'sonnet', quick: 'haiku' },
+                default_model_slots: { frontier: 'sonnet', deep: 'sonnet', quick: 'haiku' },
+            }),
+            updateConfigModels: async () => {
+                throw new Error('network down');
+            },
+            analyze: async () => {
+                analyzeCalled = true;
+                return {
+                    scene_path: '/scene.md',
+                    scene_name: 'scene.md',
+                    project_path: '/project',
+                    total_findings: 0,
+                    current_index: 0,
+                    glossary_issues: [],
+                    counts: { critical: 0, major: 0, minor: 0 },
+                    lens_counts: {},
+                    model: { name: 'sonnet', id: 'sonnet', label: 'Sonnet' },
+                    learning: { review_count: 0, preferences: 0, blind_spots: 0 },
+                    findings_status: [],
+                };
+            },
+            streamAnalysisProgress: (_onEvent: any, onDone: any, _onError: any) => {
+                onDone();
+                return () => {};
+            },
+            getCurrentFinding: async () => ({ complete: true }),
+        });
+
+        const ui = makeUiPort({
+            showOpenDialog: async () => [{ fsPath: '/scene.md' }],
+            showTextDocument: async () => undefined,
+            getExtensionConfig: () => ({
+                inspect: () => undefined,
+                get: (key: string, def: any) => {
+                    if (key === 'analysisMode') {
+                        return 'quick';
+                    }
+                    if (key === 'modelSlotFrontier') {
+                        return 'opus';
+                    }
+                    if (key === 'modelSlotDeep') {
+                        return 'sonnet';
+                    }
+                    if (key === 'modelSlotQuick') {
+                        return 'haiku';
+                    }
+                    return def;
+                },
+            } as any),
+        });
+
+        const deps = makeDeps({ apiClient: api, ui });
+        const ctrl = new SessionWorkflowController(deps);
+        const messages: string[] = (ui as any)._messages;
+
+        await ctrl.cmdAnalyze();
+
+        assert.equal(analyzeCalled, true, 'analysis should continue even if slot sync fails');
+        assert.ok(
+            messages.some((m) => m.includes('Could not sync model slots before analysis (network down)')),
+            'Expected warning when model-slot sync fails',
+        );
+    });
 });
 
 // ---------------------------------------------------------------------------
 // cmdResume
 // ---------------------------------------------------------------------------
 
-describe('SessionWorkflowController.cmdResume', () => {
+describe('SessionWorkflowController.cmdAnalyze (resume path)', () => {
     it('resets closedSessionNotice and indexChangeDismissed before resuming', async () => {
         const deps = makeDeps({ stateOverrides: { closedSessionNotice: 'old notice', indexChangeDismissed: true } });
         const ctrl = new SessionWorkflowController(deps);
 
-        await ctrl.cmdResume();
+        await ctrl.cmdAnalyze();
 
         assert.equal(deps.state.closedSessionNotice, undefined);
         assert.equal(deps.state.indexChangeDismissed, false);
@@ -266,37 +492,46 @@ describe('SessionWorkflowController.cmdResume', () => {
         const ctrl = new SessionWorkflowController(deps);
         const messages: string[] = (deps.ui as any)._messages;
 
-        await ctrl.cmdResume();
+        await ctrl.cmdAnalyze();
 
         assert.ok(messages.some(m => m.includes('Could not detect project')));
     });
 
     it('shows error message when resume returns error', async () => {
         const api = makeApiClient({
+            checkSession: async () => ({ exists: true }),
             resumeWithRecovery: async () => ({ error: 'No session found', total_findings: 0, current_index: 0, scene_path: '', findings_status: [], counts: {}, model: { label: 'm' } }),
         });
-        const deps = makeDeps({ apiClient: api });
+        const deps = makeDeps({
+            apiClient: api,
+            ui: { showQuickPick: async () => ({ label: 'Resume existing session' }) },
+        });
         const ctrl = new SessionWorkflowController(deps);
         const messages: string[] = (deps.ui as any)._messages;
 
-        await ctrl.cmdResume();
+        await ctrl.cmdAnalyze();
 
         assert.ok(messages.some(m => m.includes('Resume failed')));
     });
 
     it('shows success info message on happy path', async () => {
-        const deps = makeDeps();
+        const api = makeApiClient({ checkSession: async () => ({ exists: true }) });
+        const deps = makeDeps({
+            apiClient: api,
+            ui: { showQuickPick: async () => ({ label: 'Resume existing session' }) },
+        });
         const ctrl = new SessionWorkflowController(deps);
         const messages: string[] = (deps.ui as any)._messages;
 
-        await ctrl.cmdResume();
+        await ctrl.cmdAnalyze();
 
         assert.ok(messages.some(m => m.includes('Resumed session')));
     });
 
-    it('opens all resolved scene files for multi-scene resume', async () => {
-        const opened: string[] = [];
+    it('opens all resolved scene files for multi-scene resume without forcing a target view column', async () => {
+        const opened: Array<{ fsPath: string; options?: any }> = [];
         const api = makeApiClient({
+            checkSession: async () => ({ exists: true }),
             resumeWithRecovery: async () => ({
                 error: null,
                 total_findings: 2,
@@ -311,23 +546,27 @@ describe('SessionWorkflowController.cmdResume', () => {
         const deps = makeDeps({
             apiClient: api,
             ui: {
+                showQuickPick: async () => ({ label: 'Resume existing session' }),
                 pathExists: (p: string) => p === '/scene-1.md' || p === '/scene-2.md',
-                showTextDocument: async (fsPath: string) => {
-                    opened.push(fsPath);
+                showTextDocument: async (fsPath: string, options?: any) => {
+                    opened.push({ fsPath, options });
                     return undefined;
                 },
             },
         });
         const ctrl = new SessionWorkflowController(deps);
 
-        await ctrl.cmdResume();
+        await ctrl.cmdAnalyze();
 
-        assert.deepEqual(opened, ['/scene-1.md', '/scene-2.md']);
+        assert.deepEqual(opened.map((entry) => entry.fsPath), ['/scene-1.md', '/scene-2.md']);
+        assert.equal(opened[0].options?.viewColumn, undefined);
+        assert.equal(opened[1].options?.viewColumn, undefined);
     });
 
     it('opens only missing scene files when others are already open across groups', async () => {
-        const opened: string[] = [];
+        const opened: Array<{ fsPath: string; options?: any }> = [];
         const api = makeApiClient({
+            checkSession: async () => ({ exists: true }),
             resumeWithRecovery: async () => ({
                 error: null,
                 total_findings: 3,
@@ -343,20 +582,22 @@ describe('SessionWorkflowController.cmdResume', () => {
         const deps = makeDeps({
             apiClient: api,
             ui: {
+                showQuickPick: async () => ({ label: 'Resume existing session' }),
                 pathExists: (p: string) =>
                     p === '/scene-1.md' || p === '/scene-2.md' || p === '/scene-3.md',
                 getOpenTextDocumentPaths: () => ['/SCENE-1.md', '/scene-3.md'],
-                showTextDocument: async (fsPath: string) => {
-                    opened.push(fsPath);
+                showTextDocument: async (fsPath: string, options?: any) => {
+                    opened.push({ fsPath, options });
                     return undefined;
                 },
             },
         });
         const ctrl = new SessionWorkflowController(deps);
 
-        await ctrl.cmdResume();
+        await ctrl.cmdAnalyze();
 
-        assert.deepEqual(opened, ['/scene-2.md']);
+        assert.deepEqual(opened.map((entry) => entry.fsPath), ['/scene-2.md']);
+        assert.equal(opened[0].options?.viewColumn, undefined);
     });
 });
 
@@ -419,7 +660,7 @@ describe('SessionWorkflowController.cmdRejectFinding', () => {
 // cmdClearSession
 // ---------------------------------------------------------------------------
 
-describe('SessionWorkflowController.cmdClearSession', () => {
+describe('SessionWorkflowController.cmdDeleteSession', () => {
     it('does not clear when user does not confirm', async () => {
         let clearCalled = false;
         const api = makeApiClient({ clearSession: async () => { clearCalled = true; } });
@@ -429,23 +670,21 @@ describe('SessionWorkflowController.cmdClearSession', () => {
         });
         const ctrl = new SessionWorkflowController(deps);
 
-        await ctrl.cmdClearSession();
+        await ctrl.cmdDeleteSession();
 
         assert.ok(!clearCalled, 'clearSession should not be called when user cancels');
     });
 
-    it('clears state and shows info message when user confirms', async () => {
+    it('shows info message when user confirms session deletion', async () => {
         const deps = makeDeps({
-            stateOverrides: { allFindings: [{ number: 1 }] },
             ui: { showWarningMessage: async () => 'Delete' },
         });
         const ctrl = new SessionWorkflowController(deps);
         const messages: string[] = (deps.ui as any)._messages;
 
-        await ctrl.cmdClearSession();
+        await ctrl.cmdDeleteSession({ session: { id: 99 } });
 
-        assert.equal(deps.state.allFindings.length, 0, 'allFindings should be cleared');
-        assert.ok(messages.some(m => m.includes('cleared')));
+        assert.ok(messages.some(m => m.includes('deleted')), 'expected deleted confirmation message');
     });
 });
 
@@ -491,40 +730,325 @@ describe('SessionWorkflowController.cmdRerunAnalysis', () => {
 });
 
 // ---------------------------------------------------------------------------
+// cmdRefreshKnowledge
+// ---------------------------------------------------------------------------
+
+describe('SessionWorkflowController.cmdRefreshKnowledge', () => {
+    it('shows extraction-skipped note when refresh has no stale scenes', async () => {
+        const api = makeApiClient({
+            refreshKnowledge: async () => ({
+                scene_updated: 0,
+                index_updated: 1,
+                extraction: {
+                    reason: 'no_stale_scenes',
+                    failed: [],
+                },
+            }),
+        });
+        const deps = makeDeps({ apiClient: api });
+        const ctrl = new SessionWorkflowController(deps);
+        const messages: string[] = (deps.ui as any)._messages;
+
+        await ctrl.cmdRefreshKnowledge();
+
+        assert.ok(
+            messages.some((m) => m.includes('Knowledge refreshed (0 scenes, 1 indexes updated). Extraction skipped (no stale scenes).')),
+            'expected refresh info message to include no-stale-scenes extraction note',
+        );
+        assert.ok(
+            !messages.some((m) => m.includes('Knowledge extraction issue')),
+            'did not expect extraction warning for no_stale_scenes',
+        );
+    });
+
+    it('shows extraction warning when extraction is unavailable', async () => {
+        const api = makeApiClient({
+            refreshKnowledge: async () => ({
+                scene_updated: 1,
+                index_updated: 0,
+                extraction: {
+                    reason: 'extraction_unavailable',
+                    error: 'No API key for provider',
+                    failed: [],
+                },
+            }),
+        });
+        const deps = makeDeps({ apiClient: api });
+        const ctrl = new SessionWorkflowController(deps);
+        const messages: string[] = (deps.ui as any)._messages;
+
+        await ctrl.cmdRefreshKnowledge();
+
+        // When extraction is unavailable, the controller shows a warning (not an info message).
+        // The warning replaces the "Knowledge refreshed" info message for this case.
+        assert.ok(
+            !messages.some((m) => m.startsWith('info:') && m.includes('Knowledge refreshed')),
+            'did not expect a Knowledge refreshed info message when extraction is unavailable',
+        );
+        assert.ok(
+            messages.some(
+                (m) => m.startsWith('warn:') && m.includes('extraction failed (extraction_unavailable)') && m.includes('Categories may remain empty.'),
+            ),
+            'expected warning message explaining extraction is unavailable',
+        );
+    });
+});
+
+// ---------------------------------------------------------------------------
+// cmdEditKnowledgeEntry / cmdResetKnowledgeOverride
+// ---------------------------------------------------------------------------
+
+describe('SessionWorkflowController knowledge override commands', () => {
+    it('submits override and refreshes tree for selected knowledge field', async () => {
+        const submitCalls: Array<[string, string, string, string, string]> = [];
+        let refreshCount = 0;
+        const api = makeApiClient({
+            submitOverride: async (...args: [string, string, string, string, string]) => {
+                submitCalls.push(args);
+                return { updated: true, category: args[0], entity_key: args[1], field_name: args[2] };
+            },
+        });
+        const knowledgeTreeProvider = {
+            setApiClient: () => {},
+            setProjectPath: () => {},
+            refresh: async () => { refreshCount += 1; },
+            setFlaggedEntities: () => {},
+            clearFlaggedEntities: () => {},
+        };
+        const ui = makeUiPort({
+            showQuickPick: async (items: any[]) => items.find((item: any) => item.label === 'category'),
+            showInputBox: async () => 'Protagonist',
+        });
+        const deps = {
+            ...makeDeps({ apiClient: api, ui }),
+            knowledgeTreeProvider,
+        } as WorkflowDeps;
+        const ctrl = new SessionWorkflowController(deps);
+        const messages: string[] = (ui as any)._messages;
+
+        await ctrl.cmdEditKnowledgeEntry({
+            category: 'characters',
+            entityKey: 'char:alice',
+            label: 'Alice',
+            entity: { entity_key: 'char:alice', name: 'Alice', category: 'Lead' },
+            overrideFields: ['category'],
+            overrideCount: 1,
+            hasOverrides: true,
+        });
+
+        assert.deepEqual(submitCalls, [[
+            'characters',
+            'char:alice',
+            'category',
+            'Protagonist',
+            '/project',
+        ]]);
+        assert.equal(refreshCount, 1);
+        assert.ok(messages.some((m) => m.includes('Saved category override for Alice.')));
+    });
+
+    it('keeps the V1 edit flow working for tree items that wrap the knowledge payload', async () => {
+        const submitCalls: Array<[string, string, string, string, string]> = [];
+        let refreshCount = 0;
+        const api = makeApiClient({
+            submitOverride: async (...args: [string, string, string, string, string]) => {
+                submitCalls.push(args);
+                return { updated: true, category: args[0], entity_key: args[1], field_name: args[2] };
+            },
+        });
+        const knowledgeTreeProvider = {
+            setApiClient: () => {},
+            setProjectPath: () => {},
+            refresh: async () => { refreshCount += 1; },
+            setFlaggedEntities: () => {},
+            clearFlaggedEntities: () => {},
+        };
+        const ui = makeUiPort({
+            showQuickPick: async (items: any[]) => items.find((item: any) => item.label === 'name'),
+            showInputBox: async () => 'Alice Liddell',
+        });
+        const deps = {
+            ...makeDeps({ apiClient: api, ui }),
+            knowledgeTreeProvider,
+        } as WorkflowDeps;
+        const ctrl = new SessionWorkflowController(deps);
+
+        await ctrl.cmdEditKnowledgeEntry({
+            payload: {
+                category: 'characters',
+                entityKey: 'char:alice',
+                label: 'Alice',
+                entity: { entity_key: 'char:alice', name: 'Alice', role: 'Lead' },
+                overrideFields: ['role'],
+                overrideCount: 1,
+                hasOverrides: true,
+            },
+        });
+
+        assert.deepEqual(submitCalls, [[
+            'characters',
+            'char:alice',
+            'name',
+            'Alice Liddell',
+            '/project',
+        ]]);
+        assert.equal(refreshCount, 1);
+    });
+
+    it('stops edit flow when payload is malformed', async () => {
+        let submitCalled = false;
+        const api = makeApiClient({
+            submitOverride: async () => {
+                submitCalled = true;
+                return { updated: true, category: 'characters', entity_key: 'x', field_name: 'name' };
+            },
+        });
+        const deps = makeDeps({ apiClient: api });
+        const ctrl = new SessionWorkflowController(deps);
+        const messages: string[] = (deps.ui as any)._messages;
+
+        await ctrl.cmdEditKnowledgeEntry({ label: 'Bad payload' });
+
+        assert.equal(submitCalled, false);
+        assert.ok(messages.some((m) => m.includes('Could not determine knowledge entry to edit.')));
+    });
+
+    it('does not submit override when quick pick is cancelled', async () => {
+        let submitCalled = false;
+        const api = makeApiClient({
+            submitOverride: async () => {
+                submitCalled = true;
+                return { updated: true, category: 'characters', entity_key: 'x', field_name: 'name' };
+            },
+        });
+        const ui = makeUiPort({ showQuickPick: async () => undefined });
+        const deps = makeDeps({ apiClient: api, ui });
+        const ctrl = new SessionWorkflowController(deps);
+
+        await ctrl.cmdEditKnowledgeEntry({
+            category: 'characters',
+            entityKey: 'char:alice',
+            label: 'Alice',
+            entity: { entity_key: 'char:alice', name: 'Alice', category: 'Lead' },
+            overrideFields: [],
+            overrideCount: 0,
+            hasOverrides: false,
+        });
+
+        assert.equal(submitCalled, false);
+    });
+
+    it('resets selected override field and refreshes tree', async () => {
+        const deleteCalls: Array<[string, string, string, string]> = [];
+        let refreshCount = 0;
+        const api = makeApiClient({
+            deleteOverride: async (...args: [string, string, string, string]) => {
+                deleteCalls.push(args);
+                return { deleted: true, category: args[0], entity_key: args[1], field_name: args[2] };
+            },
+        });
+        const knowledgeTreeProvider = {
+            setApiClient: () => {},
+            setProjectPath: () => {},
+            refresh: async () => { refreshCount += 1; },
+            setFlaggedEntities: () => {},
+            clearFlaggedEntities: () => {},
+        };
+        const ui = makeUiPort({
+            showQuickPick: async (items: any[]) => items.find((item: any) => item.label === 'role'),
+        });
+        const deps = {
+            ...makeDeps({ apiClient: api, ui }),
+            knowledgeTreeProvider,
+        } as WorkflowDeps;
+        const ctrl = new SessionWorkflowController(deps);
+        const messages: string[] = (ui as any)._messages;
+
+        await ctrl.cmdResetKnowledgeOverride({
+            category: 'characters',
+            entityKey: 'char:alice',
+            label: 'Alice',
+            entity: { entity_key: 'char:alice', name: 'Alice', role: 'Lead' },
+            overrideFields: ['category', 'role'],
+            overrideCount: 2,
+            hasOverrides: true,
+        });
+
+        assert.deepEqual(deleteCalls, [[
+            'characters',
+            'char:alice',
+            'role',
+            '/project',
+        ]]);
+        assert.equal(refreshCount, 1);
+        assert.ok(messages.some((m) => m.includes('Reset role override for Alice.')));
+    });
+
+    it('shows error when reset is requested for an entity without overrides', async () => {
+        let deleteCalled = false;
+        const api = makeApiClient({
+            deleteOverride: async () => {
+                deleteCalled = true;
+                return { deleted: true, category: 'characters', entity_key: 'x', field_name: 'name' };
+            },
+        });
+        const deps = makeDeps({ apiClient: api });
+        const ctrl = new SessionWorkflowController(deps);
+        const messages: string[] = (deps.ui as any)._messages;
+
+        await ctrl.cmdResetKnowledgeOverride({
+            category: 'characters',
+            entityKey: 'char:alice',
+            label: 'Alice',
+            entity: { entity_key: 'char:alice', name: 'Alice' },
+            overrideFields: [],
+            overrideCount: 0,
+            hasOverrides: false,
+        });
+
+        assert.equal(deleteCalled, false);
+        assert.ok(messages.some((m) => m.includes('has no overrides to reset')));
+    });
+});
+
+// ---------------------------------------------------------------------------
 // cmdSelectModel
 // ---------------------------------------------------------------------------
 
 describe('SessionWorkflowController.cmdSelectModel', () => {
-    it('preselects the currently configured model in quick pick', async () => {
+    it('preselects the currently configured analysis mode in quick pick', async () => {
         const quickPickCalls: Array<{ items: any[]; options?: any }> = [];
-        let updatedModel: string | undefined;
+        let updatedMode: string | undefined;
 
         const api = makeApiClient({
             getConfig: async () => ({
-                available_models: {
-                    sonnet: { label: 'Sonnet 4.5' },
-                    opus: { label: 'Opus 4.6' },
-                },
-                default_model: 'opus',
+                available_models: { sonnet: { label: 'Sonnet 4.5' } },
+                default_model: 'sonnet',
+                analysis_modes: ['quick', 'deep'],
+                model_slots: { frontier: 'sonnet', deep: 'sonnet', quick: 'haiku' },
+                default_model_slots: { frontier: 'sonnet', deep: 'sonnet', quick: 'haiku' },
             }),
         });
 
         const ui = makeUiPort({
             showQuickPick: async (items: any[], options?: any) => {
                 quickPickCalls.push({ items, options });
-                return items.find((i: any) => i.label === 'sonnet');
+                if (quickPickCalls.length === 1) {
+                    return items.find((i: any) => i.action === 'analysisMode');
+                }
+                return items.find((i: any) => i.label === 'quick');
             },
             getExtensionConfig: () => ({
-                inspect: (key: string) => key === 'analysisModel' ? { workspaceValue: 'sonnet' } : undefined,
+                inspect: (_key: string) => undefined,
                 get: (key: string, def: any) => {
-                    if (key === 'analysisModel') {
-                        return 'sonnet';
+                    if (key === 'analysisMode') {
+                        return 'deep';
                     }
                     return def;
                 },
                 update: async (key: string, value: string) => {
-                    if (key === 'analysisModel') {
-                        updatedModel = value;
+                    if (key === 'analysisMode') {
+                        updatedMode = value;
                     }
                 },
             } as any),
@@ -535,13 +1059,68 @@ describe('SessionWorkflowController.cmdSelectModel', () => {
 
         await ctrl.cmdSelectModel();
 
-        assert.equal(quickPickCalls.length, 1, 'Expected one quick pick invocation');
-        assert.equal(quickPickCalls[0].options?.activeItemLabel, 'sonnet');
+        assert.equal(quickPickCalls.length, 2, 'Expected two quick pick invocations');
+        assert.equal(quickPickCalls[0].options?.placeHolder, 'Select setting to configure');
+        assert.equal(quickPickCalls[1].options?.activeItemLabel, 'deep');
         assert.ok(
-            quickPickCalls[0].items.some((item: any) => item.label === 'sonnet' && item.detail === 'Current model'),
-            'Expected currently configured model to be marked as Current model',
+            quickPickCalls[1].items.some((item: any) => item.label === 'deep' && item.detail === 'Current mode'),
+            'Expected currently configured mode to be marked as Current mode',
         );
-        assert.equal(updatedModel, 'sonnet');
+        assert.equal(updatedMode, 'quick');
+    });
+
+    it('updates selected model slot from available models', async () => {
+        const quickPickCalls: Array<{ items: any[]; options?: any }> = [];
+        const updates: Array<{ key: string; value: string; target: number }> = [];
+
+        const api = makeApiClient({
+            getConfig: async () => ({
+                available_models: {
+                    sonnet: { label: 'Sonnet 4.5', provider: 'anthropic' },
+                    opus: { label: 'Opus 4.1', provider: 'anthropic' },
+                },
+                default_model: 'sonnet',
+                analysis_modes: ['quick', 'deep'],
+                model_slots: { frontier: 'sonnet', deep: 'sonnet', quick: 'haiku' },
+                default_model_slots: { frontier: 'sonnet', deep: 'sonnet', quick: 'haiku' },
+            }),
+        });
+
+        const ui = makeUiPort({
+            showQuickPick: async (items: any[], options?: any) => {
+                quickPickCalls.push({ items, options });
+                if (quickPickCalls.length === 1) {
+                    return items.find((i: any) => i.action === 'modelSlotDeep');
+                }
+                return items.find((i: any) => i.value === 'opus');
+            },
+            getExtensionConfig: () => ({
+                inspect: (_key: string) => undefined,
+                get: (key: string, def: any) => {
+                    if (key === 'analysisMode') {
+                        return 'deep';
+                    }
+                    return def;
+                },
+                update: async (key: string, value: string, target: number) => {
+                    updates.push({ key, value, target });
+                },
+            } as any),
+        });
+
+        const deps = makeDeps({ apiClient: api, ui });
+        const ctrl = new SessionWorkflowController(deps);
+        const messages: string[] = (ui as any)._messages;
+
+        await ctrl.cmdSelectModel();
+
+        assert.equal(quickPickCalls.length, 2, 'Expected action + model picker quick picks');
+        assert.equal(quickPickCalls[1].options?.placeHolder, 'Select model for Deep slot');
+        assert.deepEqual(updates, [{ key: 'modelSlotDeep', value: 'opus', target: 2 }]);
+        assert.ok(
+            messages.some((m) => m.includes('Deep slot set to Opus 4.1 (opus).')),
+            'Expected success message for updated deep slot',
+        );
     });
 });
 
@@ -612,6 +1191,68 @@ describe('SessionWorkflowController.cmdViewSession', () => {
 
         assert.deepEqual(opened, ['/scene-1.md', '/scene-2.md']);
     });
+
+    it('loads a completed session in read-only mode without resuming it', async () => {
+        const messages: string[] = [];
+        const viewCalls: boolean[] = [];
+        const api = makeApiClient({
+            getSessionDetail: async () => ({ id: 7, status: 'completed', scene_path: '/scene-1.md', current_index: 0 }),
+            resumeSessionByIdWithRecovery: async () => {
+                throw new Error('should not resume completed session');
+            },
+            viewSessionWithRecovery: async (_projectPath: string, sessionId: number, _scenePath?: string, _prompt?: unknown, reopen = false) => {
+                viewCalls.push(reopen);
+                return {
+                    error: null,
+                    session_id: sessionId,
+                    total_findings: 1,
+                    current_index: 0,
+                    scene_path: '/scene-1.md',
+                    scene_paths: ['/scene-1.md'],
+                    findings_status: [{ number: 1, severity: 'major', lens: 'style', location: 'Paragraph 1', status: 'pending' }],
+                    counts: { critical: 0, major: 1, minor: 0 },
+                    model: { label: 'm' },
+                };
+            },
+            getCurrentFinding: async () => ({
+                complete: false,
+                finding: {
+                    number: 1,
+                    severity: 'major',
+                    lens: 'style',
+                    location: 'Paragraph 1',
+                    line_start: 1,
+                    line_end: 1,
+                    scene_path: '/scene-1.md',
+                    evidence: 'Example',
+                    impact: '',
+                    options: [],
+                    flagged_by: [],
+                    ambiguity_type: null,
+                    stale: false,
+                    status: 'pending',
+                },
+                current: 1,
+                total: 1,
+                is_ambiguity: false,
+            }),
+        });
+        const deps = makeDeps({
+            apiClient: api,
+            ui: {
+                pathExists: () => true,
+                showTextDocument: async () => undefined,
+                showInformationMessage: async (m: string) => { messages.push(m); return undefined; },
+            },
+        });
+        const ctrl = new SessionWorkflowController(deps);
+
+        await ctrl.cmdViewSession({ session: { id: 7 } });
+
+        assert.deepEqual(viewCalls, [false]);
+        assert.equal(deps.state.closedSessionNotice, 'Viewing completed session — actions will reopen it.');
+        assert.ok(messages.some((m) => m.includes('Viewing completed session: 1 findings')));
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -619,6 +1260,137 @@ describe('SessionWorkflowController.cmdViewSession', () => {
 // ---------------------------------------------------------------------------
 
 describe('SessionWorkflowController.handleFindingAction', () => {
+    it('reopens a viewed closed session before accepting a finding', async () => {
+        const events: string[] = [];
+        const api = makeApiClient({
+            getSessionDetail: async () => ({ id: 7, status: 'completed', scene_path: '/scene-1.md', current_index: 0 }),
+            viewSessionWithRecovery: async (_projectPath: string, sessionId: number, _scenePath?: string, _prompt?: unknown, reopen = false) => {
+                events.push(`view:${reopen}`);
+                return {
+                    error: null,
+                    session_id: sessionId,
+                    total_findings: 1,
+                    current_index: 0,
+                    scene_path: '/scene-1.md',
+                    scene_paths: ['/scene-1.md'],
+                    findings_status: [{ number: 1, severity: 'major', lens: 'style', location: 'Paragraph 1', status: 'pending' }],
+                    counts: { critical: 0, major: 1, minor: 0 },
+                    model: { label: 'm' },
+                };
+            },
+            getCurrentFinding: async () => ({
+                complete: false,
+                finding: {
+                    number: 1,
+                    severity: 'major',
+                    lens: 'style',
+                    location: 'Paragraph 1',
+                    line_start: 1,
+                    line_end: 1,
+                    scene_path: '/scene-1.md',
+                    evidence: 'Example',
+                    impact: '',
+                    options: [],
+                    flagged_by: [],
+                    ambiguity_type: null,
+                    stale: false,
+                    status: 'pending',
+                },
+                current: 1,
+                total: 1,
+                is_ambiguity: false,
+            }),
+            acceptFinding: async () => {
+                events.push('accept');
+                return { next: { complete: false, finding: null, current: 1, total: 1 } };
+            },
+        });
+        const messages: string[] = [];
+        const deps = makeDeps({
+            apiClient: api,
+            ui: {
+                pathExists: () => true,
+                showTextDocument: async () => undefined,
+                showInformationMessage: async (m: string) => { messages.push(m); return undefined; },
+            },
+            stateOverrides: { allFindings: [], currentFindingIndex: 0 },
+        });
+        const ctrl = new SessionWorkflowController(deps);
+
+        await ctrl.cmdViewSession({ session: { id: 7 } });
+        await ctrl.handleFindingAction('accept');
+
+        assert.deepEqual(events.filter((event) => event.startsWith('view:')), ['view:false', 'view:true']);
+        assert.ok(events.indexOf('accept') > events.indexOf('view:true'));
+        assert.equal(deps.state.closedSessionNotice, undefined);
+        assert.equal(deps.state.allFindings[0].status, 'accepted');
+        assert.ok(messages.some((m) => m.includes('Session reopened for editing.')));
+    });
+
+    it('reopens a viewed closed session before marking ambiguity', async () => {
+        const events: string[] = [];
+        const api = makeApiClient({
+            getSessionDetail: async () => ({ id: 7, status: 'abandoned', scene_path: '/scene-1.md', current_index: 0 }),
+            viewSessionWithRecovery: async (_projectPath: string, sessionId: number, _scenePath?: string, _prompt?: unknown, reopen = false) => {
+                events.push(`view:${reopen}`);
+                return {
+                    error: null,
+                    session_id: sessionId,
+                    total_findings: 1,
+                    current_index: 0,
+                    scene_path: '/scene-1.md',
+                    scene_paths: ['/scene-1.md'],
+                    findings_status: [{ number: 1, severity: 'major', lens: 'style', location: 'Paragraph 1', status: 'pending' }],
+                    counts: { critical: 0, major: 1, minor: 0 },
+                    model: { label: 'm' },
+                };
+            },
+            getCurrentFinding: async () => ({
+                complete: false,
+                finding: {
+                    number: 1,
+                    severity: 'major',
+                    lens: 'style',
+                    location: 'Paragraph 1',
+                    line_start: 1,
+                    line_end: 1,
+                    scene_path: '/scene-1.md',
+                    evidence: 'Example',
+                    impact: '',
+                    options: [],
+                    flagged_by: [],
+                    ambiguity_type: null,
+                    stale: false,
+                    status: 'pending',
+                },
+                current: 1,
+                total: 1,
+                is_ambiguity: false,
+            }),
+            markAmbiguity: async () => {
+                events.push('ambiguity');
+            },
+        });
+        const messages: string[] = [];
+        const deps = makeDeps({
+            apiClient: api,
+            ui: {
+                pathExists: () => true,
+                showTextDocument: async () => undefined,
+                showInformationMessage: async (m: string) => { messages.push(m); return undefined; },
+            },
+        });
+        const ctrl = new SessionWorkflowController(deps);
+
+        await ctrl.cmdViewSession({ session: { id: 7 } });
+        await ctrl.handleFindingAction('ambiguity', true);
+
+        assert.deepEqual(events, ['view:false', 'view:true', 'ambiguity']);
+        assert.equal(deps.state.closedSessionNotice, undefined);
+        assert.ok(messages.some((m) => m.includes('Session reopened for editing.')));
+        assert.ok(messages.some((m) => m.includes('Marked as intentional')));
+    });
+
     it('dispatches accept action to cmdAcceptFinding path', async () => {
         let acceptCalled = false;
         const api = makeApiClient({

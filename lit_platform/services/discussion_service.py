@@ -16,6 +16,7 @@ from lit_platform.session_state_machine import (
 from lit_platform.runtime.llm import LLMResponse
 from lit_platform.runtime.models import Finding, SessionState
 from lit_platform.runtime.prompts import build_discussion_messages, get_discussion_system_prompt
+from lit_platform.services.analysis_service import resolve_model
 
 
 def _resolve_finding_scene_content(state: SessionState, finding: Finding) -> str:
@@ -183,7 +184,7 @@ async def discuss_finding(state: SessionState, finding: Finding, user_message: s
 
     try:
         response = await state.effective_discussion_client.create_message(
-            model=state.discussion_model_id,
+            model=resolve_model(state.effective_frontier_model)["id"],
             max_tokens=1024,
             messages=messages,
             system=system_prompt,
@@ -214,7 +215,7 @@ async def discuss_finding_stream(state: SessionState, finding: Finding, user_mes
     try:
         raw_response = ""
         async for item in state.effective_discussion_client.stream_message(
-            model=state.discussion_model_id,
+            model=resolve_model(state.effective_frontier_model)["id"],
             max_tokens=1024,
             messages=messages,
             system=system_prompt,

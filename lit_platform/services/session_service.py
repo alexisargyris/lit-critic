@@ -5,8 +5,11 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from lit_platform.persistence import FindingStore, SessionStore, get_connection
+from lit_platform.persistence import FindingStore, SessionStore
+from lit_platform.persistence.database import get_connection, get_passive_connection
+from lit_platform.persistence.path_utils import to_absolute, to_relative
 from lit_platform.runtime.config import CONTEXT_FILES
+from lit_platform.runtime.prompts import get_session_summary_prompt
 from lit_platform.session_state_machine import (
     all_findings_considered as platform_all_findings_considered,
     first_unresolved_index,
@@ -15,6 +18,7 @@ from lit_platform.session_state_machine import (
 )
 from lit_platform.runtime.models import Finding, SessionState
 from lit_platform.runtime.utils import apply_scene_change, concatenate_scenes
+from lit_platform.services.index_service import get_finding_index_context
 from lit_platform.services.learning_service import generate_learning_markdown, load_learning_from_db
 
 
@@ -73,6 +77,7 @@ def detect_index_context_changes(state: SessionState) -> Optional[dict]:
                 index_context_stale=False,
                 index_rerun_prompted=False,
                 index_changed_files=[],
+                project_path=state.project_path,
             )
         return None
 
@@ -103,6 +108,7 @@ def detect_index_context_changes(state: SessionState) -> Optional[dict]:
                 index_context_stale=False,
                 index_rerun_prompted=False,
                 index_changed_files=[],
+                project_path=state.project_path,
             )
         return None
 
@@ -118,6 +124,7 @@ def detect_index_context_changes(state: SessionState) -> Optional[dict]:
             state.session_id,
             changed_files=changed_files,
             prompted=state.index_rerun_prompted,
+            project_path=state.project_path,
         )
 
     return {
@@ -158,19 +165,22 @@ def create_session(state: SessionState, glossary_issues: list[str] | None = None
         scene_path=state.scene_path,
         scene_hash=scene_hash,
         model=state.model,
+        depth_mode=getattr(state, "depth_mode", None),
+        frontier_model=getattr(state, "effective_frontier_model", None),
+        checker_model=getattr(state, "effective_checker_model", None),
         scene_paths=state.scene_paths or [state.scene_path],
         glossary_issues=glossary_issues or state.glossary_issues,
         discussion_model=state.discussion_model,
-        lens_preferences=state.lens_preferences,
         index_context_hash=state.index_context_hash,
         index_context_stale=state.index_context_stale,
         index_rerun_prompted=state.index_rerun_prompted,
         index_changed_files=state.index_changed_files,
+        project_path=state.project_path,
     )
     state.session_id = session_id
 
     findings_dicts = [f.to_dict(include_state=True) for f in state.findings]
-    FindingStore.save_all(conn, session_id, findings_dicts)
+    FindingStore.save_all(conn, session_id, findings_dicts, project_path=state.project_path)
 
     conn.execute(
         "UPDATE session SET total_findings = ? WHERE id = ?",
@@ -182,52 +192,43 @@ def create_session(state: SessionState, glossary_issues: list[str] | None = None
     return session_id
 
 
-def check_active_session(project_path: Path) -> Optional[dict]:
-    """Check if an active session exists for the project."""
-    conn = get_connection(project_path)
-    try:
-        session_data = SessionStore.load_active(conn)
-        if session_data is None:
-            return {"exists": False}
-
-        findings = FindingStore.load_all(conn, session_data["id"])
-        return {
-            "exists": True,
-            "session_id": session_data["id"],
-            "scene_path": session_data.get("scene_path", ""),
-            "scene_paths": session_data.get("scene_paths", []),
-            "created_at": session_data.get("created_at", ""),
-            "current_index": session_data.get("current_index", 0),
-            "total_findings": len(findings),
-            "model": session_data.get("model", ""),
-            "discussion_model": session_data.get("discussion_model"),
-            "lens_preferences": session_data.get("lens_preferences", {}),
-        }
-    finally:
-        conn.close()
+def _get_session_read_connection(
+    project_path: Path,
+    *,
+    passive: bool,
+):
+    """Return the appropriate connection for session read operations."""
+    if passive:
+        return get_passive_connection(project_path)
+    return get_connection(project_path)
 
 
-def load_active_session(project_path: Path) -> Optional[dict]:
-    """Load the full active session data including findings."""
-    conn = get_connection(project_path)
-    session_data = SessionStore.load_active(conn)
+def _build_active_session_payload(
+    conn,
+    *,
+    refresh_counts: bool,
+    project_path: Path | None = None,
+) -> Optional[dict]:
+    """Load active session data and findings into a serializable payload."""
+    session_data = SessionStore.load_active(conn, project_path=project_path)
     if session_data is None:
-        conn.close()
         return None
 
-    findings = FindingStore.load_all(conn, session_data["id"])
-    SessionStore.update_counts(conn, session_data["id"])
-    session_data = SessionStore.get(conn, session_data["id"])
+    findings = FindingStore.load_all(conn, session_data["id"], project_path=project_path)
+    if refresh_counts:
+        SessionStore.update_counts(conn, session_data["id"])
+        session_data = SessionStore.get(conn, session_data["id"], project_path=project_path)
 
     return {
-        "_conn": conn,
         "session_id": session_data["id"],
         "scene_path": session_data.get("scene_path", ""),
         "scene_paths": session_data.get("scene_paths", []),
         "scene_hash": session_data.get("scene_hash", ""),
         "model": session_data.get("model", ""),
         "discussion_model": session_data.get("discussion_model"),
-        "lens_preferences": session_data.get("lens_preferences", {}),
+        "depth_mode": session_data.get("depth_mode"),
+        "frontier_model": session_data.get("frontier_model"),
+        "checker_model": session_data.get("checker_model"),
         "current_index": session_data.get("current_index", 0),
         "glossary_issues": session_data.get("glossary_issues", []),
         "discussion_history": session_data.get("discussion_history", []),
@@ -244,29 +245,69 @@ def load_active_session(project_path: Path) -> Optional[dict]:
     }
 
 
-def load_session_by_id(project_path: Path, session_id: int) -> Optional[dict]:
-    """Load a specific session by id including findings."""
-    conn = get_connection(project_path)
-    session_data = SessionStore.get(conn, session_id)
-    if session_data is None:
+def check_active_session(project_path: Path, passive: bool = False) -> Optional[dict]:
+    """Check if an active session exists for the project."""
+    conn = _get_session_read_connection(project_path, passive=passive)
+    if conn is None:
+        return {"exists": False}
+
+    try:
+        session_data = SessionStore.load_active(conn, project_path=project_path)
+        if session_data is None:
+            return {"exists": False}
+
+        findings = FindingStore.load_all(conn, session_data["id"], project_path=project_path)
+        return {
+            "exists": True,
+            "session_id": session_data["id"],
+            "scene_path": session_data.get("scene_path", ""),
+            "scene_paths": session_data.get("scene_paths", []),
+            "created_at": session_data.get("created_at", ""),
+            "current_index": session_data.get("current_index", 0),
+            "total_findings": len(findings),
+            "model": session_data.get("model", ""),
+            "discussion_model": session_data.get("discussion_model"),
+        }
+    finally:
+        conn.close()
+
+
+def load_active_session(project_path: Path, passive: bool = False) -> Optional[dict]:
+    """Load the full active session data including findings."""
+    conn = _get_session_read_connection(project_path, passive=passive)
+    if conn is None:
+        return None
+
+    if passive:
+        try:
+            return _build_active_session_payload(conn, refresh_counts=False, project_path=project_path)
+        finally:
+            conn.close()
+
+    session_payload = _build_active_session_payload(conn, refresh_counts=True, project_path=project_path)
+    if session_payload is None:
         conn.close()
         return None
 
-    if session_data.get("status") == "active":
-        SessionStore.update_counts(conn, session_id)
-        session_data = SessionStore.get(conn, session_id)
+    session_payload["_conn"] = conn
+    return session_payload
 
-    findings = FindingStore.load_all(conn, session_id)
 
+def _build_session_payload(
+    session_data: dict,
+    findings: list[dict],
+) -> dict:
+    """Normalize persisted session data into the session payload shape."""
     return {
-        "_conn": conn,
         "session_id": session_data["id"],
         "scene_path": session_data.get("scene_path", ""),
         "scene_paths": session_data.get("scene_paths", []),
         "scene_hash": session_data.get("scene_hash", ""),
         "model": session_data.get("model", ""),
         "discussion_model": session_data.get("discussion_model"),
-        "lens_preferences": session_data.get("lens_preferences", {}),
+        "depth_mode": session_data.get("depth_mode"),
+        "frontier_model": session_data.get("frontier_model"),
+        "checker_model": session_data.get("checker_model"),
         "current_index": session_data.get("current_index", 0),
         "glossary_issues": session_data.get("glossary_issues", []),
         "discussion_history": session_data.get("discussion_history", []),
@@ -284,6 +325,40 @@ def load_session_by_id(project_path: Path, session_id: int) -> Optional[dict]:
     }
 
 
+def load_session_by_id(
+    project_path: Path,
+    session_id: int,
+    passive: bool = False,
+) -> Optional[dict]:
+    """Load a specific session by id including findings.
+
+    When ``passive`` is true, reads use the startup-safe query-only connection
+    and skip count refreshes that would otherwise dirty the database.
+    """
+    conn = _get_session_read_connection(project_path, passive=passive)
+    if conn is None:
+        return None
+
+    session_data = SessionStore.get(conn, session_id, project_path=project_path)
+    if session_data is None:
+        conn.close()
+        return None
+
+    if session_data.get("status") == "active" and not passive:
+        SessionStore.update_counts(conn, session_id)
+        session_data = SessionStore.get(conn, session_id, project_path=project_path)
+
+    findings = FindingStore.load_all(conn, session_id, project_path=project_path)
+
+    session_payload = _build_session_payload(session_data, findings)
+    if passive:
+        conn.close()
+        return session_payload
+
+    session_payload["_conn"] = conn
+    return session_payload
+
+
 def complete_session(state: SessionState) -> bool:
     """Mark the active session as completed iff all findings are terminal."""
     if not state.db_conn or not state.session_id:
@@ -292,6 +367,42 @@ def complete_session(state: SessionState) -> bool:
         return False
     SessionStore.complete(state.db_conn, state.session_id)
     return True
+
+
+async def generate_and_save_session_summary(state: SessionState) -> Optional[str]:
+    """Generate and persist a session-end disconfirming meta-observation.
+
+    Uses the discussion model (cheaper/faster) for cost efficiency.
+    Should be called after ``complete_session()`` — the summary is
+    non-interactive and display-only.  Stored on the session row for later
+    retrieval by all clients (CLI, Web, VS Code).
+
+    Returns:
+        The generated summary text, or None if generation fails or the
+        session has no database connection.
+    """
+    if not state.db_conn or not state.session_id:
+        return None
+
+    learning_markdown = generate_learning_markdown(state.learning)
+    prompt = get_session_summary_prompt(
+        state.findings,
+        state.scene_content,
+        learning_markdown=learning_markdown,
+    )
+
+    try:
+        response = await state.effective_discussion_client.create_message(
+            model=state.discussion_model_id,
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        summary_text = response.text.strip()
+    except Exception:
+        return None
+
+    SessionStore.update_session_summary(state.db_conn, state.session_id, summary_text)
+    return summary_text
 
 
 def abandon_session(state: SessionState) -> None:
@@ -304,7 +415,7 @@ def abandon_active_session(project_path: Path) -> bool:
     """Find and abandon the active session (if any)."""
     conn = get_connection(project_path)
     try:
-        session_data = SessionStore.load_active(conn)
+        session_data = SessionStore.load_active(conn, project_path=project_path)
         if session_data is None:
             return False
         SessionStore.abandon(conn, session_data["id"])
@@ -317,10 +428,10 @@ def complete_active_session(project_path: Path) -> bool:
     """Find and complete the active session (if any)."""
     conn = get_connection(project_path)
     try:
-        session_data = SessionStore.load_active(conn)
+        session_data = SessionStore.load_active(conn, project_path=project_path)
         if session_data is None:
             return False
-        findings = FindingStore.load_all(conn, session_data["id"])
+        findings = FindingStore.load_all(conn, session_data["id"], project_path=project_path)
         if any(not is_terminal_status(f.get("status", "pending")) for f in findings):
             return False
         SessionStore.complete(conn, session_data["id"])
@@ -334,7 +445,7 @@ def _sync_session_completion_state(state: SessionState) -> None:
     if not state.db_conn or not state.session_id:
         return
 
-    session_row = SessionStore.get(state.db_conn, state.session_id)
+    session_row = SessionStore.get(state.db_conn, state.session_id, project_path=state.project_path)
     if not session_row:
         return
 
@@ -356,32 +467,298 @@ def delete_session_by_id(project_path: Path, session_id: int) -> bool:
         conn.close()
 
 
-def list_sessions(project_path: Path) -> list[dict]:
+def list_sessions(project_path: Path, passive: bool = False) -> list[dict]:
     """List all sessions for the project, newest first."""
-    conn = get_connection(project_path)
+    conn = _get_session_read_connection(project_path, passive=passive)
+    if conn is None:
+        return []
+
     try:
-        return SessionStore.list_all(conn)
+        return SessionStore.list_all(conn, project_path=project_path)
     finally:
         conn.close()
 
 
-def get_session_detail(project_path: Path, session_id: int) -> Optional[dict]:
-    """Get a session and its findings by id."""
-    conn = get_connection(project_path)
+def get_session_detail(
+    project_path: Path,
+    session_id: int,
+    passive: bool = False,
+) -> Optional[dict]:
+    """Get a session and its findings by id.
+
+    When ``passive`` is true, reads use the startup-safe query-only connection
+    and skip count refreshes that would otherwise dirty the database.
+    """
+    conn = _get_session_read_connection(project_path, passive=passive)
+    if conn is None:
+        return None
+
     try:
-        session_data = SessionStore.get(conn, session_id)
+        session_data = SessionStore.get(conn, session_id, project_path=project_path)
         if session_data is None:
             return None
 
-        if session_data.get("status") == "active":
+        if session_data.get("status") == "active" and not passive:
             SessionStore.update_counts(conn, session_id)
-            session_data = SessionStore.get(conn, session_id)
+            session_data = SessionStore.get(conn, session_id, project_path=project_path)
 
-        findings = FindingStore.load_all(conn, session_id)
+        findings = FindingStore.load_all(conn, session_id, project_path=project_path)
         session_data["findings"] = findings
         return session_data
     finally:
         conn.close()
+
+
+def get_rejection_pattern_analytics(
+    project_path: Path,
+    limit: int = 50,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict]:
+    """Aggregate rejected findings by lens/severity for analytics consumers."""
+    bounded_limit = max(1, min(int(limit), 500))
+    filters = ["f.status = ?"]
+    params: list[object] = ["rejected"]
+
+    if start_date:
+        filters.append("s.created_at >= ?")
+        params.append(start_date)
+    if end_date:
+        filters.append("s.created_at <= ?")
+        params.append(end_date)
+
+    query = f"""
+        SELECT
+            f.lens AS lens,
+            f.severity AS severity,
+            COUNT(*) AS rejection_count
+        FROM finding f
+        JOIN session s ON s.id = f.session_id
+        WHERE {' AND '.join(filters)}
+        GROUP BY f.lens, f.severity
+        ORDER BY rejection_count DESC, f.lens ASC, f.severity ASC
+        LIMIT ?
+    """
+    params.append(bounded_limit)
+
+    conn = get_connection(project_path)
+    try:
+        rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "lens": row["lens"],
+                "severity": row["severity"],
+                "rejection_count": int(row["rejection_count"]),
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
+def get_acceptance_rate_trend(
+    project_path: Path,
+    bucket: str = "daily",
+    window: int = 30,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict]:
+    """Return acceptance-rate trend points for daily/weekly buckets."""
+    bucket_expr_by_name = {
+        "daily": "date(s.created_at)",
+        "weekly": "date(s.created_at, '-' || ((CAST(strftime('%w', s.created_at) AS INTEGER) + 6) % 7) || ' days')",
+    }
+    bucket_expr = bucket_expr_by_name.get(bucket)
+    if bucket_expr is None:
+        raise ValueError(f"Unsupported bucket: {bucket}")
+
+    bounded_window = max(1, min(int(window), 366))
+    filters = ["f.status IN ('accepted', 'rejected')"]
+    params: list[object] = []
+
+    if start_date:
+        filters.append("s.created_at >= ?")
+        params.append(start_date)
+    if end_date:
+        filters.append("s.created_at <= ?")
+        params.append(end_date)
+
+    query = f"""
+        WITH aggregated AS (
+            SELECT
+                {bucket_expr} AS bucket_start,
+                SUM(CASE WHEN f.status = 'accepted' THEN 1 ELSE 0 END) AS accepted_count,
+                SUM(CASE WHEN f.status = 'rejected' THEN 1 ELSE 0 END) AS rejected_count
+            FROM finding f
+            JOIN session s ON s.id = f.session_id
+            WHERE {' AND '.join(filters)}
+            GROUP BY bucket_start
+            ORDER BY bucket_start DESC
+            LIMIT ?
+        )
+        SELECT bucket_start, accepted_count, rejected_count
+        FROM aggregated
+        ORDER BY bucket_start ASC
+    """
+    params.append(bounded_window)
+
+    conn = get_connection(project_path)
+    try:
+        rows = conn.execute(query, params).fetchall()
+        trend_points: list[dict] = []
+        for row in rows:
+            accepted_count = int(row["accepted_count"] or 0)
+            rejected_count = int(row["rejected_count"] or 0)
+            sample_size = accepted_count + rejected_count
+            acceptance_rate = accepted_count / sample_size if sample_size else 0.0
+            trend_points.append(
+                {
+                    "bucket_start": row["bucket_start"],
+                    "accepted_count": accepted_count,
+                    "rejected_count": rejected_count,
+                    "sample_size": sample_size,
+                    "acceptance_rate": round(acceptance_rate, 4),
+                }
+            )
+        return trend_points
+    finally:
+        conn.close()
+
+
+def get_scene_finding_history(
+    project_path: Path,
+    scene_id: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """Return findings for a scene across sessions, newest-first with pagination."""
+    if not scene_id:
+        return []
+
+    bounded_limit = max(1, min(int(limit), 500))
+    bounded_offset = max(0, int(offset))
+    query = """
+        SELECT
+            f.id,
+            f.session_id,
+            f.number,
+            f.severity,
+            f.lens,
+            f.location,
+            f.line_start,
+            f.line_end,
+            f.scene_path,
+            f.evidence,
+            f.impact,
+            f.options,
+            f.flagged_by,
+            f.ambiguity_type,
+            f.stale,
+            f.status,
+            f.author_response,
+            f.discussion_turns,
+            f.revision_history,
+            f.outcome_reason,
+            f.origin,
+            s.created_at AS session_created_at,
+            s.completed_at AS session_completed_at,
+            s.status AS session_status
+        FROM finding f
+        JOIN session s ON s.id = f.session_id
+        WHERE f.scene_path = ?
+        ORDER BY s.created_at DESC, s.id DESC, f.id DESC
+        LIMIT ? OFFSET ?
+    """
+
+    # scene_id may be absolute; DB stores relative paths after v13 migration
+    stored_scene_id = to_relative(project_path, scene_id)
+
+    conn = get_connection(project_path)
+    try:
+        rows = conn.execute(query, (stored_scene_id, bounded_limit, bounded_offset)).fetchall()
+        result: list[dict] = []
+        for row in rows:
+            entry = dict(row)
+            for key in ("options", "flagged_by", "discussion_turns", "revision_history"):
+                if isinstance(entry.get(key), str):
+                    try:
+                        entry[key] = json.loads(entry[key])
+                    except (json.JSONDecodeError, TypeError):
+                        entry[key] = []
+            entry["stale"] = bool(entry.get("stale", 0))
+            # Absolutize scene_path before returning
+            if entry.get("scene_path"):
+                abs_path = to_absolute(project_path, entry["scene_path"])
+                if abs_path is not None:
+                    entry["scene_path"] = str(abs_path)
+            result.append(entry)
+        return result
+    finally:
+        conn.close()
+
+
+def get_finding_index_context_for_session(
+    project_path: Path,
+    session_id: int,
+    finding_number: int,
+    *,
+    scopes: list[str] | None = None,
+    max_matches_per_scope: int = 3,
+) -> dict:
+    """Return deterministic index context for a persisted finding in a session."""
+    conn = get_connection(project_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT
+                location,
+                evidence,
+                impact,
+                author_response,
+                options
+            FROM finding
+            WHERE session_id = ? AND number = ?
+            """,
+            (session_id, finding_number),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        return {
+            "filters": {
+                "scopes": list(scopes or ["cast", "glossary"]),
+                "max_matches_per_scope": max(1, int(max_matches_per_scope)),
+            },
+            "summary": {
+                "candidate_entry_count": 0,
+                "match_count": 0,
+            },
+            "rows": [],
+        }
+
+    finding_payload = {
+        "location": row["location"] or "",
+        "evidence": row["evidence"] or "",
+        "impact": row["impact"] or "",
+        "author_response": row["author_response"] or "",
+        "options": [],
+    }
+    options_raw = row["options"]
+    if isinstance(options_raw, str) and options_raw.strip():
+        try:
+            decoded = json.loads(options_raw)
+        except json.JSONDecodeError:
+            decoded = []
+        if isinstance(decoded, list):
+            finding_payload["options"] = [str(item) for item in decoded]
+
+    return get_finding_index_context(
+        project_path,
+        finding_payload,
+        scopes=scopes,
+        max_matches_per_scope=max_matches_per_scope,
+    )
 
 
 def validate_session(
@@ -550,6 +927,8 @@ async def detect_and_apply_scene_changes(state: SessionState,
         if f.stale and f.status not in ("withdrawn", "rejected")
     ]
 
+    checker_model_id = getattr(state, "effective_checker_model_id", state.model_id)
+
     re_eval_results = []
     if stale_findings:
         from lit_platform.runtime.api import re_evaluate_finding
@@ -557,7 +936,7 @@ async def detect_and_apply_scene_changes(state: SessionState,
         for finding in stale_findings:
             result = await re_evaluate_finding(
                 state.client, finding, new_content,
-                model=state.model_id, max_tokens=1024,
+                model=checker_model_id, max_tokens=1024,
             )
             re_eval_results.append(result)
             persist_finding(state, finding)
@@ -625,6 +1004,8 @@ async def review_current_finding_against_scene_edits(
     for finding in state.findings[current_index:]:
         persist_finding(state, finding)
 
+    checker_model_id = getattr(state, "effective_checker_model_id", state.model_id)
+
     finding = state.findings[current_index]
     re_eval_results = []
     if finding.status not in ("withdrawn", "rejected"):
@@ -632,7 +1013,7 @@ async def review_current_finding_against_scene_edits(
 
         result = await re_evaluate_finding(
             state.client, finding, new_content,
-            model=state.model_id, max_tokens=1024,
+            model=checker_model_id, max_tokens=1024,
         )
         re_eval_results.append(result)
         persist_finding(state, finding)

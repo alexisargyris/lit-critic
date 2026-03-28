@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from lit_platform.runtime.models import Finding, LearningData
+from lit_platform.runtime.models import Finding, LearningData, SessionState
 
 
 TERMINAL_STATUSES = {"accepted", "rejected", "withdrawn"}
@@ -273,3 +273,24 @@ def learning_session_payload(learning: LearningData) -> dict:
         "session_acceptances": learning.session_acceptances,
         "session_ambiguity_answers": learning.session_ambiguity_answers,
     }
+
+
+def apply_tier_model_assignment(
+    session: SessionState,
+    *,
+    depth_mode: str,
+    frontier_model: str,
+    checker_model: str,
+) -> None:
+    """Apply canonical tier model assignment to session state.
+
+    Keeps legacy fields (`model`, `discussion_model`) aligned so existing
+    transitional callers continue to observe consistent values.
+    """
+    session.depth_mode = depth_mode
+    session.frontier_model = frontier_model
+    session.checker_model = checker_model
+
+    # Legacy compatibility aliases.
+    session.model = checker_model
+    session.discussion_model = frontier_model

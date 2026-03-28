@@ -175,11 +175,24 @@ export class DiagnosticsProvider implements vscode.Disposable {
     // Private helpers
     // ------------------------------------------------------------------
 
+    private findingOriginLabel(finding: Finding): string {
+        const origin = ((finding as Finding & { origin?: string }).origin || 'llm').toLowerCase();
+        if (origin === 'deterministic') {
+            return 'Deterministic';
+        }
+        if (origin === 'llm') {
+            return 'LLM';
+        }
+        return origin.charAt(0).toUpperCase() + origin.slice(1);
+    }
+
     private findingToDiagnostic(finding: Finding): vscode.Diagnostic {
         const range = this.findingToRange(finding);
         const severity = SEVERITY_MAP[finding.severity] ?? vscode.DiagnosticSeverity.Warning;
+        const originLabel = this.findingOriginLabel(finding);
 
-        const message = finding.evidence || `Finding #${finding.number} (${finding.lens})`;
+        const baseMessage = finding.evidence || `Finding #${finding.number} (${finding.lens})`;
+        const message = `[Origin: ${originLabel}] ${baseMessage}`;
         const diagnostic = new vscode.Diagnostic(range, message, severity);
         diagnostic.source = `lit-critic (${finding.lens})`;
         diagnostic.code = finding.number;

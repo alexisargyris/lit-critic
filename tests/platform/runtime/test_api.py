@@ -72,7 +72,7 @@ class TestRunLens:
             return_value=LLMResponse(text='[]')
         )
 
-        lens_names = ["prose", "structure", "logic", "clarity", "continuity", "dialogue"]
+        lens_names = ["prose", "structure", "logic", "clarity", "continuity", "dialogue", "horizon"]
 
         for lens_name in lens_names:
             result = await run_lens(mock_anthropic_client, lens_name, "Test scene", sample_indexes)
@@ -440,9 +440,17 @@ class TestRunAnalysis:
         self, mock_anthropic_client, sample_indexes, sample_scene,
         sample_coordinator_output
     ):
-        """run_analysis should run 6 lenses then 3 chunked coordinator calls."""
+        """run_analysis should run 7 lenses (including horizon) then 3 chunked coordinator calls."""
         mock_anthropic_client.create_message = AsyncMock(
-            return_value=LLMResponse(text='[]')
+            side_effect=[
+                LLMResponse(text='[]'),  # prose
+                LLMResponse(text='[]'),  # structure
+                LLMResponse(text='[]'),  # logic
+                LLMResponse(text='[]'),  # clarity
+                LLMResponse(text='[]'),  # continuity
+                LLMResponse(text='[]'),  # dialogue
+                LLMResponse(text='[{"category":"opportunity"}]'),  # horizon
+            ]
         )
         mock_anthropic_client.create_message_with_tool = AsyncMock(
             return_value=LLMToolResponse(tool_input=sample_coordinator_output)
@@ -451,10 +459,39 @@ class TestRunAnalysis:
         with patch('lit_platform.runtime.api.print'):
             result = await run_analysis(mock_anthropic_client, sample_scene, sample_indexes)
 
-        assert mock_anthropic_client.create_message.call_count == 6  # 6 lenses
+        assert mock_anthropic_client.create_message.call_count == 7  # 7 lenses incl. horizon
         assert mock_anthropic_client.create_message_with_tool.call_count == 3  # 3 coordinator chunks
         assert "findings" in result
+        assert "horizon_observations" in result
+        assert result["horizon_observations"] == '[{"category":"opportunity"}]'
         assert len(result["findings"]) >= 1  # dedup may reduce count
+
+    async def test_run_analysis_always_runs_horizon_lens(
+        self, mock_anthropic_client, sample_indexes, sample_scene,
+        sample_coordinator_output
+    ):
+        """run_analysis should always execute all 7 lenses, including horizon."""
+        mock_anthropic_client.create_message = AsyncMock(
+            side_effect=[
+                LLMResponse(text='[]'),  # prose
+                LLMResponse(text='[]'),  # structure
+                LLMResponse(text='[]'),  # logic
+                LLMResponse(text='[]'),  # clarity
+                LLMResponse(text='[]'),  # continuity
+                LLMResponse(text='[]'),  # dialogue
+                LLMResponse(text='[{"category":"opportunity"}]'),  # horizon
+            ]
+        )
+        mock_anthropic_client.create_message_with_tool = AsyncMock(
+            return_value=LLMToolResponse(tool_input=sample_coordinator_output)
+        )
+
+        with patch('lit_platform.runtime.api.print'):
+            result = await run_analysis(mock_anthropic_client, sample_scene, sample_indexes)
+
+        assert mock_anthropic_client.create_message.call_count == 7
+        assert "horizon_observations" in result
+        assert result["horizon_observations"] == '[{"category":"opportunity"}]'
 
     async def test_returns_coordinated_results(
         self, mock_anthropic_client, sample_indexes, sample_scene,

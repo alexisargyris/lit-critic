@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from lit_platform.persistence.path_utils import to_absolute, to_relative
+
 
 class SessionStore:
     """CRUD operations for review sessions."""
@@ -44,40 +46,52 @@ class SessionStore:
     def create(conn: sqlite3.Connection, scene_path: str, scene_hash: str,
                model: str, glossary_issues: list[str] | None = None,
                discussion_model: str | None = None,
-               lens_preferences: dict | None = None,
+               depth_mode: str | None = None,
+               frontier_model: str | None = None,
+               checker_model: str | None = None,
                scene_paths: list[str] | None = None,
                index_context_hash: str = "",
                index_context_stale: bool = False,
                index_rerun_prompted: bool = False,
-               index_changed_files: list[str] | None = None) -> int:
+               index_changed_files: list[str] | None = None,
+               project_path: Path | None = None) -> int:
         """Insert a new active session. Returns the session id."""
         normalized_scene_paths = SessionStore._normalize_scene_paths(scene_path, scene_paths)
         if not normalized_scene_paths:
             raise ValueError("create() requires at least one scene path")
 
+        stored_scene_paths = [to_relative(project_path, p) for p in normalized_scene_paths]
+        stored_changed_files = [to_relative(project_path, f) for f in (index_changed_files or [])]
+
         now = datetime.now().isoformat()
+        resolved_depth_mode = depth_mode or "deep"
+        resolved_checker_model = checker_model or model
+        resolved_frontier_model = frontier_model or discussion_model or model
         cursor = conn.execute(
             """INSERT INTO session
-               (scene_path, scene_hash, model, discussion_model, lens_preferences, glossary_issues, created_at,
+               (scene_path, scene_hash, model, discussion_model,
+                depth_mode, frontier_model, checker_model,
+                glossary_issues, created_at,
                 index_context_hash, index_context_stale, index_rerun_prompted, index_changed_files)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (SessionStore._encode_scene_paths(normalized_scene_paths), scene_hash, model, discussion_model,
-             json.dumps(lens_preferences or {}), json.dumps(glossary_issues or []), now,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (SessionStore._encode_scene_paths(stored_scene_paths), scene_hash, model, discussion_model,
+             resolved_depth_mode, resolved_frontier_model, resolved_checker_model,
+             json.dumps(glossary_issues or []), now,
              index_context_hash, int(index_context_stale), int(index_rerun_prompted),
-             json.dumps(index_changed_files or [])),
+             json.dumps(stored_changed_files)),
         )
         conn.commit()
         return cursor.lastrowid
 
     @staticmethod
-    def load_active(conn: sqlite3.Connection) -> Optional[dict]:
+    def load_active(conn: sqlite3.Connection, project_path: Path | None = None) -> Optional[dict]:
         """Load the active session, or None if no active session exists."""
         row = conn.execute(
             "SELECT * FROM session WHERE status = 'active' ORDER BY id DESC LIMIT 1"
         ).fetchone()
         if row is None:
             return None
-        return SessionStore._row_to_dict(row)
+        return SessionStore._row_to_dict(row, project_path=project_path)
 
     @staticmethod
     def exists_active(conn: sqlite3.Connection) -> bool:
@@ -88,22 +102,22 @@ class SessionStore:
         return row is not None
 
     @staticmethod
-    def get(conn: sqlite3.Connection, session_id: int) -> Optional[dict]:
+    def get(conn: sqlite3.Connection, session_id: int, project_path: Path | None = None) -> Optional[dict]:
         """Load a single session by id."""
         row = conn.execute(
             "SELECT * FROM session WHERE id = ?", (session_id,)
         ).fetchone()
         if row is None:
             return None
-        return SessionStore._row_to_dict(row)
+        return SessionStore._row_to_dict(row, project_path=project_path)
 
     @staticmethod
-    def list_all(conn: sqlite3.Connection) -> list[dict]:
+    def list_all(conn: sqlite3.Connection, project_path: Path | None = None) -> list[dict]:
         """List all sessions, newest first."""
         rows = conn.execute(
             "SELECT * FROM session ORDER BY id DESC"
         ).fetchall()
-        return [SessionStore._row_to_dict(r) for r in rows]
+        return [SessionStore._row_to_dict(r, project_path=project_path) for r in rows]
 
     @staticmethod
     def update_index(conn: sqlite3.Connection, session_id: int,
@@ -146,6 +160,16 @@ class SessionStore:
         conn.commit()
 
     @staticmethod
+    def update_session_summary(conn: sqlite3.Connection, session_id: int,
+                               summary_text: str) -> None:
+        """Persist the session-end disconfirming summary generated by the LLM."""
+        conn.execute(
+            "UPDATE session SET session_summary = ? WHERE id = ?",
+            (summary_text, session_id),
+        )
+        conn.commit()
+
+    @staticmethod
     def update_scene(conn: sqlite3.Connection, session_id: int,
                      scene_hash: str) -> None:
         """Update scene hash after a scene change detection."""
@@ -157,20 +181,21 @@ class SessionStore:
 
     @staticmethod
     def update_scene_path(conn: sqlite3.Connection, session_id: int,
-                          scene_path: str) -> None:
+                          scene_path: str, project_path: Path | None = None) -> None:
         """Update the persisted scene path for a session."""
-        SessionStore.update_scene_paths(conn, session_id, [scene_path])
+        SessionStore.update_scene_paths(conn, session_id, [scene_path], project_path=project_path)
 
     @staticmethod
     def update_scene_paths(conn: sqlite3.Connection, session_id: int,
-                           scene_paths: list[str]) -> None:
+                           scene_paths: list[str], project_path: Path | None = None) -> None:
         """Update the persisted ordered scene path set for a session."""
         normalized_scene_paths = SessionStore._normalize_scene_paths(scene_paths=scene_paths)
         if not normalized_scene_paths:
             raise ValueError("update_scene_paths() requires at least one scene path")
+        stored = [to_relative(project_path, p) for p in normalized_scene_paths]
         conn.execute(
             "UPDATE session SET scene_path = ? WHERE id = ?",
-            (SessionStore._encode_scene_paths(normalized_scene_paths), session_id),
+            (SessionStore._encode_scene_paths(stored), session_id),
         )
         conn.commit()
 
@@ -183,8 +208,10 @@ class SessionStore:
         index_context_stale: bool,
         index_rerun_prompted: bool,
         index_changed_files: list[str],
+        project_path: Path | None = None,
     ) -> None:
         """Update all index-context tracking fields at once."""
+        stored_changed = [to_relative(project_path, f) for f in index_changed_files]
         conn.execute(
             """UPDATE session SET
                    index_context_hash = ?,
@@ -196,7 +223,7 @@ class SessionStore:
                 index_context_hash,
                 int(index_context_stale),
                 int(index_rerun_prompted),
-                json.dumps(index_changed_files),
+                json.dumps(stored_changed),
                 session_id,
             ),
         )
@@ -209,15 +236,17 @@ class SessionStore:
         *,
         changed_files: list[str],
         prompted: bool | None = None,
+        project_path: Path | None = None,
     ) -> None:
         """Mark index context stale and persist changed file names."""
+        stored_changed = [to_relative(project_path, f) for f in changed_files]
         if prompted is None:
             conn.execute(
                 """UPDATE session SET
                        index_context_stale = 1,
                        index_changed_files = ?
                    WHERE id = ?""",
-                (json.dumps(changed_files), session_id),
+                (json.dumps(stored_changed), session_id),
             )
         else:
             conn.execute(
@@ -226,7 +255,7 @@ class SessionStore:
                        index_rerun_prompted = ?,
                        index_changed_files = ?
                    WHERE id = ?""",
-                (int(prompted), json.dumps(changed_files), session_id),
+                (int(prompted), json.dumps(stored_changed), session_id),
             )
         conn.commit()
 
@@ -250,7 +279,7 @@ class SessionStore:
         conn.commit()
 
     @staticmethod
-    def update_counts(conn: sqlite3.Connection, session_id: int) -> None:
+    def update_counts(conn: sqlite3.Connection, session_id: int) -> bool:
         """Recalculate and update finding counts for a session."""
         stats = conn.execute(
             """SELECT
@@ -262,15 +291,34 @@ class SessionStore:
             (session_id,),
         ).fetchone()
 
+        accepted = int(stats["accepted"] or 0)
+        rejected = int(stats["rejected"] or 0)
+        withdrawn = int(stats["withdrawn"] or 0)
+        current = conn.execute(
+            """SELECT accepted_count, rejected_count, withdrawn_count
+               FROM session WHERE id = ?""",
+            (session_id,),
+        ).fetchone()
+        if current is None:
+            return False
+
+        if (
+            int(current["accepted_count"] or 0) == accepted
+            and int(current["rejected_count"] or 0) == rejected
+            and int(current["withdrawn_count"] or 0) == withdrawn
+        ):
+            return False
+
         conn.execute(
             """UPDATE session SET
                    accepted_count = ?,
                    rejected_count = ?,
                    withdrawn_count = ?
                WHERE id = ?""",
-            (stats["accepted"], stats["rejected"], stats["withdrawn"], session_id),
+            (accepted, rejected, withdrawn, session_id),
         )
         conn.commit()
+        return True
 
     @staticmethod
     def complete(conn: sqlite3.Connection, session_id: int) -> None:
@@ -328,19 +376,24 @@ class SessionStore:
 
     @staticmethod
     def validate(session_data: dict, scene_content_hash: str,
-                 scene_path: str) -> tuple[bool, str]:
+                 scene_path: str, project_path: Path | None = None) -> tuple[bool, str]:
         """Validate that a saved session matches the current scene."""
         if not session_data:
             return False, "No session data"
 
         scene_paths = session_data.get("scene_paths") or []
         if scene_paths:
-            resolved_saved = {str(Path(p).resolve()) for p in scene_paths}
-            if str(Path(scene_path).resolve()) not in resolved_saved:
+            # Absolutize stored paths (may be relative after migration) before comparing
+            abs_saved = {
+                str((to_absolute(project_path, p) or Path(p)).resolve())
+                for p in scene_paths
+            }
+            if str(Path(scene_path).resolve()) not in abs_saved:
                 return False, f"Session is for different scene set: {scene_paths}"
         else:
             saved_scene_path = session_data.get("scene_path", "")
-            if Path(saved_scene_path).resolve() != Path(scene_path).resolve():
+            abs_saved_path = (to_absolute(project_path, saved_scene_path) or Path(saved_scene_path))
+            if abs_saved_path.resolve() != Path(scene_path).resolve():
                 return False, f"Session is for different scene: {saved_scene_path}"
 
         saved_hash = session_data.get("scene_hash", "")
@@ -350,18 +403,35 @@ class SessionStore:
         return True, ""
 
     @staticmethod
-    def _row_to_dict(row: sqlite3.Row) -> dict:
+    def _row_to_dict(row: sqlite3.Row, project_path: Path | None = None) -> dict:
         """Convert a sqlite3.Row to a plain dict, deserialising JSON columns."""
         d = dict(row)
+        d["depth_mode"] = d.get("depth_mode") or "deep"
+        d["checker_model"] = d.get("checker_model") or d.get("model")
+        d["frontier_model"] = (
+            d.get("frontier_model") or d.get("discussion_model") or d.get("model")
+        )
         scene_paths = SessionStore._decode_scene_paths(d.get("scene_path"))
+        # Absolutize relative paths stored after v13 migration
+        if project_path is not None:
+            scene_paths = [
+                str(to_absolute(project_path, p) or Path(p)) for p in scene_paths
+            ]
         d["scene_paths"] = scene_paths
         d["scene_path"] = scene_paths[0] if scene_paths else ""
-        for key in ("glossary_issues", "discussion_history", "lens_preferences", "index_changed_files"):
+        for key in ("glossary_issues", "discussion_history", "index_changed_files"):
             if key in d and isinstance(d[key], str):
                 try:
                     d[key] = json.loads(d[key])
                 except (json.JSONDecodeError, TypeError):
-                    d[key] = {} if key == "lens_preferences" else []
+                    d[key] = []
+        # Absolutize index_changed_files after JSON decode
+        if project_path is not None and isinstance(d.get("index_changed_files"), list):
+            d["index_changed_files"] = [
+                str(to_absolute(project_path, f) or Path(f))
+                for f in d["index_changed_files"]
+                if f
+            ]
         if "learning_session" in d and isinstance(d["learning_session"], str):
             try:
                 d["learning_session"] = json.loads(d["learning_session"])

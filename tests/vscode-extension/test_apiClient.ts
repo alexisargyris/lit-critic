@@ -82,6 +82,32 @@ describe('ApiClient', () => {
             const request = { reason: reason || '' };
             assert.equal(request.reason, '');
         });
+
+        it('should format audit request', () => {
+            const request = {
+                project_path: '/test/project',
+                deep: true,
+                model: 'sonnet',
+            };
+
+            assert.equal(request.project_path, '/test/project');
+            assert.equal(request.deep, true);
+            assert.equal(request.model, 'sonnet');
+        });
+
+        it('should format scene audit request', () => {
+            const request = {
+                scene_path: '/test/scene.txt',
+                project_path: '/test/project',
+                deep: true,
+                model: 'sonnet',
+            };
+
+            assert.equal(request.scene_path, '/test/scene.txt');
+            assert.equal(request.project_path, '/test/project');
+            assert.equal(request.deep, true);
+            assert.equal(request.model, 'sonnet');
+        });
     });
 
     describe('response parsing', () => {
@@ -301,6 +327,22 @@ describe('ApiClient', () => {
                 
                 assert.equal(mockResponse.deleted, true);
                 assert.equal(mockResponse.entry_id, 42);
+            });
+
+            it('should use /api/scenes/audit endpoint for scene audit', () => {
+                const method = 'POST';
+                const path = '/api/scenes/audit';
+                const body = {
+                    scene_path: '/test/scene.txt',
+                    project_path: '/test/project',
+                    deep: true,
+                    model: 'sonnet',
+                };
+
+                assert.equal(method, 'POST');
+                assert.equal(path, '/api/scenes/audit');
+                assert.equal(body.scene_path, '/test/scene.txt');
+                assert.equal(body.deep, true);
             });
         });
     });

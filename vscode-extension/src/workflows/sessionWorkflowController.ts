@@ -15,7 +15,7 @@ import { DiagnosticsProvider } from '../diagnosticsProvider';
 import { FindingsTreeProvider } from '../findingsTreeProvider';
 import { SessionsTreeProvider } from '../sessionsTreeProvider';
 import { LearningTreeProvider } from '../learningTreeProvider';
-import { DiscussionPanel } from '../discussionPanel';
+import { IDiscussionView } from '../ui/workbenchPresenter';
 import {
     cloneDiscussionTurns,
     getLatestFindingStatus,
@@ -27,10 +27,13 @@ import {
 } from '../domain/findingLogic';
 import {
     buildAnalysisStartStatusMessage,
-    getConfiguredAnalysisModel,
-    resolvePreferredModel,
+    getConfiguredAnalysisMode,
 } from '../domain/modelSelectionLogic';
-import { formatSessionLabel, tryParseRepoPathInvalidDetail } from '../domain/sessionDecisionLogic';
+import {
+    formatSessionLabel,
+    formatSessionTypeLabel,
+    tryParseRepoPathInvalidDetail,
+} from '../domain/sessionDecisionLogic';
 import {
     Finding,
     DiscussionContextTransition,
@@ -43,9 +46,27 @@ import {
     ScenePathRecoverySelection,
     CheckSessionResponse,
     SessionSummary,
+    KnowledgeEntityTreeItemPayload,
 } from '../types';
 import { RuntimeStateStore } from './stateStore';
-import { WorkbenchPresenter } from '../ui/workbenchPresenter';
+import {
+    cmdRefreshLearning,
+    cmdExportLearning,
+    cmdResetLearning,
+    cmdDeleteLearningEntry as cmdDeleteLearningEntryHandler,
+} from './learningWorkflowHandlers';
+import {
+    cmdEditKnowledgeEntry as cmdEditKnowledgeEntryHandler,
+    cmdResetKnowledgeOverride as cmdResetKnowledgeOverrideHandler,
+} from './knowledgeWorkflowHandlers';
+import {
+    cmdSelectModel as cmdSelectModelHandler,
+} from './modelSelectionWorkflow';
+import {
+    formatModeCostHint,
+    formatTierCostSummary,
+    WorkbenchPresenter,
+} from '../ui/workbenchPresenter';
 
 // ---------------------------------------------------------------------------
 // Port interface — VS Code surface injected by extension.ts
@@ -83,8 +104,6 @@ export interface WorkflowUiPort {
 
     // Progress / status
     withProgress(title: string, task: (progress: { report(v: { message?: string }): void }) => Promise<void>): Promise<void>;
-    setStatusBarMessage(message: string, timeout: number): { dispose(): void };
-
     // Navigation
     navigateToFindingLine(finding: Finding): Promise<void>;
 
@@ -112,9 +131,17 @@ export interface WorkflowDeps {
     findingsTreeProvider: FindingsTreeProvider;
     sessionsTreeProvider: SessionsTreeProvider;
     learningTreeProvider: LearningTreeProvider;
+    knowledgeTreeProvider: {
+        setApiClient(client: ApiClient): void;
+        setProjectPath(projectPath: string): void;
+        refresh(): Promise<void>;
+        setFlaggedEntities(flags: Array<{ category: string; entity_key: string; reason: string }>): void;
+        clearFlaggedEntities(): void;
+    };
+    knowledgeTreeView?: { reveal(item: any, options?: { select?: boolean; focus?: boolean }): Thenable<void> };
     diagnosticsProvider: DiagnosticsProvider;
-    ensureDiscussionPanel(): DiscussionPanel;
-    getDiscussionPanel(): DiscussionPanel | undefined;
+    ensureDiscussionPanel(): IDiscussionView;
+    getDiscussionPanel(): IDiscussionView | undefined;
     runTrackedOperation<T>(
         profile: { id: string; title: string; statusMessage?: string },
         operation: () => Promise<T>,
@@ -140,19 +167,20 @@ type AnalyzeEntryAction =
 export class SessionWorkflowController {
     constructor(private readonly deps: WorkflowDeps) {}
 
+    private viewedSessionId: number | null = null;
+
     // -----------------------------------------------------------------------
     // Public command handlers
     // -----------------------------------------------------------------------
 
     cmdAnalyze = async (): Promise<void> => { await this._cmdAnalyze(); };
-    cmdResume = async (): Promise<void> => { await this._cmdResume(); };
+    // Internal-only command (no menu contribution)
     cmdNextFinding = async (): Promise<void> => { await this._cmdNextFinding(); };
     cmdAcceptFinding = async (): Promise<void> => { await this._cmdAcceptFinding(); };
     cmdRejectFinding = async (): Promise<void> => { await this._cmdRejectFinding(); };
     cmdDiscuss = async (): Promise<void> => { await this._cmdDiscuss(); };
     cmdSelectFinding = async (index: number): Promise<void> => { await this._cmdSelectFinding(index); };
     cmdReviewFinding = async (): Promise<void> => { await this._cmdReviewFinding(); };
-    cmdClearSession = async (): Promise<void> => { await this._cmdClearSession(); };
     cmdRerunAnalysis = async (): Promise<void> => { await this._cmdRerunAnalysis(); };
     cmdSelectModel = async (): Promise<void> => { await this._cmdSelectModel(); };
     cmdStopServer = (): void => { this._cmdStopServer(); };
@@ -163,6 +191,17 @@ export class SessionWorkflowController {
     cmdExportLearning = async (): Promise<void> => { await this._cmdExportLearning(); };
     cmdResetLearning = async (): Promise<void> => { await this._cmdResetLearning(); };
     cmdDeleteLearningEntry = async (item: any): Promise<void> => { await this._cmdDeleteLearningEntry(item); };
+    cmdRefreshKnowledge = async (): Promise<void> => { await this._cmdRefreshKnowledge(); };
+    cmdEditKnowledgeEntry = async (item: any): Promise<void> => { await this._cmdEditKnowledgeEntry(item); };
+    cmdResetKnowledgeOverride = async (item?: any): Promise<void> => { await this._cmdResetKnowledgeOverride(item); };
+    editKnowledgeEntry = async (item: any): Promise<boolean> => this._cmdEditKnowledgeEntry(item);
+    resetKnowledgeOverride = async (item?: any): Promise<boolean> => this._cmdResetKnowledgeOverride(item);
+
+    // Internal-only: navigate from Findings tree session header back to the session in Sessions tree
+    cmdRevealSessionInTree = (sessionId: number): void => {
+        this.deps.sessionsTreeProvider.setCurrentSession(sessionId);
+        this.deps.presenter.revealCurrentSessionSelection();
+    };
 
     // Exposed for discussion-panel action dispatch
     handleFindingAction = async (action: string, data?: unknown): Promise<void> => {
@@ -180,6 +219,7 @@ export class SessionWorkflowController {
 
     private async _cmdAnalyze(): Promise<void> {
         try {
+            this.viewedSessionId = null;
             this.deps.state.closedSessionNotice = undefined;
             this.deps.state.indexChangeDismissed = false;
             await this.deps.ensureServer();
@@ -226,6 +266,9 @@ export class SessionWorkflowController {
                 await this.deps.sessionsTreeProvider.refresh();
                 this.deps.sessionsTreeProvider.setCurrentSession(entryAction.sessionId);
                 this.deps.presenter.revealCurrentSessionSelection();
+                this.deps.findingsTreeProvider.setSessionContext(
+                    this.deps.sessionsTreeProvider.getCurrentSessionItem()?.session ?? null,
+                );
                 this._handleIndexChangeReport(summary.index_change ?? null);
 
                 const finding = await client.getCurrentFinding();
@@ -245,19 +288,44 @@ export class SessionWorkflowController {
             const scenePaths = resolved.scenePaths.length > 1 ? resolved.scenePaths : undefined;
 
             const config = this.deps.ui.getExtensionConfig();
-            const model = getConfiguredAnalysisModel(config);
-            const discussionModel = config.get<string>('discussionModel', '') || undefined;
-            const lensPreset = config.get<string>('lensPreset', 'auto');
-            let effectivePreset = lensPreset;
-            if (lensPreset === 'auto') {
-                effectivePreset = resolved.scenePaths.length > 1 ? 'multi-scene' : 'single-scene';
-            }
+            const mode = getConfiguredAnalysisMode(config);
 
             const serverConfig = await client.getConfig().catch(() => undefined);
-            const selectedModel = serverConfig
-                ? resolvePreferredModel(model, serverConfig)
-                : model;
-            this.deps.presenter.setAnalyzing(buildAnalysisStartStatusMessage(effectivePreset, serverConfig));
+            if (serverConfig) {
+                const slotFrontier = (config.get<string>('modelSlotFrontier', '') || '').trim();
+                const slotDeep = (config.get<string>('modelSlotDeep', '') || '').trim();
+                const slotQuick = (config.get<string>('modelSlotQuick', '') || '').trim();
+
+                const currentSlots = serverConfig.model_slots || serverConfig.default_model_slots;
+                const resolvedSlots = {
+                    frontier: slotFrontier || currentSlots?.frontier || 'sonnet',
+                    deep: slotDeep || currentSlots?.deep || 'sonnet',
+                    quick: slotQuick || currentSlots?.quick || 'haiku',
+                };
+
+                if (typeof (client as any).updateConfigModels === 'function') {
+                    try {
+                        await client.updateConfigModels(resolvedSlots);
+                    } catch (err) {
+                        const detail = err instanceof Error
+                            ? err.message
+                            : (typeof err === 'string' ? err : 'unknown error');
+                        void this.deps.ui.showWarningMessage(
+                            `lit-critic: Could not sync model slots before analysis (${detail}). Continuing with server-side defaults.`,
+                            false,
+                        );
+                    }
+                }
+
+                const modeCostHint = formatModeCostHint(
+                    mode,
+                    (serverConfig as any)?.mode_cost_hints?.[mode],
+                );
+                if (modeCostHint) {
+                    void this.deps.ui.showInformationMessage(`lit-critic: ${modeCostHint}`);
+                }
+            }
+            this.deps.presenter.setAnalyzing(buildAnalysisStartStatusMessage(mode));
             void this.deps.ui.showInformationMessage('lit-critic: Starting analysis...');
 
             let firstProgressEventSeen = false;
@@ -275,8 +343,8 @@ export class SessionWorkflowController {
             const analysisPromise = (async () => {
                 try {
                     return await client.analyze(
-                        scenePath, projectPath, selectedModel, discussionModel,
-                        undefined, { preset: effectivePreset }, scenePaths,
+                        scenePath, projectPath,
+                        undefined, scenePaths, mode,
                     );
                 } catch (err) {
                     const message = err instanceof Error ? err.message : String(err);
@@ -287,8 +355,8 @@ export class SessionWorkflowController {
                     if (!repoRoot) { throw err; }
                     await client.updateRepoPath(repoRoot);
                     return client.analyze(
-                        scenePath, projectPath, selectedModel, discussionModel,
-                        undefined, { preset: effectivePreset }, scenePaths,
+                        scenePath, projectPath,
+                        undefined, scenePaths, mode,
                     );
                 }
             })();
@@ -343,6 +411,8 @@ export class SessionWorkflowController {
                 return;
             }
 
+            this.viewedSessionId = summary.session_id ?? null;
+
             let modelInfo = `Model: ${summary.model.label}`;
             if (summary.discussion_model) {
                 modelInfo += ` · Discussion: ${summary.discussion_model.label}`;
@@ -353,7 +423,28 @@ export class SessionWorkflowController {
                 `(${summary.counts.critical} critical, ${summary.counts.major} major, ${summary.counts.minor} minor) · ${modelInfo}`
             );
 
+            const tierCostSummary = formatTierCostSummary((summary as any)?.tier_cost_summary);
+            if (tierCostSummary) {
+                void this.deps.ui.showInformationMessage(`lit-critic: ${tierCostSummary}`);
+            }
+
             await this._populateFindingsAfterAnalysis(summary);
+
+            // Set session context for the new analysis session
+            if (summary.session_id != null) {
+                this.deps.findingsTreeProvider.setSessionContext({
+                    id: summary.session_id,
+                    status: 'active',
+                    depth_mode: mode,
+                    scene_path: summary.scene_path,
+                    model: summary.model.id,
+                    created_at: new Date().toISOString(),
+                    total_findings: summary.total_findings,
+                    accepted_count: 0,
+                    rejected_count: 0,
+                    withdrawn_count: 0,
+                });
+            }
 
             const firstFinding = await client.getCurrentFinding();
             this._handleIndexChangeReport(firstFinding.index_change ?? null);
@@ -373,6 +464,7 @@ export class SessionWorkflowController {
 
     private async _cmdResume(): Promise<void> {
         try {
+            this.viewedSessionId = null;
             this.deps.state.closedSessionNotice = undefined;
             this.deps.state.indexChangeDismissed = false;
             await this.deps.runTrackedOperation(
@@ -398,6 +490,8 @@ export class SessionWorkflowController {
                         return;
                     }
 
+                    this.viewedSessionId = summary.session_id ?? null;
+
                     await this._openSessionSceneFiles(summary.scene_paths ?? [summary.scene_path]);
 
                     void this.deps.ui.showInformationMessage(
@@ -409,6 +503,9 @@ export class SessionWorkflowController {
                     await this.deps.sessionsTreeProvider.refresh();
                     this.deps.sessionsTreeProvider.setCurrentSessionByScenePath(summary.scene_path);
                     this.deps.presenter.revealCurrentSessionSelection();
+                    this.deps.findingsTreeProvider.setSessionContext(
+                        this.deps.sessionsTreeProvider.getCurrentSessionItem()?.session ?? null,
+                    );
                     this._handleIndexChangeReport(summary.index_change ?? null);
 
                     const finding = await client.getCurrentFinding();
@@ -444,6 +541,7 @@ export class SessionWorkflowController {
 
     private async _cmdAcceptFinding(): Promise<void> {
         try {
+            await this._ensureClosedSessionReopened('accept');
             const client = this.deps.getApiClient();
             const resp = await client.acceptFinding();
             const next = resp.next ?? resp;
@@ -472,6 +570,7 @@ export class SessionWorkflowController {
 
     private async _cmdRejectFinding(): Promise<void> {
         try {
+            await this._ensureClosedSessionReopened('reject');
             const reason = await this.deps.ui.showInputBox({
                 prompt: 'Reason for rejecting this finding (optional)',
                 placeHolder: 'e.g., This is intentional for voice consistency',
@@ -508,6 +607,7 @@ export class SessionWorkflowController {
         const client = this.deps.getApiClient();
 
         try {
+            await this._ensureClosedSessionReopened('discuss');
             const finding = await client.getCurrentFinding();
             this._handleIndexChangeReport(finding.index_change ?? null);
             if (!finding.complete && finding.finding) {
@@ -565,6 +665,7 @@ export class SessionWorkflowController {
 
     private async _cmdReviewFinding(): Promise<void> {
         try {
+            await this._ensureClosedSessionReopened('review');
             const client = this.deps.getApiClient();
             const resp = await client.reviewFinding();
             this._handleIndexChangeReport(resp.index_change ?? null);
@@ -624,31 +725,6 @@ export class SessionWorkflowController {
         }
     }
 
-    private async _cmdClearSession(): Promise<void> {
-        try {
-            const confirm = await this.deps.ui.showWarningMessage(
-                'Delete saved session?', true, 'Delete',
-            );
-            if (confirm !== 'Delete') {
-                return;
-            }
-
-            const client = this.deps.getApiClient();
-            await client.clearSession();
-            void this.deps.ui.showInformationMessage('lit-critic: Session cleared.');
-
-            this.deps.diagnosticsProvider.clear();
-            this.deps.findingsTreeProvider.clear();
-            this.deps.presenter.setReady();
-            this.deps.state.allFindings = [];
-            this.deps.state.closedSessionNotice = undefined;
-            this.deps.state.indexChangeDismissed = false;
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            void this.deps.ui.showErrorMessage(`lit-critic: ${msg}`);
-        }
-    }
-
     private async _cmdRerunAnalysis(): Promise<void> {
         try {
             await this.deps.ensureServer();
@@ -688,37 +764,7 @@ export class SessionWorkflowController {
     }
 
     private async _cmdSelectModel(): Promise<void> {
-        try {
-            await this.deps.ensureServer();
-            const client = this.deps.getApiClient();
-            const config = await client.getConfig();
-            const extConfig = this.deps.ui.getExtensionConfig();
-            const configuredModel = getConfiguredAnalysisModel(extConfig);
-            const resolvedCurrentModel = resolvePreferredModel(configuredModel, config);
-
-            const items = Object.entries(config.available_models).map(([name, info]) => ({
-                label: name,
-                description: info.label,
-                detail: name === resolvedCurrentModel ? 'Current model' : undefined,
-            }));
-
-            const selected = await this.deps.ui.showQuickPick(items, {
-                placeHolder: 'Select a model for analysis',
-                activeItemLabel: resolvedCurrentModel,
-            });
-
-            if (selected) {
-                const label = typeof selected === 'string' ? selected : selected.label;
-                const writableConfig = extConfig as any;
-                if (typeof writableConfig.update === 'function') {
-                    await writableConfig.update('analysisModel', label, 2 /* Workspace */);
-                }
-                void this.deps.ui.showInformationMessage(`lit-critic: Model set to ${label}`);
-            }
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            void this.deps.ui.showErrorMessage(`lit-critic: ${msg}`);
-        }
+        await cmdSelectModelHandler(this.deps);
     }
 
     private _cmdStopServer(): void {
@@ -781,92 +827,62 @@ export class SessionWorkflowController {
 
                     const client = this.deps.getApiClient();
                     const detail = await client.getSessionDetail(sessionId, projectPath);
+                    const isActiveSession = detail.status === 'active';
 
-                    if (detail.status === 'active') {
-                        this.deps.state.closedSessionNotice = undefined;
-                        this.deps.state.indexChangeDismissed = false;
-                        this.deps.presenter.setAnalyzing('Resuming session...');
-                        this.deps.ui.setStatusBarMessage(
-                            `lit-critic: Switching to ${path.basename(detail.scene_path)}...`, 2500,
-                        );
+                    this.deps.presenter.setAnalyzing('Loading session...');
 
-                        const summary = await this._resumeSessionByIdWithScenePathRecovery(client, projectPath, sessionId);
+                    const summary = isActiveSession
+                        ? await this._resumeSessionByIdWithScenePathRecovery(client, projectPath, sessionId)
+                        : await this._viewSessionByIdWithScenePathRecovery(client, projectPath, sessionId);
 
-                        if (summary.error) {
-                            this.deps.presenter.setError(summary.error);
-                            void this.deps.ui.showErrorMessage(`lit-critic: Resume failed — ${summary.error}`);
-                            return;
-                        }
-
-                        await this._openSessionSceneFiles(
-                            summary.scene_paths && summary.scene_paths.length > 0
-                                ? summary.scene_paths
-                                : [summary.scene_path || detail.scene_path],
-                        );
-
-                        await this._populateFindingsAfterAnalysis(summary);
-                        await this.deps.sessionsTreeProvider.refresh();
-                        this.deps.sessionsTreeProvider.setCurrentSession(sessionId);
-                        this.deps.presenter.revealCurrentSessionSelection();
-                        this._handleIndexChangeReport(summary.index_change ?? null);
-
-                        const currentFinding = await client.getCurrentFinding();
-                        this._handleIndexChangeReport(currentFinding.index_change ?? null);
-                        if (!currentFinding.complete && currentFinding.finding) {
-                            this._updateCachedFinding(currentFinding.finding);
-                        }
-                        this._presentFinding(currentFinding, summary.current_index);
-                        this.deps.presenter.setProgress(summary.current_index + 1, summary.total_findings);
-
-                        void this.deps.ui.showInformationMessage(
-                            `lit-critic: Resumed session — ${summary.total_findings} findings, ` +
-                            `continuing from #${summary.current_index + 1}`
-                        );
-
-                    } else {
-                        this.deps.presenter.setAnalyzing('Loading session...');
-                        const summary = await this._viewSessionByIdWithScenePathRecovery(client, projectPath, sessionId);
-
-                        if (summary.error) {
-                            this.deps.presenter.setError(summary.error);
-                            void this.deps.ui.showErrorMessage(`lit-critic: Load failed — ${summary.error}`);
-                            return;
-                        }
-
-                        this.deps.state.closedSessionNotice = `Viewing ${detail.status} session — actions will reopen it.`;
-
-                        await this._openSessionSceneFiles(
-                            summary.scene_paths && summary.scene_paths.length > 0
-                                ? summary.scene_paths
-                                : [summary.scene_path || detail.scene_path],
-                        );
-
-                        await this._populateFindingsAfterAnalysis(summary);
-                        await this.deps.sessionsTreeProvider.refresh();
-                        this.deps.sessionsTreeProvider.setCurrentSession(sessionId);
-                        this.deps.presenter.revealCurrentSessionSelection();
-                        this._handleIndexChangeReport(summary.index_change ?? null);
-
-                        const currentFinding = await client.getCurrentFinding();
-                        this._handleIndexChangeReport(currentFinding.index_change ?? null);
-                        if (!currentFinding.complete && currentFinding.finding) {
-                            this._updateCachedFinding(currentFinding.finding);
-                        }
-
-                        const selectedIndex = Math.min(
-                            Math.max(detail.current_index ?? 0, 0),
-                            Math.max(0, summary.total_findings - 1),
-                        );
-
-                        this._presentFinding(currentFinding, selectedIndex);
-                        this.deps.presenter.setProgress(selectedIndex + 1, summary.total_findings);
-
-                        void this.deps.ui.showInformationMessage(
-                            `Viewing ${detail.status} session: ${summary.total_findings} findings`
-                        );
-
-                        this._refreshManagementViews();
+                    if (summary.error) {
+                        this.deps.presenter.setError(summary.error);
+                        void this.deps.ui.showErrorMessage(`lit-critic: Load failed — ${summary.error}`);
+                        return;
                     }
+
+                    this.viewedSessionId = summary.session_id ?? sessionId;
+                    this.deps.state.closedSessionNotice = isActiveSession
+                        ? undefined
+                        : 'Viewing completed session — actions will reopen it.';
+                    this.deps.state.indexChangeDismissed = false;
+
+                    await this._openSessionSceneFiles(
+                        summary.scene_paths && summary.scene_paths.length > 0
+                            ? summary.scene_paths
+                            : [summary.scene_path || detail.scene_path],
+                    );
+
+                    await this._populateFindingsAfterAnalysis(summary);
+                    await this.deps.sessionsTreeProvider.refresh();
+                    this.deps.sessionsTreeProvider.setCurrentSession(sessionId);
+                    this.deps.presenter.revealCurrentSessionSelection();
+                    this.deps.findingsTreeProvider.setSessionContext(
+                        this.deps.sessionsTreeProvider.getCurrentSessionItem()?.session ?? null,
+                    );
+                    this._handleIndexChangeReport(summary.index_change ?? null);
+
+                    const currentFinding = await client.getCurrentFinding();
+                    this._handleIndexChangeReport(currentFinding.index_change ?? null);
+                    if (!currentFinding.complete && currentFinding.finding) {
+                        this._updateCachedFinding(currentFinding.finding);
+                    }
+
+                    const selectedIndex = Math.min(
+                        Math.max(detail.current_index ?? 0, 0),
+                        Math.max(0, summary.total_findings - 1),
+                    );
+
+                    this._presentFinding(currentFinding, selectedIndex);
+                    this.deps.presenter.setProgress(selectedIndex + 1, summary.total_findings);
+
+                    const statusLabel = detail.status === 'active' ? 'active' : detail.status;
+                    const separator = isActiveSession ? ' — ' : ': ';
+                    void this.deps.ui.showInformationMessage(
+                        `lit-critic: Viewing ${statusLabel} session${separator}${summary.total_findings} findings`
+                    );
+
+                    this._refreshManagementViews();
                 },
             );
         } catch (err) {
@@ -908,9 +924,7 @@ export class SessionWorkflowController {
                     void this.deps.ui.showInformationMessage(`lit-critic: Session #${sessionId} deleted.`);
 
                     if (isActiveSession) {
-                        this.deps.diagnosticsProvider.clear();
-                        this.deps.findingsTreeProvider.clear();
-                        this.deps.presenter.setReady();
+                        this.deps.presenter.clearSessionPresentation();
                         this.deps.state.allFindings = [];
                         this.deps.state.currentFindingIndex = 0;
                         this.deps.state.totalFindings = 0;
@@ -928,9 +942,21 @@ export class SessionWorkflowController {
     }
 
     private async _cmdRefreshLearning(): Promise<void> {
+        await cmdRefreshLearning(this.deps);
+    }
+
+    private async _cmdExportLearning(): Promise<void> {
+        await cmdExportLearning(this.deps);
+    }
+
+    private async _cmdResetLearning(): Promise<void> {
+        await cmdResetLearning(this.deps);
+    }
+
+    private async _cmdRefreshKnowledge(): Promise<void> {
         try {
             await this.deps.runTrackedOperation(
-                { id: 'refresh-learning', title: 'Refreshing learning data', statusMessage: 'Refreshing learning data...' },
+                { id: 'refresh-knowledge', title: 'Refreshing knowledge', statusMessage: 'Refreshing knowledge...' },
                 async () => {
                     await this.deps.ensureServer();
                     const projectPath = this.deps.detectProjectPath();
@@ -940,29 +966,66 @@ export class SessionWorkflowController {
                         );
                         return;
                     }
-                    const client = this.deps.getApiClient();
-                    this.deps.learningTreeProvider.setApiClient(client);
-                    this.deps.learningTreeProvider.setProjectPath(projectPath);
-                    await this.deps.learningTreeProvider.refresh();
-                },
-            );
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            void this.deps.ui.showErrorMessage(`lit-critic: ${msg}`);
-        }
-    }
 
-    private async _cmdExportLearning(): Promise<void> {
-        try {
-            await this.deps.runTrackedOperation(
-                { id: 'export-learning', title: 'Exporting learning data', statusMessage: 'Exporting learning data...' },
-                async () => {
-                    await this.deps.ensureServer();
-                    const projectPath = this.deps.detectProjectPath();
-                    if (!projectPath) { return; }
+                    const result = await this.deps.getApiClient().refreshKnowledge(projectPath);
+                    const refreshResult = result as any;
+                    const sceneUpdated = Number(refreshResult?.scene_updated ?? 0);
+                    const indexUpdated = Number(refreshResult?.index_updated ?? 0);
+                    const extraction = refreshResult?.extraction as Record<string, unknown> | undefined;
+                    const extractionReason = typeof extraction?.reason === 'string' ? extraction.reason : undefined;
+                    const extractionError = typeof extraction?.error === 'string' ? extraction.error : undefined;
+                    const extractionFailed = Array.isArray(extraction?.failed) ? (extraction.failed as any[]).length : 0;
+                    const firstFailedScene = Array.isArray(extraction?.failed) && (extraction.failed as any[]).length > 0
+                        ? (extraction.failed as any[])[0]
+                        : undefined;
+                    const firstFailedError = typeof firstFailedScene?.error === 'string' ? firstFailedScene.error : undefined;
+
+                    let extractionNote = '';
+                    if (extractionReason === 'no_stale_scenes') {
+                        extractionNote = ' Extraction skipped (no stale scenes).';
+                    } else if (extractionReason === 'extraction_unavailable') {
+                        extractionNote = ' Extraction unavailable.';
+                    } else if (extractionFailed > 0) {
+                        extractionNote = ` Extraction completed with ${extractionFailed} failed scene(s).`;
+                    }
+
+                    const hasExtractionIssue = extractionReason === 'extraction_unavailable' || extractionFailed > 0;
+                    if (hasExtractionIssue) {
+                        let warningMessage: string;
+                        if (extractionReason === 'partial_failure' && extractionFailed > 0) {
+                            const sceneDetail = firstFailedError ? ` — ${firstFailedError}` : '';
+                            warningMessage = `lit-critic: Knowledge projections updated (${sceneUpdated} scenes, ${indexUpdated} indexes), but ${extractionFailed} scene(s) failed extraction${sceneDetail}. Refresh knowledge again to retry.`;
+                        } else {
+                            const reasonLabel = extractionReason ?? 'unknown';
+                            const detail = extractionError ? ` — ${extractionError}` : '';
+                            warningMessage = `lit-critic: Knowledge projections updated (${sceneUpdated} scenes, ${indexUpdated} indexes), but extraction failed (${reasonLabel})${detail}. Categories may remain empty.`;
+                        }
+                        void this.deps.ui.showWarningMessage(warningMessage, false);
+                    } else {
+                        void this.deps.ui.showInformationMessage(
+                            `lit-critic: Knowledge refreshed (${sceneUpdated} scenes, ${indexUpdated} indexes updated).${extractionNote}`,
+                        );
+                    }
+
+                    // Auto-populate the knowledge tree view after server-side refresh
                     const client = this.deps.getApiClient();
-                    const result = await client.exportLearning(projectPath);
-                    void this.deps.ui.showInformationMessage(`lit-critic: LEARNING.md exported to ${result.path}`);
+                    this.deps.knowledgeTreeProvider.setApiClient(client);
+                    this.deps.knowledgeTreeProvider.setProjectPath(projectPath);
+                    await this.deps.knowledgeTreeProvider.refresh();
+
+                    // Propagate flagged entities from reconciliation pass
+                    const flaggedItems: Array<{ category: string; entity_key: string; reason: string }> =
+                        Array.isArray((extraction as any)?.flagged_for_review)
+                            ? ((extraction as any).flagged_for_review as Array<{ category: string; entity_key: string; reason: string }>)
+                            : [];
+                    if (flaggedItems.length > 0) {
+                        this.deps.knowledgeTreeProvider.setFlaggedEntities(flaggedItems);
+                        void this.deps.ui.showInformationMessage(
+                            `lit-critic: ${flaggedItems.length} knowledge item(s) flagged for review by reconciliation pass.`,
+                        );
+                    } else {
+                        this.deps.knowledgeTreeProvider.clearFlaggedEntities();
+                    }
                 },
             );
         } catch (err) {
@@ -972,60 +1035,47 @@ export class SessionWorkflowController {
         }
     }
 
-    private async _cmdResetLearning(): Promise<void> {
+    private async _cmdReviewKnowledge(): Promise<void> {
         try {
             await this.deps.runTrackedOperation(
-                { id: 'reset-learning', title: 'Resetting learning data', statusMessage: 'Resetting learning data...' },
+                { id: 'review-knowledge', title: 'Loading knowledge review', statusMessage: 'Loading knowledge review...' },
                 async () => {
-                    const confirm = await this.deps.ui.showWarningMessage(
-                        'Reset all learning data? This will delete all preferences, blind spots, and resolutions. This cannot be undone.',
-                        true, 'Reset',
-                    );
-                    if (confirm !== 'Reset') { return; }
-
                     await this.deps.ensureServer();
                     const projectPath = this.deps.detectProjectPath();
-                    if (!projectPath) { return; }
-
-                    await this.deps.getApiClient().resetLearning(projectPath);
-                    void this.deps.ui.showInformationMessage('lit-critic: Learning data reset.');
-                    await this.deps.learningTreeProvider.refresh();
-                },
-            );
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            this.deps.presenter.setError(msg);
-            void this.deps.ui.showErrorMessage(`lit-critic: ${msg}`);
-        }
-    }
-
-    private async _cmdDeleteLearningEntry(item: any): Promise<void> {
-        try {
-            await this.deps.runTrackedOperation(
-                { id: 'delete-learning-entry', title: 'Deleting learning entry', statusMessage: 'Deleting learning entry...' },
-                async () => {
-                    const entryId = typeof item === 'number'
-                        ? item
-                        : (item?.entryId ?? item?.entry?.id);
-
-                    if (!entryId) {
-                        void this.deps.ui.showErrorMessage('lit-critic: Could not determine learning entry ID.');
+                    if (!projectPath) {
+                        void this.deps.ui.showErrorMessage(
+                            'lit-critic: Could not detect project directory (no CANON.md found in workspace).'
+                        );
                         return;
                     }
 
-                    await this.deps.ensureServer();
-                    const projectPath = this.deps.detectProjectPath();
-                    if (!projectPath) { return; }
+                    const client = this.deps.getApiClient();
+                    this.deps.knowledgeTreeProvider.setApiClient(client);
+                    this.deps.knowledgeTreeProvider.setProjectPath(projectPath);
+                    await this.deps.knowledgeTreeProvider.refresh();
 
-                    await this.deps.getApiClient().deleteLearningEntry(entryId, projectPath);
-                    void this.deps.ui.showInformationMessage('lit-critic: Learning entry deleted.');
-                    await this.deps.learningTreeProvider.refresh();
+                    void this.deps.ui.showInformationMessage(
+                        'lit-critic: Knowledge review loaded.',
+                    );
                 },
             );
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
+            this.deps.presenter.setError(msg);
             void this.deps.ui.showErrorMessage(`lit-critic: ${msg}`);
         }
+    }
+
+    private async _cmdEditKnowledgeEntry(item: any): Promise<boolean> {
+        return cmdEditKnowledgeEntryHandler(item, this.deps);
+    }
+
+    private async _cmdResetKnowledgeOverride(item?: any): Promise<boolean> {
+        return cmdResetKnowledgeOverrideHandler(item, this.deps);
+    }
+
+    private async _cmdDeleteLearningEntry(item: any): Promise<void> {
+        await cmdDeleteLearningEntryHandler(item, this.deps);
     }
 
     // -----------------------------------------------------------------------
@@ -1034,6 +1084,11 @@ export class SessionWorkflowController {
 
     private async _handleFindingAction(action: string, data?: unknown): Promise<void> {
         switch (action) {
+            case 'discuss': {
+                await this._ensureClosedSessionReopened('discuss');
+                await this.deps.ensureDiscussionPanel().startDiscuss(String(data ?? ''));
+                break;
+            }
             case 'accept':
                 await this._cmdAcceptFinding();
                 break;
@@ -1048,6 +1103,7 @@ export class SessionWorkflowController {
                 break;
             case 'ambiguity':
                 try {
+                    await this._ensureClosedSessionReopened('ambiguity');
                     await this.deps.getApiClient().markAmbiguity(data as boolean);
                     void this.deps.ui.showInformationMessage(
                         `lit-critic: Marked as ${data ? 'intentional' : 'accidental'}`
@@ -1204,7 +1260,9 @@ export class SessionWorkflowController {
         }
     }
 
-    private async _populateFindingsAfterAnalysis(summary: AnalysisSummary): Promise<void> {
+    private async _populateFindingsAfterAnalysis(
+        summary: Pick<AnalysisSummary, 'findings_status' | 'scene_path' | 'scene_paths' | 'current_index' | 'total_findings'>,
+    ): Promise<void> {
         const client = this.deps.getApiClient();
 
         let findingsStatus = summary.findings_status;
@@ -1284,6 +1342,56 @@ export class SessionWorkflowController {
         }
     }
 
+    private async _ensureClosedSessionReopened(actionLabel: string): Promise<void> {
+        if (!this.deps.state.closedSessionNotice) {
+            return;
+        }
+
+        const projectPath = this.deps.detectProjectPath();
+        const sessionId = this.viewedSessionId ?? this.deps.sessionsTreeProvider.getCurrentSessionItem()?.session?.id;
+        if (!projectPath || !sessionId) {
+            throw new Error(`Could not determine session to reopen before ${actionLabel}.`);
+        }
+
+        const client = this.deps.getApiClient();
+        this.deps.presenter.setAnalyzing('Reopening session...');
+        const summary = await this._viewSessionByIdWithScenePathRecovery(client, projectPath, sessionId, true);
+        if (summary.error) {
+            throw new Error(summary.error);
+        }
+
+        this.viewedSessionId = summary.session_id ?? sessionId;
+        this.deps.state.closedSessionNotice = undefined;
+        this.deps.state.indexChangeDismissed = false;
+        await this._openSessionSceneFiles(
+            summary.scene_paths && summary.scene_paths.length > 0
+                ? summary.scene_paths
+                : [summary.scene_path],
+        );
+        await this._populateFindingsAfterAnalysis(summary);
+        await this.deps.sessionsTreeProvider.refresh();
+        this.deps.sessionsTreeProvider.setCurrentSession(this.viewedSessionId);
+        this.deps.presenter.revealCurrentSessionSelection();
+        this.deps.findingsTreeProvider.setSessionContext(
+            this.deps.sessionsTreeProvider.getCurrentSessionItem()?.session ?? null,
+        );
+        this._handleIndexChangeReport(summary.index_change ?? null);
+
+        const currentFinding = await client.getCurrentFinding();
+        this._handleIndexChangeReport(currentFinding.index_change ?? null);
+        if (!currentFinding.complete && currentFinding.finding) {
+            this._updateCachedFinding(currentFinding.finding);
+        }
+
+        const preferredIndex = Math.min(
+            Math.max(summary.current_index ?? this.deps.state.currentFindingIndex, 0),
+            Math.max(0, summary.total_findings - 1),
+        );
+        this._presentFinding(currentFinding, preferredIndex);
+        this.deps.presenter.setProgress(preferredIndex + 1, summary.total_findings);
+        void this.deps.ui.showInformationMessage('lit-critic: Session reopened for editing.');
+    }
+
     private async _openSessionSceneFiles(scenePaths: Array<string | undefined>): Promise<void> {
         const candidates = scenePaths.filter((p): p is string => Boolean(p && p.trim()));
         if (candidates.length === 0) {
@@ -1308,14 +1416,12 @@ export class SessionWorkflowController {
         }
 
         await this.deps.ui.showTextDocument(filesToOpen[0], {
-            viewColumn: 1,
             preview: false,
             preserveFocus: false,
         });
 
         for (let i = 1; i < filesToOpen.length; i++) {
             await this.deps.ui.showTextDocument(filesToOpen[i], {
-                viewColumn: 1,
                 preview: false,
                 preserveFocus: true,
             });
@@ -1336,6 +1442,10 @@ export class SessionWorkflowController {
         this.deps.learningTreeProvider.setApiClient(apiClient);
         this.deps.learningTreeProvider.setProjectPath(projectPath);
         this.deps.learningTreeProvider.refresh().catch(() => {});
+
+        this.deps.knowledgeTreeProvider.setApiClient(apiClient);
+        this.deps.knowledgeTreeProvider.setProjectPath(projectPath);
+        this.deps.knowledgeTreeProvider.refresh().catch(() => {});
     }
     private async _resumeWithScenePathRecovery(client: ApiClient, projectPath: string): Promise<AnalysisSummary> {
         return client.resumeWithRecovery(projectPath, undefined, this.deps.promptForScenePathOverride);
@@ -1347,8 +1457,9 @@ export class SessionWorkflowController {
     }
     private async _viewSessionByIdWithScenePathRecovery(
         client: ApiClient, projectPath: string, sessionId: number,
+        reopen: boolean = false,
     ): Promise<AnalysisSummary> {
-        return client.viewSessionWithRecovery(projectPath, sessionId, undefined, this.deps.promptForScenePathOverride);
+        return client.viewSessionWithRecovery(projectPath, sessionId, undefined, this.deps.promptForScenePathOverride, reopen);
     }
     private async _chooseAnalyzeEntryAction(
         client: ApiClient,
@@ -1371,7 +1482,7 @@ export class SessionWorkflowController {
             const items: Array<{ label: string; description?: string; detail?: string; action: AnalyzeEntryAction }> = [
                 ...activeSessions.map((session) => ({
                     label: `Resume ${formatSessionLabel(session)}`,
-                    description: `Created ${session.created_at}`,
+                    description: `Type: ${formatSessionTypeLabel(session)} · Created ${session.created_at}`,
                     detail: session.scene_path,
                     action: { kind: 'resume-by-id' as const, sessionId: session.id },
                 })),
@@ -1393,7 +1504,7 @@ export class SessionWorkflowController {
             const active = activeSessions[0];
             const choice = await this.deps.ui.showQuickPick(
                 [
-                    `Resume ${formatSessionLabel(active)}`,
+                    `Resume ${formatSessionLabel(active)} · ${formatSessionTypeLabel(active)}`,
                     'Start new analysis',
                 ],
                 {

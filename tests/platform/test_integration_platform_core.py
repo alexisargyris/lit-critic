@@ -42,6 +42,7 @@ class _FakeLLMClient:
                         "options": ["Vary openings"],
                         "flagged_by": ["prose"],
                         "ambiguity_type": None,
+                        "origin": "llm",
                     }
                 ],
             }

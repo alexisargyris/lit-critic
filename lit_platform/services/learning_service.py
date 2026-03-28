@@ -3,18 +3,32 @@
 from datetime import datetime
 from pathlib import Path
 
-from lit_platform.persistence import LearningStore, get_connection
+from lit_platform.persistence import LearningStore
+from lit_platform.persistence.database import get_connection, get_passive_connection
 from lit_platform.runtime.models import LearningData
 
 
-def load_learning(project_path: Path) -> LearningData:
-    """Load learning data from SQLite, with legacy LEARNING.md one-time import."""
-    conn = get_connection(project_path)
+def _get_learning_read_connection(project_path: Path, *, passive: bool):
+    """Return the appropriate connection for learning read operations."""
+    if passive:
+        return get_passive_connection(project_path)
+    return get_connection(project_path)
+
+
+def load_learning(project_path: Path, passive: bool = False) -> LearningData:
+    """Load learning data from SQLite, optionally avoiding import-capable startup writes."""
+    conn = _get_learning_read_connection(project_path, passive=passive)
+    if conn is None:
+        return LearningData()
+
     try:
         data = LearningStore.load(conn)
 
         if data.get("id") is not None:
             return _dict_to_learning_data(data)
+
+        if passive:
+            return LearningData()
 
         learning = _load_learning_from_markdown(project_path)
         if learning.project_name != "Unknown" or learning.review_count > 0 or learning.preferences:
@@ -41,6 +55,7 @@ def _dict_to_learning_data(data: dict) -> LearningData:
         learning.preferences.append({
             "id": entry.get("id"),
             "description": entry.get("description", str(entry)),
+            "confidence": float(entry.get("confidence", 0.5)),
         })
     for entry in data.get("blind_spots", []):
         learning.blind_spots.append({
@@ -146,19 +161,33 @@ def commit_pending_learning_entries(learning: LearningData, conn) -> None:
     if conn is None:
         return
 
-    # Process rejections → preferences
-    unprocessed_rejections = []
+    # Process rejections → preferences (with confidence increment for repeat patterns)
     for rejection in learning.session_rejections:
         if rejection.get("preference_rule"):
             desc = f"[{rejection['lens']}] {rejection['preference_rule']}"
         else:
             reason = rejection.get("reason", "no reason given")
             desc = f"[{rejection['lens']}] {rejection['pattern']} — Author says: \"{reason}\""
-        if not any(desc in p.get("description", "") for p in learning.preferences):
-            entry_id = LearningStore.add_preference(conn, desc)
-            learning.preferences.append({"id": entry_id, "description": desc})
-        # Either way mark as processed — duplicate check already ran
-    learning.session_rejections = unprocessed_rejections  # drained (always empty)
+        # Find an existing preference whose description overlaps with this one (substring match).
+        # If found, increment its confidence instead of duplicating. This breaks the preference
+        # ratchet by making frequently-rejected patterns gradually more prominent (confidence ≥
+        # 0.7 = HIGH) while keeping single-rejection patterns tentative (confidence 0.5 = LOW).
+        existing_match = next(
+            (p for p in learning.preferences
+             if desc in p.get("description", "") or p.get("description", "") in desc),
+            None,
+        )
+        if existing_match is not None:
+            # Same pattern rejected again — increment confidence (cap at 0.9, never 1.0)
+            if existing_match.get("id") is not None:
+                new_confidence = min(0.9, float(existing_match.get("confidence", 0.5)) + 0.2)
+                LearningStore.update_confidence(conn, existing_match["id"], new_confidence)
+                existing_match["confidence"] = new_confidence
+        else:
+            # First time this pattern is rejected — create new entry at base confidence 0.5
+            entry_id = LearningStore.add_preference(conn, desc, confidence=0.5)
+            learning.preferences.append({"id": entry_id, "description": desc, "confidence": 0.5})
+    learning.session_rejections = []  # drained
 
     # Process ambiguity answers → ambiguity_intentional / ambiguity_accidental
     unprocessed_ambiguity = []
@@ -174,7 +203,51 @@ def commit_pending_learning_entries(learning: LearningData, conn) -> None:
                 learning.ambiguity_accidental.append({"id": entry_id, "description": desc})
     learning.session_ambiguity_answers = unprocessed_ambiguity  # drained (always empty)
 
-    # session_acceptances are not yet mapped to long-term entries; clear them too
+    # Process acceptances → blind spot tracking
+    # Each unique lens+pattern accepted this session is stored as an "acceptance:" tracking entry.
+    # One tracking entry is added per unique pattern per session (deduplication within session).
+    # When tracking count reaches BLIND_SPOT_THRESHOLD, a confirmed blind_spot entry is created.
+    # Tracking entries are excluded from LEARNING.md display (they are housekeeping, not content).
+    BLIND_SPOT_THRESHOLD = 3
+    seen_acceptance_patterns: set[str] = set()
+    for acceptance in learning.session_acceptances:
+        lens = acceptance.get("lens", "unknown")
+        pattern = acceptance.get("pattern", "acceptance")
+        desc = f"[{lens}] {pattern}"
+        if desc in seen_acceptance_patterns:
+            continue
+        seen_acceptance_patterns.add(desc)
+
+        # Skip if a confirmed blind spot already exists for this pattern
+        if any(
+            desc in bs.get("description", "")
+            and not bs.get("description", "").startswith("acceptance:")
+            for bs in learning.blind_spots
+        ):
+            continue
+
+        # Count existing tracking entries for this pattern
+        tracking_count = sum(
+            1 for bs in learning.blind_spots
+            if bs.get("description", "").startswith("acceptance:")
+            and desc in bs.get("description", "")
+        )
+
+        # Store one tracking entry for this session's acceptance of this pattern
+        tracking_desc = f"acceptance: {desc}"
+        track_id = LearningStore.add_blind_spot(conn, tracking_desc)
+        learning.blind_spots.append({"id": track_id, "description": tracking_desc})
+        tracking_count += 1
+
+        # Threshold reached → promote to confirmed blind spot
+        if tracking_count >= BLIND_SPOT_THRESHOLD:
+            confirmed_desc = (
+                f"{desc} — accepted {tracking_count}+ times; "
+                f"pay EXTRA attention to this area"
+            )
+            confirmed_id = LearningStore.add_blind_spot(conn, confirmed_desc)
+            learning.blind_spots.append({"id": confirmed_id, "description": confirmed_desc})
+
     learning.session_acceptances = []
 
 
@@ -226,13 +299,19 @@ def generate_learning_markdown(learning: LearningData) -> str:
 
     if learning.preferences:
         for pref in learning.preferences:
-            lines.append(f"- {pref.get('description', pref)}")
+            confidence = float(pref.get("confidence", 0.5))
+            lines.append(f"- [confidence: {confidence:.1f}] {pref.get('description', pref)}")
     else:
         lines.append("[none yet]")
 
     lines.extend(["", "## Blind Spots", ""])
-    if learning.blind_spots:
-        for bs in learning.blind_spots:
+    # Exclude "acceptance:" tracking entries — those are housekeeping, not user-visible content
+    visible_blind_spots = [
+        bs for bs in learning.blind_spots
+        if not bs.get("description", "").startswith("acceptance:")
+    ]
+    if visible_blind_spots:
+        for bs in visible_blind_spots:
             lines.append(f"- {bs.get('description', bs)}")
     else:
         lines.append("[none yet]")

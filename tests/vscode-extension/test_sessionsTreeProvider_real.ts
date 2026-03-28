@@ -57,8 +57,53 @@ describe('SessionsTreeProvider (Real)', () => {
         await treeProvider.refresh();
 
         const roots = treeProvider.getChildren();
+        const sceneGroups = roots.filter((item: any) => String(item.id || '').startsWith('scene-group:'));
+        assert.equal(sceneGroups.length, 1);
+        assert.equal(sceneGroups[0].label, 'scene-a.txt +2');
+    });
+
+    it('shows empty state at root when no project path is configured', async () => {
+        const roots = treeProvider.getChildren();
+        assert.ok(Array.isArray(roots));
         assert.equal(roots.length, 1);
-        assert.equal(roots[0].label, 'scene-a.txt +2');
+        assert.equal(roots[0].label, 'No sessions found');
+        assert.equal(roots[0].contextValue, 'empty');
+    });
+
+    it('keeps session nodes wired to the existing view-session command', async () => {
+        const apiClient = {
+            async listSessions() {
+                return {
+                    sessions: [
+                        {
+                            id: 12,
+                            status: 'active',
+                            scene_path: '/repo/scene-a.txt',
+                            scene_paths: ['/repo/scene-a.txt'],
+                            model: 'sonnet',
+                            created_at: '2026-02-20T10:05:00',
+                            total_findings: 1,
+                            accepted_count: 0,
+                            rejected_count: 0,
+                            withdrawn_count: 0,
+                        },
+                    ],
+                };
+            },
+        };
+
+        treeProvider.setApiClient(apiClient);
+        treeProvider.setProjectPath('/repo');
+        await treeProvider.refresh();
+
+        const roots = treeProvider.getChildren();
+        const sceneGroups = roots.filter((item: any) => String(item.id || '').startsWith('scene-group:'));
+        assert.equal(sceneGroups.length, 1);
+        const sessions = treeProvider.getChildren(sceneGroups[0]);
+        assert.equal(sessions.length, 1);
+
+        assert.equal(sessions[0].command?.command, 'literaryCritic.viewSession');
+        assert.deepEqual(sessions[0].command?.arguments, [12]);
     });
 
     it('shows all files in root tooltip for multi-file sessions', async () => {
@@ -89,9 +134,10 @@ describe('SessionsTreeProvider (Real)', () => {
         await treeProvider.refresh();
 
         const roots = treeProvider.getChildren();
-        assert.equal(roots.length, 1);
+        const sceneGroups = roots.filter((item: any) => String(item.id || '').startsWith('scene-group:'));
+        assert.equal(sceneGroups.length, 1);
 
-        const tooltip = String(roots[0].tooltip ?? '');
+        const tooltip = String(sceneGroups[0].tooltip ?? '');
         assert.match(tooltip, /Scenes \(3\):/);
         assert.match(tooltip, /scene-a\.txt/);
         assert.match(tooltip, /scene-b\.txt/);
@@ -106,6 +152,7 @@ describe('SessionsTreeProvider (Real)', () => {
                         {
                             id: 31,
                             status: 'active',
+                            depth_mode: 'quick',
                             scene_path: '/repo/scene-stale.txt',
                             scene_paths: ['/repo/scene-stale.txt'],
                             model: 'sonnet',
@@ -127,9 +174,10 @@ describe('SessionsTreeProvider (Real)', () => {
         await treeProvider.refresh();
 
         const roots = treeProvider.getChildren();
-        assert.equal(roots.length, 1);
+        const sceneGroups = roots.filter((item: any) => String(item.id || '').startsWith('scene-group:'));
+        assert.equal(sceneGroups.length, 1);
 
-        const children = treeProvider.getChildren(roots[0]);
+        const children = treeProvider.getChildren(sceneGroups[0]);
         assert.equal(children.length, 1);
 
         const sessionItem = children[0];
@@ -137,8 +185,52 @@ describe('SessionsTreeProvider (Real)', () => {
         assert.equal(sessionItem.iconPath?.id, 'warning');
 
         const tooltip = String(sessionItem.tooltip ?? '');
+        assert.match(tooltip, /Type: Quick/);
         assert.match(tooltip, /Status: active \(stale\)/);
         assert.match(tooltip, /Changed indexes: CANON\.md, GLOSSARY\.md/);
+    });
+
+    it('renders old DB sessions with depth_mode=preflight as unknown type for backward compat', async () => {
+        const apiClient = {
+            async listSessions() {
+                return {
+                    sessions: [
+                        {
+                            id: 51,
+                            status: 'active',
+                            depth_mode: 'preflight',
+                            scene_path: '/repo/scene-old.txt',
+                            scene_paths: ['/repo/scene-old.txt'],
+                            model: 'sonnet',
+                            created_at: '2026-02-20T13:00:00',
+                            total_findings: 2,
+                            accepted_count: 0,
+                            rejected_count: 0,
+                            withdrawn_count: 0,
+                        },
+                    ],
+                };
+            },
+        };
+
+        treeProvider.setApiClient(apiClient);
+        treeProvider.setProjectPath('/repo');
+        await treeProvider.refresh();
+
+        const roots = treeProvider.getChildren();
+        const sceneGroups = roots.filter((item: any) => String(item.id || '').startsWith('scene-group:'));
+        assert.equal(sceneGroups.length, 1);
+
+        const children = treeProvider.getChildren(sceneGroups[0]);
+        assert.equal(children.length, 1);
+
+        const sessionItem = children[0];
+        // Old DB sessions with depth_mode='preflight' fall through to 'unknown' — no type suffix, generic icon.
+        assert.equal(sessionItem.label, '#51');
+        assert.equal(sessionItem.iconPath?.id, 'play-circle');
+
+        const tooltip = String(sessionItem.tooltip ?? '');
+        assert.match(tooltip, /Type: Unknown/);
     });
 
     it('returns current session item for native TreeView reveal without synthetic cursor markers', async () => {
@@ -149,6 +241,7 @@ describe('SessionsTreeProvider (Real)', () => {
                         {
                             id: 41,
                             status: 'active',
+                            depth_mode: 'deep',
                             scene_path: '/repo/scene-a.txt',
                             scene_paths: ['/repo/scene-a.txt'],
                             model: 'sonnet',
@@ -171,7 +264,7 @@ describe('SessionsTreeProvider (Real)', () => {
         const current = treeProvider.getCurrentSessionItem();
 
         assert.ok(current, 'Expected current session item');
-        assert.equal(current.label, '#41');
+        assert.equal(current.label, '#41 · Deep');
         assert.ok(!String(current.label).includes('▶'));
         assert.equal(current.id, 'session:41');
         assert.notEqual(current.iconPath?.id, 'target');

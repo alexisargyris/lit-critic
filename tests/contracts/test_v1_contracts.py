@@ -189,7 +189,6 @@ class TestAdaptersAndParity:
         assert response.status == "withdrawn"
         assert response.reason == legacy["reason"]
 
-
 class TestWrapperCompatibility:
     async def test_run_analyze_contract_compatible(self, monkeypatch):
         req = AnalyzeRequest.model_validate(

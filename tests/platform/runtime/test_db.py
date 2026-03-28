@@ -148,6 +148,33 @@ class TestSessionStore:
         assert ok is False
         assert "different scene set" in msg.lower()
 
+    def test_session_summary_column_defaults_to_empty(self, db_conn):
+        """New sessions should have session_summary defaulting to empty string (v6 migration)."""
+        sid = SessionStore.create(db_conn, "/s.md", "h", "sonnet")
+        s = SessionStore.get(db_conn, sid)
+        # v6 migration adds session_summary TEXT DEFAULT ''
+        assert s.get("session_summary") in ("", None)
+
+    def test_update_session_summary_round_trip(self, db_conn):
+        """session_summary should be writeable and loadable (Change D)."""
+        sid = SessionStore.create(db_conn, "/s.md", "h", "sonnet")
+        summary_text = "A meta-observation: the author consistently avoids interiority."
+        db_conn.execute(
+            "UPDATE session SET session_summary = ? WHERE id = ?",
+            (summary_text, sid),
+        )
+        db_conn.commit()
+        s = SessionStore.get(db_conn, sid)
+        assert s.get("session_summary") == summary_text
+
+    def test_platform_update_session_summary(self, db_conn):
+        """Platform SessionStore.update_session_summary() should persist and be loadable."""
+        from lit_platform.persistence.session_store import SessionStore as PlatformSessionStore
+        sid = SessionStore.create(db_conn, "/s.md", "h", "sonnet")
+        PlatformSessionStore.update_session_summary(db_conn, sid, "Session reflection text.")
+        s = SessionStore.get(db_conn, sid)
+        assert s.get("session_summary") == "Session reflection text."
+
 
 class TestFindingStore:
     """Tests for FindingStore CRUD operations."""
@@ -274,4 +301,27 @@ class TestLearningStore:
         assert "# Learning" in md
         assert "PROJECT: Novel" in md
         assert "REVIEW_COUNT: 2" in md
-        assert "- [prose] Test preference" in md
+        assert "[prose] Test preference" in md  # confidence prefix prepended by export
+
+    def test_export_markdown_includes_confidence_prefix(self, db_conn):
+        """Exported markdown should include [confidence: X.X] prefix for preferences."""
+        LearningStore.add_preference(db_conn, "[prose] Sentence fragments OK", confidence=0.7)
+        LearningStore.add_preference(db_conn, "[logic] Motivation implicit", confidence=0.5)
+
+        md = LearningStore.export_markdown(db_conn)
+        assert "[confidence: 0.7]" in md
+        assert "[confidence: 0.5]" in md
+
+    def test_confidence_column_exists_and_defaults_to_half(self, db_conn):
+        """New learning entries should have confidence = 0.5 by default."""
+        eid = LearningStore.add_preference(db_conn, "Test preference")
+        entries = LearningStore.list_entries(db_conn, CATEGORY_PREFERENCE)
+        assert len(entries) == 1
+        assert entries[0]["confidence"] == pytest.approx(0.5)
+
+    def test_update_confidence(self, db_conn):
+        """update_confidence() should update the stored value."""
+        eid = LearningStore.add_preference(db_conn, "Test", confidence=0.5)
+        LearningStore.update_confidence(db_conn, eid, 0.7)
+        entries = LearningStore.list_entries(db_conn, CATEGORY_PREFERENCE)
+        assert entries[0]["confidence"] == pytest.approx(0.7)

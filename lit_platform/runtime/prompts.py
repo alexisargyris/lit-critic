@@ -58,7 +58,15 @@ Focus ONLY on sentence-level and paragraph-level craft:
 - Awkward constructions, repetition, clunky transitions
 - Overwriting/underwriting relative to tension
 
-IMPORTANT: Check LEARNING.md for author preferences. Do NOT flag issues that match patterns the author has previously rejected.
+IMPORTANT: Check LEARNING.md for author preferences.
+- For preferences marked [confidence: HIGH] (≥ 0.7): flag ONLY if the evidence in this specific
+  scene is compelling enough to warrant revisiting — and if you do flag it, note that it contradicts
+  a learned preference.
+- For preferences marked [confidence: LOW] (< 0.7): you MAY still flag the issue if you find
+  evidence, but note the author's prior preference in your finding.
+- Never silently suppress a finding solely because of a learned preference.
+If LEARNING.md lists blind spots, pay EXTRA attention to those areas — the author has historically
+needed help there.
 
 ## OUTPUT FORMAT
 
@@ -100,6 +108,14 @@ Focus ONLY on scene function and narrative advancement:
 - Dead weight passages that don't serve the scene objective
 
 IMPORTANT: Check LEARNING.md for author preferences.
+- For preferences marked [confidence: HIGH] (≥ 0.7): flag ONLY if the evidence in this specific
+  scene is compelling enough to warrant revisiting — and if you do flag it, note that it contradicts
+  a learned preference.
+- For preferences marked [confidence: LOW] (< 0.7): you MAY still flag the issue if you find
+  evidence, but note the author's prior preference in your finding.
+- Never silently suppress a finding solely because of a learned preference.
+If LEARNING.md lists blind spots, pay EXTRA attention to those areas — the author has historically
+needed help there.
 
 ## OUTPUT FORMAT
 
@@ -125,6 +141,14 @@ Focus ONLY on whether actions, motivations, and mechanics make sense:
 - No "idiot plot" moments (characters acting unreasonably stupid to enable plot)
 
 IMPORTANT: Check LEARNING.md for author preferences.
+- For preferences marked [confidence: HIGH] (≥ 0.7): flag ONLY if the evidence in this specific
+  scene is compelling enough to warrant revisiting — and if you do flag it, note that it contradicts
+  a learned preference.
+- For preferences marked [confidence: LOW] (< 0.7): you MAY still flag the issue if you find
+  evidence, but note the author's prior preference in your finding.
+- Never silently suppress a finding solely because of a learned preference.
+If LEARNING.md lists blind spots, pay EXTRA attention to those areas — the author has historically
+needed help there.
 
 ## OUTPUT FORMAT
 
@@ -150,6 +174,16 @@ Focus ONLY on whether a reader can follow what's happening:
 
 For ambiguous passages, note whether ambiguity seems intentional or accidental.
 Check LEARNING.md for patterns the author has marked as intentional ambiguity.
+
+IMPORTANT: Check LEARNING.md for author preferences.
+- For preferences marked [confidence: HIGH] (≥ 0.7): flag ONLY if the evidence in this specific
+  scene is compelling enough to warrant revisiting — and if you do flag it, note that it contradicts
+  a learned preference.
+- For preferences marked [confidence: LOW] (< 0.7): you MAY still flag the issue if you find
+  evidence, but note the author's prior preference in your finding.
+- Never silently suppress a finding solely because of a learned preference.
+If LEARNING.md lists blind spots, pay EXTRA attention to those areas — the author has historically
+needed help there.
 
 ## OUTPUT FORMAT
 
@@ -179,6 +213,16 @@ Also flag:
 - Terms that appear inconsistently spelled
 - Potential new terms not in GLOSSARY.md
 - Usage that contradicts GLOSSARY.md definitions
+
+IMPORTANT: Check LEARNING.md for author preferences.
+- For preferences marked [confidence: HIGH] (≥ 0.7): flag ONLY if the evidence in this specific
+  scene is compelling enough to warrant revisiting — and if you do flag it, note that it contradicts
+  a learned preference.
+- For preferences marked [confidence: LOW] (< 0.7): you MAY still flag the issue if you find
+  evidence, but note the author's prior preference in your finding.
+- Never silently suppress a finding solely because of a learned preference.
+If LEARNING.md lists blind spots, pay EXTRA attention to those areas — the author has historically
+needed help there.
 
 ## OUTPUT FORMAT
 
@@ -217,7 +261,15 @@ Focus ONLY on dialogue quality and conversational dynamics:
 - Speaker attribution clarity in dialogue-heavy passages
 - Dialogue tags, punctuation, and speech conventions (cross-ref STYLE.md)
 
-IMPORTANT: Check LEARNING.md for author preferences. Do NOT repeatedly flag intentional choices the author has previously rejected.
+IMPORTANT: Check LEARNING.md for author preferences.
+- For preferences marked [confidence: HIGH] (≥ 0.7): flag ONLY if the evidence in this specific
+  scene is compelling enough to warrant revisiting — and if you do flag it, note that it contradicts
+  a learned preference.
+- For preferences marked [confidence: LOW] (< 0.7): you MAY still flag the issue if you find
+  evidence, but note the author's prior preference in your finding.
+- Never silently suppress a finding solely because of a learned preference.
+If LEARNING.md lists blind spots, pay EXTRA attention to those areas — the author has historically
+needed help there.
 
 ## OUTPUT FORMAT
 
@@ -231,6 +283,84 @@ Output a JSON array of findings. Each finding must have:
 - options: array of 1-2 action suggestions
 
 If no issues found, output: []
+Output ONLY the JSON array, nothing else.""",
+
+        "horizon": """## YOUR TASK: HORIZON LENS
+
+You are NOT looking for problems. You are looking for ARTISTIC POSSIBILITIES
+that this scene systematically avoids — narrative strategies, structural
+patterns, voice registers, or craft techniques that are absent from the
+author's approach.
+
+Your goal is to help the author see beyond their current habits. You are
+sampling from the COMPLEMENT of the author's style space.
+
+Focus on:
+- Narrative strategies not employed (e.g., unreliable narration, time jumps,
+  in-medias-res, epistolary fragments, shifting POV)
+- Structural patterns absent (e.g., parallel structure, frame narratives,
+  montage, scene-within-scene)
+- Voice registers unused (e.g., if prose is consistently lyrical, note the
+  absence of dry/clinical moments; if spare, note where lushness could serve)
+- Dialogue techniques not attempted (e.g., overlapping speech, silence as
+  dialogue, dialect, indirect speech)
+- Sensory channels underused (e.g., if visual dominates, note absence of
+  sound, smell, texture, proprioception)
+- Emotional range unexplored (e.g., if tone is consistently tense, note where
+  levity/absurdity/tenderness could create contrast)
+
+Cross-reference STYLE.md to understand the author's declared aesthetic, then
+look for what lies OUTSIDE that declaration. Cross-reference CAST.md for
+character voices that could stretch beyond their current register.
+
+IMPORTANT: Check LEARNING.md for author preferences — but with INVERTED logic.
+If the author has repeatedly rejected suggestions in a particular direction,
+DO note this as a pattern observation:
+  "The author has consistently declined [X]. This itself is a stylistic
+   boundary worth examining: [reason why the avoided technique could serve
+   this specific scene]."
+Do NOT simply suppress the observation.
+
+Do NOT suggest techniques the author is already using effectively.
+Do NOT frame observations as problems to fix.
+Frame every observation as an unexplored possibility. Where possible, cite a
+concrete example from published literature of how the technique works.
+
+## OUTPUT FORMAT
+
+Output a JSON array of observations. Each observation must have:
+- category: "opportunity" | "pattern" | "comfort-zone"
+  - opportunity: a specific technique that could enrich this particular scene
+  - pattern: a recurring absence across the author's style (inferred from
+    STYLE.md / LEARNING.md / the scene itself)
+  - comfort-zone: an observation about the author's systematic avoidance of
+    a craft dimension
+- location: human-readable reference to the passage that prompted the
+  observation (e.g. "L042-L058, the argument scene")
+- line_start: integer, first line number
+- line_end: integer, last line number
+- observation: what is absent and why it matters (be specific to THIS scene)
+- possibility: a concrete description of how the unexplored technique could
+  work here (NOT a rewrite — a description of the approach)
+- literary_example: a brief reference to published work where this technique
+  is used effectively (author + title + one-sentence description), or null
+
+Example:
+```json
+[
+  {
+    "category": "opportunity",
+    "location": "L042-L058, the argument between Mara and Elias",
+    "line_start": 42,
+    "line_end": 58,
+    "observation": "The argument is rendered entirely through direct dialogue with speech tags. The characters' physical environment disappears during the exchange.",
+    "possibility": "Interleaving environmental details (the kettle boiling over, a dog barking outside) could create counterpoint to the emotional intensity, grounding the reader in the scene's physicality and adding subtext through the characters' non-verbal attention to these interruptions.",
+    "literary_example": "Raymond Carver, 'What We Talk About When We Talk About Love' — domestic objects carry emotional weight that the dialogue cannot express directly."
+  }
+]
+```
+
+If no observations found, output: []
 Output ONLY the JSON array, nothing else.""",
     }
     
@@ -506,6 +636,36 @@ You are having a genuine editorial discussion. You may:
 
 Be concise (2-4 sentences of natural response). Do not lecture.
 
+## EDITORIAL INDEPENDENCE
+
+Do not concede a finding merely because the author disagrees. Concede ONLY when
+the author provides specific textual evidence or a craft argument that genuinely
+undermines your evidence. Distinguish clearly between:
+
+- REJECTED: the author acknowledges your point but prefers their current choice
+  (this is the author's prerogative — it does not mean your analysis was wrong)
+- CONCEDED: your analysis was factually incorrect or based on a misreading of
+  the text
+
+If the author's argument is "I like it this way" or "that's my style" without
+addressing your evidence, the correct resolution is [REJECTED], not [CONCEDED].
+
+Before conceding or withdrawing, briefly restate the strongest version of your
+original argument in one sentence. If the finding still has merit after this
+steelman check, use [CONTINUE] to explore the disagreement further rather than
+resolving immediately.
+
+If this is the first exchange on this finding and the author simply disagrees
+without a detailed counter-argument, use [CONTINUE] to ask a clarifying
+question or present your evidence more specifically. Do not resolve a finding
+on the first turn unless the author's response is clearly terminal (e.g.,
+explicit acceptance or a detailed rebuttal with textual evidence).
+
+If this finding is from the HORIZON lens, remember: this is NOT a problem to
+defend. It is an artistic observation. Your role in discussion is to explore
+the possibility further, offer more concrete examples, or acknowledge if the
+author's current approach is deliberate. Do not pressure the author to change.
+
 ## RESPONSE FORMAT
 
 End your response with exactly ONE status tag:
@@ -568,6 +728,380 @@ def build_discussion_messages(finding, user_message: str,
     return messages
 
 
+# --- Index extraction tool schema ---
+
+INDEX_EXTRACTION_TOOL = {
+    "name": "extract_index_entries",
+    "description": "Report new entries to be inserted into the project index files (CAST.md, GLOSSARY.md, THREADS.md, TIMELINE.md).",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "cast": {
+                "type": "array",
+                "description": "Characters who appear/are mentioned but are NOT already in CAST.md.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Character's full name as it appears in the scene."},
+                        "category": {
+                            "type": "string",
+                            "enum": ["main", "supporting", "minor"],
+                            "description": "main = central POV/protagonist; supporting = recurring secondary; minor = named but peripheral.",
+                        },
+                        "draft_entry": {
+                            "type": "string",
+                            "description": "Complete markdown entry in CAST.md format (### Name, bullet points for Age/Role/Physical/Key facts/Relationships). Use [TODO] for unknown details.",
+                        },
+                    },
+                    "required": ["name", "category", "draft_entry"],
+                },
+            },
+            "glossary": {
+                "type": "array",
+                "description": "Specialized terms, place names, invented words, or non-English terms NOT already in GLOSSARY.md.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "term": {"type": "string", "description": "The term exactly as it should be spelled in the glossary."},
+                        "category": {
+                            "type": "string",
+                            "enum": ["term", "place"],
+                            "description": "term = vocabulary/concept/invented word; place = location/proper noun.",
+                        },
+                        "draft_entry": {
+                            "type": "string",
+                            "description": "Complete markdown entry in GLOSSARY.md format (### Term, **Definition:**, **First seen:**, **Notes:**).",
+                        },
+                    },
+                    "required": ["term", "category", "draft_entry"],
+                },
+            },
+            "threads": {
+                "type": "array",
+                "description": "Narrative threads (questions, mysteries, arcs, promises) touched in this scene.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "thread_id": {
+                            "type": "string",
+                            "description": "Short snake_case ID (e.g. vault_mystery, George_secret).",
+                        },
+                        "action": {
+                            "type": "string",
+                            "enum": ["new", "advanced", "closed"],
+                            "description": "new = thread first appears; advanced = existing thread moved forward; closed = thread resolved.",
+                        },
+                        "draft_entry": {
+                            "type": "string",
+                            "description": "For new threads: full markdown entry (### id, **Opened:**, **Question:**, **Status:**, **Notes:**). For advanced/closed: brief status update text only.",
+                        },
+                    },
+                    "required": ["thread_id", "action", "draft_entry"],
+                },
+            },
+            "timeline": {
+                "type": "array",
+                "description": "Timeline entry for this scene (normally exactly one entry).",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "scene_id": {"type": "string", "description": "Scene ID from @@META header (e.g. 01.03.01)."},
+                        "part": {"type": "string", "description": "Part number as zero-padded string (e.g. '01')."},
+                        "chapter": {"type": "string", "description": "Chapter number as zero-padded string (e.g. '03')."},
+                        "summary": {"type": "string", "description": "One or two sentence outcome summary focusing on what changed."},
+                        "draft_entry": {
+                            "type": "string",
+                            "description": "Markdown entry: **{scene_id}** {summary} (include key facts/numbers/states if continuity-relevant).",
+                        },
+                    },
+                    "required": ["scene_id", "summary", "draft_entry"],
+                },
+            },
+        },
+        "required": ["cast", "glossary", "threads", "timeline"],
+    },
+}
+
+
+INDEX_AUDIT_TOOL = {
+    "name": "report_index_contradictions",
+    "description": "Report factual contradictions and logical impossibilities found across index files.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "contradictions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "file_a": {"type": "string", "description": "First file involved."},
+                        "location_a": {"type": "string", "description": "Where in file_a the first claim appears."},
+                        "claim_a": {"type": "string", "description": "The factual claim from file_a."},
+                        "file_b": {"type": "string", "description": "Second file involved (may be same as file_a)."},
+                        "location_b": {"type": "string", "description": "Where in file_b the contradicting claim appears."},
+                        "claim_b": {"type": "string", "description": "The contradicting claim from file_b."},
+                        "explanation": {"type": "string", "description": "Why these two claims cannot both be true."},
+                        "severity": {
+                            "type": "string",
+                            "enum": ["error", "warning"],
+                            "description": "error = definite contradiction; warning = likely contradiction that may be intentional.",
+                        },
+                    },
+                    "required": [
+                        "file_a", "location_a", "claim_a", "file_b", "location_b", "claim_b", "explanation", "severity"
+                    ],
+                },
+            }
+        },
+        "required": ["contradictions"],
+    },
+}
+
+
+def get_index_extraction_prompt(scene: str, indexes: dict[str, str]) -> str:
+    """Generate the prompt for extracting new index file entries from a scene."""
+
+    return f"""You are an index file assistant for a fiction manuscript project.
+
+Scan the scene below and identify NEW entries to add to four index files.
+Do NOT repeat entries already present in the existing files.
+Do NOT add entries for CANON.md or STYLE.md — those are managed separately.
+
+## REFERENCE CONTEXT (read-only — do NOT create entries for this file)
+
+### CANON.md (world rules, historical constraints, defined mechanics)
+{indexes.get('CANON.md', '[Not provided]')}
+
+Use CANON.md to:
+- Avoid proposing GLOSSARY entries for terms already defined here.
+- Avoid proposing THREADS entries for facts that are established world constraints, not open narrative questions.
+- Ensure CAST draft entries respect physical/biological/social constraints.
+- Ensure TIMELINE summaries are consistent with established chronology.
+
+## EXISTING INDEX FILES
+
+### CAST.md (existing characters — do NOT repeat)
+{indexes.get('CAST.md', '[Not provided]')}
+
+### GLOSSARY.md (existing terms — do NOT repeat)
+{indexes.get('GLOSSARY.md', '[Not provided]')}
+
+### THREADS.md (existing threads — do NOT repeat new entries; DO report status changes)
+{indexes.get('THREADS.md', '[Not provided]')}
+
+### TIMELINE.md (existing timeline — do NOT repeat scenes already listed)
+{indexes.get('TIMELINE.md', '[Not provided]')}
+
+## SCENE TO SCAN
+
+{scene}
+
+## INSTRUCTIONS
+
+Use the extract_index_entries tool to report your findings.
+
+**cast**: New characters not in CAST.md. Include even minor named characters likely to recur.
+Draft entries in CAST.md format. Use [TODO] for unknown details.
+
+**glossary**: New specialized terms, place names, invented words, non-English terms not in GLOSSARY.md.
+Use category="place" for locations/proper nouns, category="term" for everything else.
+Infer definitions from context. Use [TODO] if definition is unclear.
+Do not propose glossary terms that are already explicitly defined in CANON.md.
+
+**threads**: Narrative promises touched in this scene.
+- action="new": thread opens here (question raised, mystery introduced, arc begun)
+- action="advanced": existing thread moved forward (new clue, complication)
+- action="closed": existing thread resolved (question answered, arc completed)
+For advanced/closed, provide thread_id and a brief status update in draft_entry.
+Do not create "new" threads for facts already established as world constraints in CANON.md.
+
+**timeline**: One-line outcome summary for TIMELINE.md. Extract scene_id from @@META ID field.
+Focus on OUTCOMES (what changed), not process. Include key numbers/states if continuity-relevant.
+Infer part/chapter from scene_id (e.g. ID 01.03.01 → part="01", chapter="03").
+Ensure timeline summaries do not contradict chronology established in CANON.md.
+
+Return empty arrays for categories with no new entries.
+"""
+
+
+def get_knowledge_extraction_prompt(
+    scene_content: str,
+    canon_text: str,
+    existing_knowledge_summary: str,
+) -> str:
+    """Generate prompt for extracting structured knowledge from scene prose."""
+    return f"""You are extracting project knowledge from a fiction scene.
+
+Return ONLY valid JSON. Do not include markdown fences or extra prose.
+
+## CANON CONTEXT (read-only)
+{canon_text or '[Not provided]'}
+
+## EXISTING KNOWLEDGE SUMMARY
+{existing_knowledge_summary or '[No existing knowledge provided]'}
+
+## SCENE CONTENT
+{scene_content}
+
+## EXTRACTION TARGETS
+
+Extract all relevant knowledge in this JSON shape:
+
+{{
+  "scene_metadata": {{
+    "location": "string or null",
+    "pov": "string or null",
+    "tense": "string or null",
+    "tense_notes": "string or null",
+    "cast_present": ["name", "..."],
+    "objective": "string or null",
+    "cont_anchors": ["key=value", "..."]
+  }},
+  "characters": [
+    {{
+      "name": "canonical name",
+      "aka": ["alias", "..."],
+      "category": "main|supporting|minor|null",
+      "traits": {{"key": "value"}},
+      "relationships": [{{"target": "name", "description": "relationship"}}]
+    }}
+  ],
+  "terms": [
+    {{
+      "term": "canonical spelling",
+      "category": "term|place|null",
+      "definition": "string or null",
+      "translation": "string or null",
+      "notes": "string or null"
+    }}
+  ],
+  "thread_events": [
+    {{
+      "thread_id": "snake_case_id",
+      "event_type": "opened|advanced|closed",
+      "question": "string or null",
+      "notes": "string or null"
+    }}
+  ],
+  "timeline": {{
+    "summary": "one-line outcome summary",
+    "chrono_hint": "string or null"
+  }}
+}}
+
+## RULES
+- Prefer canon-consistent names, terminology, and chronology.
+- Include only entities supported by scene evidence.
+- Deduplicate obvious aliases under one canonical character name.
+- Keep arrays present even when empty.
+- Use null for unknown scalar values.
+- If no timeline outcome is extractable, set timeline.summary to "".
+- Keep all string values concise — short phrases, not full sentences.
+- For character traits, use brief key-value pairs (e.g. "age": "mid-40s", "mood": "anxious").
+"""
+
+
+def get_index_audit_prompt(indexes: dict[str, str]) -> str:
+    """Generate prompt for semantic contradiction audit across index files."""
+    return f"""You are auditing index files for factual contradictions.
+
+Your task is to find contradictions where two claims cannot both be true.
+
+## INDEX FILES
+
+### CANON.md
+{indexes.get('CANON.md', '[Not provided]')}
+
+### CAST.md
+{indexes.get('CAST.md', '[Not provided]')}
+
+### GLOSSARY.md
+{indexes.get('GLOSSARY.md', '[Not provided]')}
+
+### THREADS.md
+{indexes.get('THREADS.md', '[Not provided]')}
+
+### TIMELINE.md
+{indexes.get('TIMELINE.md', '[Not provided]')}
+
+## WHAT TO CHECK
+
+1. Arithmetic consistency (ages, years, durations, chronology)
+2. Physical/canonical constraints (CANON rules vs events/facts)
+3. Status consistency (thread status vs timeline events)
+4. Cross-file factual consistency (CAST, THREADS, TIMELINE, GLOSSARY)
+5. Relationship symmetry where explicitly asserted as factual claims
+
+## IMPORTANT EXCLUSIONS
+
+- Do NOT flag style choices or incomplete entries.
+- Do NOT flag missing information or placeholders like [TODO], [TBD], TBD.
+- Do NOT report deterministic formatting issues (duplicate headings, missing fields, etc.).
+- Only return contradictions where statements cannot both be true.
+
+Use the report_index_contradictions tool to return contradictions.
+Return an empty contradictions array when none are found.
+"""
+
+
+def get_session_summary_prompt(findings: list, scene_content: str,
+                               learning_markdown: str = "") -> str:
+    """Generate the session-end disconfirming summary prompt.
+
+    Called after all findings reach a terminal status.  The caller is
+    responsible for rendering ``learning_markdown`` (e.g. via
+    ``generate_learning_markdown()`` in ``learning_service.py``) before
+    passing it here, so that this module stays free of LearningData imports.
+
+    Args:
+        findings:         List of Finding objects (duck-typed — any object with
+                          .number, .lens, .severity, .status, .evidence attrs).
+        scene_content:    Raw scene text (line numbers added here).
+        learning_markdown: Pre-rendered LEARNING.md content, or empty string.
+    """
+    numbered_scene = number_lines(scene_content)
+
+    findings_summary_lines = []
+    for f in findings:
+        evidence_snippet = (f.evidence[:80] + "…") if len(f.evidence) > 80 else f.evidence
+        findings_summary_lines.append(
+            f"- Finding #{f.number} ({f.lens}, {f.severity}): {f.status} — {evidence_snippet}"
+        )
+    findings_summary = "\n".join(findings_summary_lines) if findings_summary_lines else "[No findings recorded]"
+
+    return f"""You are an editorial critic completing a review session. All findings have been
+discussed. Your final task is a META-OBSERVATION — not about any single finding,
+but about the session as a whole.
+
+## SESSION OUTCOMES
+
+{findings_summary}
+
+## SCENE TEXT
+
+{numbered_scene}
+
+## AUTHOR'S LEARNED PREFERENCES
+
+{learning_markdown or '[No preferences recorded yet]'}
+
+## YOUR TASK
+
+Consider:
+1. What findings did the author reject? Is there a PATTERN in the rejections
+   that suggests a broader artistic choice — or a broader blind spot?
+2. What did NO lens flag at all? Is there something in this scene that every
+   lens missed because it falls outside the diagnostic categories?
+3. If you could give this author ONE piece of advice that isn't captured by
+   any individual finding, what would it be?
+
+Be brief (3-5 sentences). Do not repeat specific findings. Do not be
+sycophantic — do not praise the author's work or decision-making. Focus on
+what might have been missed.
+
+Frame your observation as a genuine question or hypothesis, not a directive."""
+
+
 def get_re_evaluation_prompt(finding, scene_content: str) -> str:
     """Generate prompt for re-evaluating a stale finding against updated scene text.
 
@@ -624,5 +1158,72 @@ Respond with a JSON object in exactly one of these two forms:
   "reason": "<brief explanation of why the edit resolved this issue>"
 }}
 ```
+
+Output ONLY the JSON object, nothing else."""
+
+
+def get_knowledge_reconciliation_prompt(
+    existing_knowledge_json: str,
+    scene_summaries_text: str,
+) -> str:
+    """Generate prompt for the post-extraction knowledge reconciliation review pass.
+
+    The LLM reviews all extracted knowledge against scene summaries and returns:
+    - ``updates``: field-level corrections for unlocked entities with clear textual evidence.
+    - ``removals``: unlocked entities no longer supported by any scene text.
+    Locked entities must not appear in either list.
+    """
+    return f"""You are performing a reconciliation review of extracted project knowledge.
+
+Your task:
+1. Review the existing knowledge set below against the scene summaries.
+2. For **unlocked** entities only:
+   - Propose field updates when scene text clearly supports a correction.
+   - Propose removal when an entity is no longer textually supported by any scene.
+3. Pay special attention to **character renames**: each scene summary includes a `Cast:` field
+   listing the characters present in that scene. If a `characters` entity does not appear in
+   *any* scene's `Cast:` list, and another character with overlapping traits or relationships
+   appears consistently in the scenes where the old character was previously active, propose
+   removal of the old entity. The `reason` must explicitly note the likely rename, e.g.
+   "character no longer appears in any scene cast list — possible rename to <NewName>".
+   If no plausible replacement is visible, use "character never appears in any scene cast list".
+4. Leave **locked** entities completely untouched — do not include them in updates or removals.
+5. Do not invent information; only propose changes that are directly evidenced in the scene text.
+
+Return ONLY valid JSON. Do not include markdown fences or extra prose.
+
+## EXISTING KNOWLEDGE (with lock status)
+
+{existing_knowledge_json}
+
+## SCENE SUMMARIES
+
+{scene_summaries_text}
+
+## OUTPUT FORMAT
+
+{{
+  "updates": [
+    {{
+      "category": "characters | terms | threads | timeline",
+      "entity_key": "the entity's primary key value",
+      "field": "the field name to update",
+      "new_value": "the corrected value (string)"
+    }}
+  ],
+  "removals": [
+    {{
+      "category": "characters | terms | threads | timeline",
+      "entity_key": "the entity's primary key value",
+      "reason": "brief explanation of why this entity is no longer supported"
+    }}
+  ]
+}}
+
+Rules:
+- Only include entries where you have clear, direct textual evidence from the scene summaries.
+- Do not modify locked entities (marked with locked: true in the knowledge set).
+- An empty list for updates or removals is valid when no changes are warranted.
+- entity_key must match exactly the key value shown in the knowledge set.
 
 Output ONLY the JSON object, nothing else."""

@@ -38,7 +38,7 @@ describe('FindingsTreeProvider (Real)', () => {
         const group = provider.getChildren()[0];
         const finding = provider.getChildren(group)[0];
 
-        assert.equal(finding.label, '#1 L42-L45');
+        assert.equal(finding.label, '#1 L42-L45 · LLM');
         assert.ok(String(finding.description).includes('· current'));
         assert.ok(!String(finding.description).includes('▶'));
     });

@@ -2,6 +2,9 @@
 
 Use this checklist before creating/pushing any release tag.
 
+If you are pushing **work-in-progress** changes (not a release), use the WIP
+declaration step below and skip tag creation.
+
 ---
 
 ## 1) Decide Scope and SemVer Bumps
@@ -73,6 +76,20 @@ git tag -a cli-v2.0.0 -m "cli 2.0.0"
 
 - [ ] Tag names follow `<component>-vX.Y.Z`
 - [ ] Tag versions match `versioning/compatibility.json`
+
+---
+
+## 4.5) WIP Push Path (No Tags)
+
+Use this path when implementation is intentionally partial and you need to push
+collaboration/progress state without declaring a release.
+
+- [ ] Add/update `versioning/compatibility.json` → `release_intent`
+  - [ ] `status` is `"wip"`
+  - [ ] `spec` references the governing spec file
+  - [ ] `implemented` lists completed scope
+  - [ ] `pending` lists remaining scope
+- [ ] Confirm no release tags are created/pushed for this commit range
 
 ---
 

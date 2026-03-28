@@ -6,6 +6,7 @@ import pytest
 from pathlib import Path
 from io import StringIO
 from unittest.mock import patch, MagicMock
+from cli.commands import build_parser
 from cli.interface import (
     load_project_files,
     load_scene,
@@ -257,6 +258,32 @@ class TestPrintFinding:
 
 class TestMainFunction:
     """Tests for main() CLI function (high-level behavior)."""
+
+    def test_analyze_rejects_deprecated_model_override_flags(self):
+        """Analyze parser should not accept legacy model override flags."""
+        parser = build_parser()
+
+        with pytest.raises(SystemExit):
+            parser.parse_args([
+                "analyze",
+                "--scene",
+                "scene.md",
+                "--project",
+                "proj",
+                "--model",
+                "sonnet",
+            ])
+
+        with pytest.raises(SystemExit):
+            parser.parse_args([
+                "analyze",
+                "--scene",
+                "scene.md",
+                "--project",
+                "proj",
+                "--discussion-model",
+                "haiku",
+            ])
     
     def test_requires_api_key(self):
         """Main should exit if no API key provided."""

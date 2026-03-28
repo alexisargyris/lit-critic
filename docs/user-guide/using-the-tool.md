@@ -8,39 +8,69 @@ lit-critic offers three interfaces for reviewing your scenes. Choose the one tha
 
 The terminal-based interface. Fast, keyboard-driven, and scriptable.
 
+### Focus Areas
+
+CLI commands use a noun-first structure organized around four canonical buckets:
+
+- **Knowledge**: `refresh`, `review`, `export`
+- **Scenes**: `list`, `lock`, `unlock`, `rename`
+- **Sessions**: `start`, `resume`, `list`, `show`, `delete`
+- **Learning**: `list`, `add`, `update`, `export`, `reset`
+
+Model slot configuration is available as a top-level command group: `config show` and `config set`.
+
+```bash
+python -m cli knowledge refresh --project path/to/project/
+python -m cli knowledge review --project path/to/project/ --category characters
+python -m cli sessions start --scene path/to/scene.txt --project path/to/project/ --mode quick
+python -m cli scenes list --project path/to/project/
+python -m cli scenes lock scene.txt --project path/to/project/
+python -m cli scenes rename old.txt new.txt --project path/to/project/
+```
+
+Semantics:
+- **Knowledge refresh** = validate scene chain + extract knowledge from changed scenes
+- **Sessions start (`--mode quick|deep`)** = full scene analysis workflow (triggers `knowledge refresh` first)
+
+### Cross-client Focus Areas map
+
+All clients align around the same four buckets:
+
+| Bucket | CLI | Web UI | VS Code |
+|---|---|---|---|
+| **Knowledge** | `knowledge refresh/review/export` | Knowledge refresh + review flows | Knowledge tree view + refresh/review commands |
+| **Scenes** | `scenes list/lock/unlock/rename` | Scene list + lock/rename flows | Scenes tree view + scene management commands |
+| **Sessions** | `sessions start/resume/list/show/delete` | Session start/resume/history flows | Analyze/resume/session tree workflows |
+| **Learning** | `learning list/add/update/export/reset` | Learning list/export/reset flows | Learning tree + learning management commands |
+
 ### Basic Usage
 
 ```bash
-python lit-critic.py analyze --scene path/to/scene.txt --project path/to/project/
+python -m cli sessions start --scene path/to/scene.txt --project path/to/project/
 ```
 
-### Model Selection
+### Analysis Mode (`--mode`)
 
-Choose which model to use:
+Choose analysis depth mode per run:
 
 ```bash
-python lit-critic.py analyze --scene scene.txt --project ~/novel/ --model opus        # Claude: Deepest
-python lit-critic.py analyze --scene scene.txt --project ~/novel/ --model sonnet      # Claude: Default
-python lit-critic.py analyze --scene scene.txt --project ~/novel/ --model haiku       # Claude: Fastest
-python lit-critic.py analyze --scene scene.txt --project ~/novel/ --model gpt-4o      # OpenAI: Balanced
-python lit-critic.py analyze --scene scene.txt --project ~/novel/ --model gpt-4o-mini # OpenAI: Fast & cheap
+python -m cli sessions start --scene scene.txt --project C:/novel --mode quick
+python -m cli sessions start --scene scene.txt --project C:/novel --mode deep
+```
+
+- `quick`: full lens pipeline using the quick checker slot
+- `deep`: full lens pipeline using the deep checker slot (default)
+
+### Configure Model Slots
+
+Mode chooses depth; slots choose which model each tier uses.
+
+```bash
+python -m cli config show
+python -m cli config set frontier=sonnet deep=sonnet quick=haiku
 ```
 
 CLI analysis is single-scene per run. For consecutive multi-scene analysis in one session, use the Web UI or VS Code extension selector.
-
-### Lens Preset (`--lens-preset`)
-
-The CLI now defaults to `--lens-preset auto`.
-
-- `auto` resolves to `single-scene` in CLI analyze runs (CLI currently analyzes one scene per run)
-- You can still manually override with `balanced`, `prose-first`, `story-logic`, or `clarity-pass`
-
-Examples:
-
-```bash
-python lit-critic.py analyze --scene scene.txt --project ~/novel/ --lens-preset auto
-python lit-critic.py analyze --scene scene.txt --project ~/novel/ --lens-preset story-logic
-```
 
 ### Interactive Commands
 
@@ -86,22 +116,21 @@ python lit-critic-web.py --reload            # Auto-reload for development
 
 ### Features
 
-- **Setup screen** Select scene file(s), project directory, model, and lens preset (`Auto` recommended)
+- **Setup screen** Select scene file(s), project directory, and analysis mode
 - **Multi-scene analysis** Use "Add another scene" to select consecutive scenes for cross-boundary analysis
 - **Live progress** Watch each lens complete in real-time
 - **Chat interface** Discuss findings naturally
 - **Action buttons** Accept, Reject, Next, Skip Minor
 - **Source scene badges** In multi-scene sessions, each finding shows which scene it belongs to
-- **Session persistence** Your model choice and paths are remembered
+- **Session persistence** Your mode choice and paths are remembered
 
 ### Workflow
 
 1. **Select files** on the setup screen (use "Add another scene" for consecutive multi-scene analysis)
-2. **Choose model** (Claude: Opus/Sonnet/Haiku, or OpenAI: GPT-4o/GPT-4o-mini)
-3. **Choose lens preset** (`Auto` is the default and resolves to `single-scene` or `multi-scene` based on selected scene count; other presets are manual overrides)
-4. **Start analysis** progress bars show each lens
-5. **Review findings** one at a time — source scene is shown for multi-scene sessions
-6. **Save learning** to capture your preferences
+2. **Choose analysis mode** (`quick` or `deep`)
+3. **Start analysis** progress bars show each lens
+4. **Review findings** one at a time — source scene is shown for multi-scene sessions
+5. **Save learning** to capture your preferences
 
 ---
 
@@ -133,13 +162,11 @@ Or press **F5** in the `vscode-extension` folder for development mode.
 
 > These options update VS Code workspace settings under `workbench.editor.decorations.*` and therefore affect **all** diagnostics in that workspace (not only lit-critic).
 
-4. **(Optional) Set lens preset behavior**
-   - Setting: `literaryCritic.lensPreset`
-   - Default: `auto` (recommended)
-   - With `auto`, the extension resolves preset at analysis time:
-     - one selected scene → `single-scene`
-     - multiple selected scenes → `multi-scene`
-   - Other preset values act as manual overrides
+4. **(Optional) Configure analysis mode and model slots**
+   - `literaryCritic.analysisMode`: `quick` or `deep`
+   - `literaryCritic.modelSlotFrontier`: model used for frontier/discussion tier
+   - `literaryCritic.modelSlotDeep`: model used by deep checker tier
+   - `literaryCritic.modelSlotQuick`: model used by quick checker tier
 
 ### Usage
 
@@ -181,35 +208,36 @@ Shows progress:
 
 | Command | Keybinding | Action |
 |---------|-----------|--------|
-| Analyze Current Scene | `Ctrl+Shift+L` | Start new analysis |
-| Re-run Analysis with Updated Indexes | — | Re-run after CANON/CAST/GLOSSARY/STYLE/THREADS/TIMELINE/LEARNING changes |
-| Resume Session | — | Continue saved session |
-| Next Finding | `Ctrl+Shift+]` | Skip to next |
+| Analyze Current Scene | `Ctrl+Shift+L` | Start new analysis (includes knowledge refresh) |
+| Refresh Knowledge | — | Refresh extracted knowledge from scenes |
+| Review Knowledge | — | Open Knowledge view to inspect/correct extracted entities |
+| Next Finding | `Ctrl+Shift+]` | Advance to next finding (internal) |
 | Accept Finding | — | Accept current finding |
 | Reject Finding | — | Reject with reason |
 | Review Current Finding | — | Re-check finding against scene edits |
-| Skip Minor | — | Skip minor findings |
-| Clear Session | — | Delete saved session |
+| View Session | — | Open a session from the Sessions tree |
+| Delete Session | — | Delete a session |
 | Export Learning to LEARNING.md | — | Export LEARNING.md |
-| Select Model | — | Choose your model |
+| Select Model | — | Choose analysis mode and model slots |
 | Stop Server | — | Stop the local API process |
 
 ### Interoperability
 
 The extension shares the same SQLite database (`.lit-critic.db`) with the CLI and Web UI. Start a review in one interface, close it, and resume in another — everything is automatically saved.
 
-### Index context changes and re-run recommendation
+### Knowledge context changes
 
-If you edit index context files during an active session (`CANON.md`, `CAST.md`, `GLOSSARY.md`, `STYLE.md`, `THREADS.md`, `TIMELINE.md`, or `LEARNING.md`), lit-critic marks findings as potentially stale and recommends a full re-run.
+If you edit `CANON.md`, `STYLE.md`, or `LEARNING.md` during an active session, lit-critic marks findings as potentially stale and recommends a re-run.
 
 - lit-critic **does not auto-rerun** on save.
 - The stale prompt is shown **once per analysis snapshot** (to avoid repetitive nagging).
 - The Discussion Panel shows a stale-context banner with:
   - **Re-run Analysis** (recommended)
   - **Dismiss** (hide banner until next prompt cycle)
-- You can also run the Command Palette action: **lit-critic: Re-run Analysis with Updated Indexes**.
 
-Use this rerun when project context changed globally. Keep using **Review Current Finding** for local scene-line edits.
+For changes to extracted knowledge (characters, terms, threads), run **Refresh Knowledge** and then re-analyze.
+
+Use **Review Current Finding** for local scene-line edits (no re-run needed).
 
 ---
 
@@ -233,7 +261,7 @@ If an active session exists (a review you started but didn't finish), the tool o
 
 **CLI:**
 ```bash
-python lit-critic.py resume --project ~/novel/
+python -m cli sessions resume --project ~/novel/
 ```
 
 **Web UI:**
@@ -266,9 +294,9 @@ You can view all past sessions (active, completed, abandoned):
 
 **CLI:**
 ```bash
-python lit-critic.py sessions list --project ~/novel/
-python lit-critic.py sessions view 3 --project ~/novel/    # View session #3 details
-python lit-critic.py sessions delete 3 --project ~/novel/  # Delete session #3
+python -m cli sessions list --project ~/novel/
+python -m cli sessions show 3 --project ~/novel/    # Show session #3 details
+python -m cli sessions delete 3 --project ~/novel/  # Delete session #3
 ```
 
 **Web UI:**
@@ -283,8 +311,8 @@ You can view and manage your learning data across all interfaces:
 
 **CLI:**
 ```bash
-python lit-critic.py learning view --project ~/novel/      # View learning data
-python lit-critic.py learning export --project ~/novel/     # Export to LEARNING.md
+python -m cli learning list --project ~/novel/      # List learning data
+python -m cli learning export --project ~/novel/    # Export to LEARNING.md
 ```
 
 **Web UI:**
@@ -333,25 +361,86 @@ Scene change notifications appear in the chat thread.
 
 ---
 
-## Model Selection
+## Analysis Modes and Slots
 
-Choose a model based on your needs:
+Use modes to control depth and cost profile:
 
-| Model | Provider | Speed | Quality | Cost per Scene |
-|-------|----------|-------|---------|----------------|
-| **Haiku** | Claude | Fastest | Good | $0.02–0.05 |
-| **Sonnet** | Claude | Balanced | Excellent | $0.10–0.15 |
-| **Opus** | Claude | Slowest | Best | $0.50–0.75 |
-| **GPT-4o** | OpenAI | Balanced | Excellent | ~$0.10–0.15 |
-| **GPT-4o-mini** | OpenAI | Very Fast | Good | ~$0.02–0.05 |
+| Mode | What runs | Typical cost profile |
+|------|-----------|----------------------|
+| **quick** | Full analysis with quick checker tier | Lower |
+| **deep** | Full analysis with deep checker + frontier tier | Highest |
 
-**Default:** Sonnet (best balance for most users)
+Use slot configuration to choose exact models per tier:
 
-### When to Use Each
+- `quick` slot: checker model for quick mode
+- `deep` slot: checker model for deep mode
+- `frontier` slot: discussion/frontier model used where applicable
 
-- **Haiku / GPT-4o-mini** Quick drafts, early revisions, tight budget
-- **Sonnet / GPT-4o** Normal use, balanced quality/speed
-- **Opus** Final polish, complex scenes, maximum depth
+Recommended baseline:
+
+```bash
+python -m cli config set frontier=sonnet deep=sonnet quick=haiku
+```
+
+---
+
+## The Horizon Lens
+
+The **Horizon lens** is a seventh lens that works differently from the other six.
+It does **not** diagnose problems. Instead it surfaces **unexplored artistic possibilities** —
+narrative strategies, structural patterns, voice registers, or craft techniques that
+the scene *systematically avoids*.
+
+### Purpose
+
+Where the other six lenses ask *"What's wrong here?"*, the Horizon lens asks
+*"What roads are not being taken?"* This is grounded in research showing that
+users who received unbiased samples (rather than samples from within their
+existing hypothesis space) discovered new possibilities 5× more often than those
+who didn't.
+
+### What it examines
+
+- **Narrative strategies not employed** — unreliable narration, time jumps, in-medias-res, epistolary fragments, shifting POV
+- **Structural patterns absent** — parallel structure, frame narratives, montage, scene-within-scene
+- **Voice registers unused** — if prose is consistently lyrical, where could dryness serve? If spare, where could lushness?
+- **Dialogue techniques not attempted** — overlapping speech, silence as dialogue, dialect, indirect speech
+- **Sensory channels underused** — if visual dominates, what role could sound, smell, texture, proprioception play?
+- **Emotional range unexplored** — if tone is consistently tense, where could levity, absurdity, or tenderness create contrast?
+
+### Output format
+
+Horizon findings use a different schema from standard findings:
+
+| Field | Meaning |
+|-------|---------|
+| `category` | `opportunity` / `pattern` / `comfort-zone` |
+| `observation` | What is absent and why it matters (specific to this scene) |
+| `possibility` | A description of how the unexplored technique could work here (not a rewrite) |
+| `literary_example` | A published work where the technique is used effectively |
+
+**`opportunity`** — a specific technique that could enrich this particular scene  
+**`pattern`** — a recurring absence across the author's style (inferred from STYLE.md / LEARNING.md)  
+**`comfort-zone`** — an observation about the author's systematic avoidance of an entire craft dimension
+
+### Inverted learning
+
+Where the other lenses suppress findings that match learned preferences, the
+Horizon lens does the **opposite**: if LEARNING.md shows you've repeatedly
+declined suggestions in a certain direction, the Horizon lens treats that as a
+*pattern observation worth noting*, not a reason for silence.
+
+### Opting out
+
+The Horizon lens respects lens weight preferences. Set `horizon: 0.0` to disable it:
+
+Use the API weight override: `{"weights": {"horizon": 0.0}}`
+
+### Discussion
+
+Horizon findings are fully discussable. The discussion prompt knows this is an
+artistic observation, not a problem to defend — the critic explores possibilities,
+offers examples, and acknowledges deliberate choices without pressure.
 
 ---
 
@@ -410,19 +499,24 @@ All interfaces fall back gracefully on error.
 ### Estimate Costs
 
 Typical 3–4 page scene:
-- **7 API calls** (6 lenses + coordinator)
-- **Sonnet**: ~$0.10–0.15
-- **Opus**: ~$0.50–0.75
-- **Haiku**: ~$0.02–0.05
+- **quick**: lower-cost full analysis
+- **deep**: fuller analysis depth and typically highest cost
+
+The API surfaces `mode_cost_hint` and `tier_cost_summary` in analysis responses.
+Use these to compare expected mode-level cost impact for your current slot configuration.
+
+The Horizon lens adds one extra API call per analysis. You can disable it by
+setting `{"weights": {"horizon": 0.0}}` in your lens preferences to reduce
+costs back to 9 calls (6 lenses + 3 coordinator chunks).
 
 Discussion adds extra cost per message (usually $0.01–0.05 per turn).
 
 ### Reduce Costs
 
-1. **Use Haiku or GPT-4o-mini** for early drafts
+1. **Run `knowledge refresh`** before iterating to validate scene chain and extract knowledge
 2. **Skip minor findings** (`skip minor`) to end reviews faster
-3. **Use Sonnet or GPT-4o** for normal work (good balance)
-4. **Save Opus** for final polish
+3. **Use `--mode quick`** for regular drafting passes
+4. **Reserve `--mode deep`** for high-confidence review and polish
 
 ---
 
@@ -477,4 +571,4 @@ If a finding doesn't make sense, discuss it. The AI can revise, withdraw, or exp
 - **[Working with Findings](working-with-findings.md)** Accept, reject, discuss
 - **[Learning System](learning-system.md)** How preferences are tracked
 - **[Scene Format](scene-format.md)** @@META documentation
-- **[Index Files](index-files.md)** CANON, CAST, etc.
+- **[Knowledge Management Guide](index-files.md)** CANON.md, STYLE.md, and auto-extracted knowledge

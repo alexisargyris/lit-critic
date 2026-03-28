@@ -63,11 +63,6 @@
                         </select>
                         <span class="hint">Model used for finding discussion. Leave empty to use the analysis model.</span>
                     </div>
-                    <div class="form-group">
-                        <label for="lens-preset-select">Lens Preset</label>
-                        <select id="lens-preset-select"></select>
-                        <span class="hint">Adjust how strongly each lens influences finding ordering.</span>
-                    </div>
                     <div class="form-group" id="api-key-group">
                         <label for="api-key">Analysis API key <span class="optional">(optional if env var set)</span></label>
                         <input type="password" id="api-key" placeholder="For selected analysis model provider">
@@ -81,16 +76,51 @@
                     <div id="api-key-configured" class="form-group hidden">
                         <span class="hint" id="api-key-configured-text">✓ API key configured (environment / .env)</span>
                     </div>
-                    <div class="form-actions">
-                        <button type="submit" class="btn btn-primary">Start Analysis</button>
-                        <button type="button" id="check-session-btn" class="btn btn-secondary">Check for Saved Session</button>
+                    <div id="sessions-actions-section" class="focus-area focus-area-sessions">
+                        <h3>Sessions</h3>
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary">Analyze</button>
+                            <button type="button" id="check-session-btn" class="btn btn-secondary">Check</button>
+                        </div>
+                        <p class="hint">Config using the fields above, then Analyze or Check. Use Refresh to reopen a saved session after index changes.</p>
+
+                        <div id="saved-session-info" class="saved-session hidden">
+                            <h3>Saved Session Found</h3>
+                            <p id="saved-session-details"></p>
+                            <button id="resume-btn" class="btn btn-primary">Refresh</button>
+                        </div>
                     </div>
                 </form>
 
-                <div id="saved-session-info" class="saved-session hidden">
-                    <h3>Saved Session Found</h3>
-                    <p id="saved-session-details"></p>
-                    <button id="resume-btn" class="btn btn-primary">Resume Session</button>
+                <div id="indexes-actions-section" class="focus-area focus-area-indexes">
+                    <h3>Indexes</h3>
+                    <p class="hint">Use Update to regenerate index files from scene edits. Run Audit Quick for deterministic checks or Audit Deep for deterministic + semantic checks.</p>
+                    <div id="index-audit-section" class="form-actions" style="align-items: center; gap: 12px;">
+                        <label for="audit-deep-toggle" style="display:flex;align-items:center;gap:6px;">
+                            <input type="checkbox" id="audit-deep-toggle">
+                            Audit Deep
+                        </label>
+                        <button type="button" id="run-audit-btn" class="btn btn-secondary">Audit Quick</button>
+                    </div>
+                    <div id="audit-loading" class="hidden" style="margin-top: 8px;">Running Audit Quick...</div>
+                    <div id="audit-error" class="error hidden" style="margin-top: 8px;"></div>
+                    <div id="audit-results" class="hidden" style="margin-top: 10px;">
+                        <div><strong>Deterministic:</strong> <span id="audit-deterministic-count">0</span></div>
+                        <div><strong>Semantic:</strong> <span id="audit-semantic-count">0</span></div>
+                        <div><strong>Deep Error:</strong> <span id="audit-deep-error">None</span></div>
+                        <div style="margin-top: 8px;">
+                            <strong>Placeholder Census</strong>
+                            <ul id="audit-placeholder-list"></ul>
+                        </div>
+                        <div id="audit-semantic-panel" class="hidden" style="margin-top: 8px;">
+                            <strong>Semantic Findings</strong>
+                            <ul id="audit-semantic-list"></ul>
+                        </div>
+                        <div style="margin-top: 8px;">
+                            <strong>Report</strong>
+                            <pre id="audit-formatted-report" style="white-space: pre-wrap;"></pre>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
@@ -106,6 +136,8 @@
                         <div class="lens-item" data-lens="logic"><span class="lens-icon">⏳</span> Logic</div>
                         <div class="lens-item" data-lens="clarity"><span class="lens-icon">⏳</span> Clarity</div>
                         <div class="lens-item" data-lens="continuity"><span class="lens-icon">⏳</span> Continuity</div>
+                        <div class="lens-item" data-lens="dialogue"><span class="lens-icon">⏳</span> Dialogue</div>
+                        <div class="lens-item" data-lens="horizon"><span class="lens-icon">⏳</span> Horizon</div>
                     </div>
                     <div id="coordination-status" class="hidden">
                         <span class="lens-icon">⏳</span> Coordinating results...
@@ -146,6 +178,7 @@
                     <span id="finding-number" class="finding-number">#1</span>
                     <span id="finding-severity" class="severity-badge">MAJOR</span>
                     <span id="finding-lens" class="lens-badge">PROSE</span>
+                    <span id="finding-origin" class="origin-badge hidden"></span>
                     <span id="finding-source-scene" class="source-scene-badge hidden" title=""></span>
                     <span id="finding-flagged" class="flagged-info"></span>
                 </div>
@@ -239,7 +272,7 @@
     </div>
 
     <footer>
-        <p>lit-critic v2.7.0 — Web UI</p>
+        <p>lit-critic v2.13.4 — Web UI</p>
     </footer>
 
     <script src="/static/js/app.js"></script>

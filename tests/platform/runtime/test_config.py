@@ -183,7 +183,11 @@ class TestModelRegistryHelpers:
         assert models_again[DEFAULT_MODEL]["label"] != "mutated"
 
     def test_refresh_available_models_disabled_does_not_drop_baseline(self):
-        with patch.dict(os.environ, {"LIT_CRITIC_MODEL_DISCOVERY_ENABLED": "0"}, clear=False):
+        with patch.dict(os.environ, {
+            "LIT_CRITIC_MODEL_DISCOVERY_ENABLED": "0",
+            "ANTHROPIC_API_KEY": "",
+            "OPENAI_API_KEY": "",
+        }, clear=False):
             refreshed = refresh_available_models(force=True)
         assert DEFAULT_MODEL in refreshed
         assert set(BASE_AVAILABLE_MODELS.keys()).issubset(set(refreshed.keys()))

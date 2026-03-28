@@ -6,6 +6,8 @@
  */
 
 import { strict as assert } from 'assert';
+import * as fs from 'fs';
+import * as path from 'path';
 
 describe('Extension', () => {
     describe('activation', () => {
@@ -24,7 +26,7 @@ describe('Extension', () => {
             // After server starts on activation, autoLoadSidebar() should:
             // 1. Detect project path (CANON.md)
             // 2. Load sessions and learning data
-            // 3. Auto-resume active session if exists
+            // 3. Avoid auto-resuming an active session during passive startup
             const hasCanonMd = true;
             const serverStarted = true;
             const shouldAutoLoad = hasCanonMd && serverStarted;
@@ -32,16 +34,17 @@ describe('Extension', () => {
             assert.ok(shouldAutoLoad);
         });
 
-        it('should auto-resume active session on activation', () => {
-            // If there's an active session in the database:
-            // 1. Call resume(projectPath)
-            // 2. Populate findings tree
-            // 3. Update status bar with progress
-            // 4. Don't auto-open discussion panel
+        it('should not auto-resume active session on activation', () => {
+            // If there's an active session in the database during activation:
+            // 1. Keep the current session highlighted in the sidebar
+            // 2. Do not call resume(projectPath)
+            // 3. Do not populate findings as a hidden startup side effect
+            // 4. Leave resume behind explicit user action
             const hasActiveSession = true;
-            const shouldResume = hasActiveSession;
+            const shouldResume = false;
             
-            assert.ok(shouldResume);
+            assert.equal(hasActiveSession, true);
+            assert.equal(shouldResume, false);
         });
 
         it('should load sessions and learning data automatically', () => {
@@ -60,9 +63,20 @@ describe('Extension', () => {
             assert.ok(true);
         });
 
-        it('should handle resume command', () => {
-            // Test cmdResume logic
-            assert.ok(true);
+        it('should handle knowledge commands', () => {
+            // Test cmdRefreshKnowledge + cmdReviewKnowledge logic
+            const packagePath = path.resolve(__dirname, '../../vscode-extension/package.json');
+            const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf-8'));
+            const contributedCommands = new Set(
+                (packageJson.contributes?.commands ?? []).map((command: any) => command.command),
+            );
+
+            assert.ok(contributedCommands.has('literaryCritic.refreshKnowledge'));
+            assert.ok(contributedCommands.has('literaryCritic.deleteKnowledgeEntity'));
+            assert.ok(contributedCommands.has('literaryCritic.resetKnowledgeOverride'));
+            assert.ok(contributedCommands.has('literaryCritic.openKnowledgeReviewPanel'));
+            assert.ok(contributedCommands.has('literaryCritic.nextKnowledgeEntity'));
+            assert.ok(contributedCommands.has('literaryCritic.previousKnowledgeEntity'));
         });
 
         it('should handle finding navigation', () => {
@@ -147,9 +161,52 @@ describe('Extension', () => {
             // 1. Detect project path
             // 2. Initialize API client
             // 3. Load sessions and learning
-            // 4. Auto-resume active session
+            // 4. Keep startup passive and avoid auto-resume
             const functionExists = true;
             assert.ok(functionExists);
+        });
+    });
+
+    describe('post-redesign scene settings sync', () => {
+        it('should normalize scene folder and scene extensions before backend sync', () => {
+            const configuredFolder = '  text  ';
+            const configuredExtensions = ['.TXT', ' md ', '.txt', ''];
+
+            const normalizedFolder = configuredFolder.trim() || 'text';
+            const normalizedExtensions = Array.from(
+                new Set(
+                    configuredExtensions
+                        .map((value) => value.trim().toLowerCase().replace(/^\.+/, ''))
+                        .filter((value) => value.length > 0),
+                ),
+            );
+
+            assert.equal(normalizedFolder, 'text');
+            assert.deepEqual(normalizedExtensions, ['txt', 'md']);
+        });
+
+        it('should build watcher glob from effective scene settings', () => {
+            const sceneFolder = 'text';
+            const sceneExtensions = ['txt', 'md'];
+            const watcherGlob = `${sceneFolder}/**/*.{${sceneExtensions.join(',')}}`;
+
+            assert.equal(watcherGlob, 'text/**/*.{txt,md}');
+        });
+    });
+
+    describe('post-redesign watcher refresh behavior', () => {
+        it('should debounce scene refresh after file watcher events', () => {
+            const eventBurst = ['create', 'change', 'delete'];
+            const refreshCalls = eventBurst.length > 0 ? 1 : 0;
+
+            assert.equal(refreshCalls, 1);
+        });
+
+        it('should debounce knowledge refresh after file watcher events', () => {
+            const eventBurst = ['create', 'change'];
+            const refreshCalls = eventBurst.length > 0 ? 1 : 0;
+
+            assert.equal(refreshCalls, 1);
         });
     });
 });

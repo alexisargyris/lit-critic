@@ -389,6 +389,29 @@ main {
 .lens-badge.clarity { background: var(--clarity); color: #1a1a2e; }
 .lens-badge.continuity { background: var(--continuity); }
 
+.origin-badge {
+    padding: 0.2rem 0.6rem;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #fff;
+    border: 1px solid transparent;
+}
+
+.origin-badge.code {
+    background: #1f6feb;
+}
+
+.origin-badge.checker {
+    background: #0f766e;
+}
+
+.origin-badge.critic {
+    background: #7c3aed;
+}
+
 .flagged-info {
     font-size: 0.75rem;
     color: var(--text-muted);
@@ -682,6 +705,27 @@ main {
 }
 
 /* --- Saved session --- */
+
+.focus-area {
+    margin-top: 1.25rem;
+    padding: 1rem;
+    border-radius: var(--radius);
+    border: 1px solid var(--border-light);
+    background: rgba(15, 52, 96, 0.2);
+}
+
+.focus-area h3 {
+    margin-bottom: 0.5rem;
+}
+
+.focus-area .hint {
+    margin-top: 0.5rem;
+}
+
+.focus-area-indexes {
+    border-color: rgba(127, 140, 141, 0.5);
+    background: rgba(42, 42, 42, 0.25);
+}
 
 .saved-session {
     margin-top: 1.25rem;

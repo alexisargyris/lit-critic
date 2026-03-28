@@ -33,6 +33,72 @@ All requests and responses use `application/json` unless otherwise specified.
 
 ## Endpoints
 
+### Repository
+
+#### `GET /api/repo-preflight`
+
+Return preflight validation status for the configured lit-critic repository path.
+Called by clients on startup to determine whether the installation path is valid before
+attempting operations that require the Core.
+
+**Request:** None
+
+**Response:**
+```json
+{
+  "ok": true,
+  "reason_code": null,
+  "path": "/path/to/lit-critic",
+  "marker": ".lit-critic",
+  "configured_path": "/path/to/lit-critic"
+}
+```
+
+When the path is invalid:
+```json
+{
+  "ok": false,
+  "reason_code": "marker_not_found",
+  "path": null,
+  "marker": ".lit-critic",
+  "configured_path": "/wrong/path"
+}
+```
+
+**Fields:**
+- `ok` (boolean) — Whether the configured path passes validation
+- `reason_code` (string | null) — Why validation failed, or `null` if OK
+- `path` (string | null) — Resolved absolute path, or `null` if invalid
+- `marker` (string) — Marker filename the validator looks for
+- `configured_path` (string | null) — Raw path currently persisted in user config
+
+**Status Codes:**
+- `200 OK` Always returns 200; check `ok` field for validity
+
+---
+
+#### `POST /api/repo-path`
+
+Validate and persist a new lit-critic repository path.
+
+**Request Body:**
+```json
+{
+  "repo_path": "/path/to/lit-critic"
+}
+```
+
+**Fields:**
+- `repo_path` (string, required) — Path to validate and persist
+
+**Response:** Same shape as `GET /api/repo-preflight`.
+
+**Status Codes:**
+- `200 OK` Path is valid and has been saved
+- `400 Bad Request` Path failed validation; response body has same shape as preflight but with `"code": "repo_path_invalid"`
+
+---
+
 ### Configuration
 
 #### `GET /api/config`
@@ -57,19 +123,35 @@ Get available models and configuration.
       "max_tokens": 8192
     },
     "sonnet": {
-      "label": "Sonnet 4.5 (balanced)",
+      "label": "Sonnet 4.5 (default)",
       "provider": "anthropic",
       "id": "claude-sonnet-4-5-20250929",
       "max_tokens": 4096
     },
     "gpt-4o": {
-      "label": "GPT-4o (balanced)",
+      "label": "GPT-4o (default)",
       "provider": "openai",
       "id": "gpt-4o",
       "max_tokens": 4096
     }
   },
   "default_model": "sonnet",
+  "analysis_modes": ["quick", "deep"],
+  "default_analysis_mode": "deep",
+  "mode_cost_hints": {
+    "quick": "Quick mode prioritizes lower-cost checker-tier analysis.",
+    "deep": "Deep mode runs checker + frontier discussion for highest coverage and highest expected cost."
+  },
+  "model_slots": {
+    "frontier": "sonnet",
+    "deep": "sonnet",
+    "quick": "haiku"
+  },
+  "default_model_slots": {
+    "frontier": "sonnet",
+    "deep": "sonnet",
+    "quick": "haiku"
+  },
   "model_registry": {
     "auto_discovery_enabled": true,
     "cache_path": "C:/Users/alexi/.lit-critic-models-cache.json",
@@ -83,9 +165,1005 @@ Get available models and configuration.
 Notes:
 - `available_models` is dynamic (curated baseline + optional provider auto-discovery).
 - `model_registry` exposes diagnostics only (no secrets/keys).
+- `mode_cost_hints` is a UI-safe estimate string map keyed by analysis mode.
 
 **Status Codes:**
 - `200 OK` Success
+
+#### `GET /api/config/models`
+
+Get model-slot configuration and available models for mode-driven analysis.
+
+**Request:** None
+
+**Response:**
+```json
+{
+  "model_slots": {
+    "frontier": "sonnet",
+    "deep": "sonnet",
+    "quick": "haiku"
+  },
+  "default_model_slots": {
+    "frontier": "sonnet",
+    "deep": "sonnet",
+    "quick": "haiku"
+  },
+  "available_models": {
+    "sonnet": {
+      "label": "Sonnet 4.5 (default)",
+      "provider": "anthropic",
+      "id": "claude-sonnet-4-5-20250929",
+      "max_tokens": 4096
+    }
+  },
+  "analysis_modes": ["quick", "deep"],
+  "default_analysis_mode": "deep"
+}
+```
+
+**Status Codes:**
+- `200 OK` Success
+
+#### `POST /api/config`
+
+Update scene discovery configuration (scene folder and file extensions).
+
+**Request Body:**
+```json
+{
+  "scene_folder": "text",
+  "scene_extensions": [".txt", ".md"]
+}
+```
+
+**Fields:**
+- `scene_folder` (string, required) — Subdirectory within the project to scan for scene files
+- `scene_extensions` (string[], required) — File extensions to treat as scene files
+
+**Response:**
+```json
+{
+  "scene_folder": "text",
+  "scene_extensions": [".txt", ".md"],
+  "default_scene_folder": "text",
+  "default_scene_extensions": [".txt"]
+}
+```
+
+**Status Codes:**
+- `200 OK` Configuration updated
+
+---
+
+#### `POST /api/config/models`
+
+Validate and persist model-slot configuration.
+
+**Request Body:**
+```json
+{
+  "frontier": "gpt-4o",
+  "deep": "sonnet",
+  "quick": "haiku"
+}
+```
+
+**Response:**
+```json
+{
+  "model_slots": {
+    "frontier": "gpt-4o",
+    "deep": "sonnet",
+    "quick": "haiku"
+  },
+  "default_model_slots": {
+    "frontier": "sonnet",
+    "deep": "sonnet",
+    "quick": "haiku"
+  }
+}
+```
+
+**Status Codes:**
+- `200 OK` Success
+- `400 Bad Request` Invalid/unknown model in one or more slots
+
+---
+
+### Index Audit
+
+#### `POST /api/audit`
+
+Run index consistency audit for a project.
+
+This endpoint always runs deterministic checks and can optionally run deep
+semantic contradiction checks.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/",
+  "deep": false,
+  "api_key": "sk-ant-...",
+  "model": "sonnet"
+}
+```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+- `deep` (boolean, optional, default `false`) — Include semantic contradiction checks
+- `api_key` (string, optional) — Required only for deep mode when no provider key is available in environment
+- `model` (string, optional) — Deep-mode model short name (defaults to configured default model)
+
+**Response:**
+```json
+{
+  "deterministic": [
+    {
+      "check_id": "orphan_first_seen",
+      "severity": "warning",
+      "file": "CAST.md",
+      "location": "### Amelia Ashvale → First seen: 01.05.02",
+      "message": "Scene 01.05.02 does not exist in TIMELINE.md",
+      "related_file": "TIMELINE.md"
+    }
+  ],
+  "semantic": [],
+  "placeholder_census": {
+    "CAST.md": 2
+  },
+  "formatted_report": "...",
+  "deep": false,
+  "model": null,
+  "deep_error": null
+}
+```
+
+Deep-mode failure policy:
+- deterministic findings are still returned
+- `deep_error` is populated with the semantic failure message
+- endpoint does not fail unless deterministic path fails
+
+**Status Codes:**
+- `200 OK` Audit completed
+- `404 Not Found` Project directory not found
+- `400 Bad Request` Invalid request (e.g., missing deep-mode credentials when required)
+
+---
+
+### Project Knowledge Projection
+
+These endpoints expose DB-backed projection state for scenes and indexes,
+including explicit refresh and staleness status operations.
+
+#### `GET /api/scenes`
+
+List projected scenes for a project.
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
+
+**Response:**
+```json
+{
+  "scenes": [
+    {
+      "scene_path": "text/chapter-01.txt",
+      "scene_id": "01.01.01",
+      "file_hash": "abc123...",
+      "meta_json": {
+        "POV": "Mara"
+      },
+      "last_refreshed_at": "2026-03-10T09:41:22Z"
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200 OK` Success
+- `404 Not Found` Project directory not found
+
+#### `POST /api/scenes/refresh`
+
+Refresh scene projections for all discovered scene files.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/"
+}
+```
+
+**Response:**
+```json
+{
+  "scenes": [
+    {
+      "scene_path": "text/chapter-01.txt",
+      "updated": true
+    }
+  ],
+  "total": 1,
+  "updated": 1
+}
+```
+
+**Status Codes:**
+- `200 OK` Refresh completed
+- `404 Not Found` Project directory not found
+
+#### `GET /api/scenes/{scene_path}/status`
+
+Return stale/fresh status for one scene projection.
+
+**Path Parameters:**
+- `scene_path` (string, required) — Project-relative scene path
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
+
+**Response:**
+```json
+{
+  "scene_path": "text/chapter-01.txt",
+  "stale": false,
+  "projected": true,
+  "file_hash": "abc123...",
+  "stored_hash": "abc123..."
+}
+```
+
+**Status Codes:**
+- `200 OK` Success
+- `404 Not Found` Project directory or scene file not found
+
+#### `GET /api/indexes`
+
+List projected index files for a project.
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
+
+**Response:**
+```json
+{
+  "indexes": [
+    {
+      "index_name": "CAST.md",
+      "file_hash": "def456...",
+      "entries_json": [
+        {"name": "Mara", "type": "character"}
+      ],
+      "last_refreshed_at": "2026-03-10T09:41:22Z"
+    },
+    {
+      "index_name": "STYLE.md",
+      "file_hash": "fff000...",
+      "entries_json": null,
+      "last_refreshed_at": "2026-03-10T09:41:22Z"
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200 OK` Success
+- `404 Not Found` Project directory not found
+
+#### `POST /api/indexes/refresh`
+
+Refresh index projections for canonical index files.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/"
+}
+```
+
+**Response:**
+```json
+{
+  "indexes": [
+    {
+      "index_name": "CAST.md",
+      "updated": true
+    }
+  ],
+  "total": 1,
+  "updated": 1
+}
+```
+
+**Status Codes:**
+- `200 OK` Refresh completed
+- `404 Not Found` Project directory not found
+
+#### `GET /api/indexes/status`
+
+Return stale index projections for a project.
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
+
+**Response:**
+```json
+{
+  "stale_indexes": ["CAST.md"],
+  "stale_count": 1,
+  "projected_count": 6
+}
+```
+
+**Status Codes:**
+- `200 OK` Success
+- `404 Not Found` Project directory not found
+
+#### `POST /api/project/refresh`
+
+Refresh both scene and index projections for a project.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/"
+}
+```
+
+**Response:**
+```json
+{
+  "scenes": [
+    {"scene_path": "text/chapter-01.txt", "updated": true}
+  ],
+  "indexes": [
+    {"index_name": "CAST.md", "updated": true}
+  ]
+}
+```
+
+**Status Codes:**
+- `200 OK` Refresh completed
+- `404 Not Found` Project directory not found
+
+#### `GET /api/project/status`
+
+Return project-knowledge freshness summary for scene and index projections.
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
+
+**Response:**
+```json
+{
+  "scenes": {
+    "total": 2,
+    "stale": 1,
+    "fresh": 1,
+    "last_refreshed_at": null
+  },
+  "indexes": {
+    "total": 6,
+    "stale": 0,
+    "fresh": 6,
+    "last_refreshed_at": "2026-03-10T09:41:22Z"
+  }
+}
+```
+
+**Status Codes:**
+- `200 OK` Success
+- `404 Not Found` Project directory not found
+
+#### `POST /api/scenes/lock`
+
+Lock a scene file to skip automatic extraction during knowledge refresh.
+Locked scenes are included in analysis but their content is not re-extracted.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/",
+  "scene_filename": "text/chapter-01.txt"
+}
+```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+- `scene_filename` (string, required) — Project-relative scene filename to lock
+
+**Response:**
+```json
+{
+  "locked": true,
+  "scene_filename": "text/chapter-01.txt"
+}
+```
+
+**Status Codes:**
+- `200 OK` Scene locked
+- `404 Not Found` Project directory not found
+
+---
+
+#### `POST /api/scenes/unlock`
+
+Unlock a scene file so automatic extraction can run again during knowledge
+refresh.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/",
+  "scene_filename": "text/chapter-01.txt"
+}
+```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+- `scene_filename` (string, required) — Project-relative scene filename to unlock
+
+**Response:**
+```json
+{
+  "unlocked": true,
+  "scene_filename": "text/chapter-01.txt"
+}
+```
+
+**Status Codes:**
+- `200 OK` Scene unlocked
+- `404 Not Found` Project directory not found
+
+---
+
+#### `POST /api/scenes/rename`
+
+Rename a scene file and propagate all references: updates `Prev`/`Next`
+metadata fields in adjacent scenes and updates DB projection entries.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/",
+  "old_filename": "text/chapter-01.txt",
+  "new_filename": "text/chapter-01-revised.txt"
+}
+```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+- `old_filename` (string, required) — Current project-relative filename
+- `new_filename` (string, required) — New project-relative filename
+
+**Response:**
+```json
+{
+  "renamed": true,
+  "old_filename": "text/chapter-01.txt",
+  "new_filename": "text/chapter-01-revised.txt",
+  "prev_updated": true,
+  "next_updated": false
+}
+```
+
+**Status Codes:**
+- `200 OK` Rename completed
+- `404 Not Found` Project directory or scene not found
+- `400 Bad Request` New filename already exists or invalid path
+
+---
+
+### Knowledge Management
+
+These endpoints manage extracted knowledge: refreshing it from scene content,
+reviewing and overriding it, and exporting it as markdown.
+
+Valid `category` values: `characters`, `terms`, `threads`, `timeline`.
+
+#### `POST /api/knowledge/refresh`
+
+Refresh scene projections, index projections, and extracted knowledge for a
+project. This is the canonical replacement for the legacy `/api/scenes/refresh`
+and `/api/indexes/refresh` endpoints.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/"
+}
+```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+
+**Response:**
+```json
+{
+  "refreshed": true,
+  "stale_scenes": ["text/chapter-01.txt"],
+  "scenes": [
+    {"scene_path": "text/chapter-01.txt", "updated": true}
+  ],
+  "indexes": [
+    {"index_name": "CANON.md", "updated": false},
+    {"index_name": "STYLE.md", "updated": false}
+  ],
+  "scene_total": 1,
+  "chain_warnings": [],
+  "extraction": {
+    "scenes_scanned": 1,
+    "extracted": ["characters", "terms"],
+    "skipped_locked": []
+  }
+}
+```
+
+When nothing is stale:
+```json
+{
+  "refreshed": false,
+  "stale_scenes": [],
+  "scenes": [],
+  "indexes": [],
+  "scene_total": 0,
+  "chain_warnings": [],
+  "extraction": {
+    "scenes_scanned": 0,
+    "extracted": [],
+    "skipped_locked": []
+  }
+}
+```
+
+**Status Codes:**
+- `200 OK` Refresh completed
+- `404 Not Found` Project directory not found
+
+---
+
+#### `GET /api/knowledge/review`
+
+Return extracted entities and author overrides for one knowledge category.
+
+**Query Parameters:**
+- `category` (string, required) — One of: `characters`, `terms`, `threads`, `timeline`
+- `project_path` (string, required) — Path to project directory
+
+**Request:** None
+
+**Response:**
+```json
+{
+  "category": "characters",
+  "entity_key_field": "name",
+  "entities": [
+    {
+      "name": "Mara",
+      "first_seen": "text/chapter-01.txt",
+      "description": "Protagonist",
+      "locked": false
+    }
+  ],
+  "raw_entities": [
+    {
+      "name": "Mara",
+      "first_seen": "text/chapter-01.txt",
+      "description": "Protagonist"
+    }
+  ],
+  "overrides": [
+    {
+      "entity_key": "Mara",
+      "field_name": "description",
+      "value": "Protagonist — revised by author"
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200 OK` Success
+- `400 Bad Request` Invalid category
+- `404 Not Found` Project directory not found
+
+---
+
+#### `POST /api/knowledge/override`
+
+Save an author override for one extracted knowledge field.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/",
+  "category": "characters",
+  "entity_key": "Mara",
+  "field_name": "description",
+  "value": "Protagonist — revised by author"
+}
+```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+- `category` (string, required) — Knowledge category
+- `entity_key` (string, required) — Entity key (e.g., character name)
+- `field_name` (string, required) — Field to override
+- `value` (string, required) — Override value
+
+**Response:**
+```json
+{
+  "updated": true,
+  "category": "characters",
+  "entity_key": "Mara",
+  "field_name": "description"
+}
+```
+
+**Status Codes:**
+- `200 OK` Override saved
+- `404 Not Found` Project directory not found
+
+---
+
+#### `DELETE /api/knowledge/override`
+
+Delete one previously saved knowledge override field value.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/",
+  "category": "characters",
+  "entity_key": "Mara",
+  "field_name": "description"
+}
+```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+- `category` (string, required) — Knowledge category
+- `entity_key` (string, required) — Entity key
+- `field_name` (string, required) — Field whose override should be removed
+
+**Response:**
+```json
+{
+  "deleted": true,
+  "category": "characters",
+  "entity_key": "Mara",
+  "field_name": "description"
+}
+```
+
+**Status Codes:**
+- `200 OK` Override deleted
+- `404 Not Found` Project directory or override not found
+
+---
+
+#### `DELETE /api/knowledge/entity`
+
+Delete an extracted knowledge entity and all its overrides.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/",
+  "category": "characters",
+  "entity_key": "Mara"
+}
+```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+- `category` (string, required) — Knowledge category
+- `entity_key` (string, required) — Entity key to delete
+
+**Response:**
+```json
+{
+  "deleted": true,
+  "entity_key": "Mara",
+  "category": "characters"
+}
+```
+
+**Status Codes:**
+- `200 OK` Entity deleted
+- `404 Not Found` Project directory or entity not found
+
+---
+
+#### `POST /api/knowledge/export`
+
+Export extracted knowledge (with applied overrides) as a markdown string.
+Does not write to disk — returns the markdown text for client-side use or download.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/"
+}
+```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+
+**Response:**
+```json
+{
+  "markdown": "# Characters\n\n## Mara\n..."
+}
+```
+
+**Status Codes:**
+- `200 OK` Export generated
+- `404 Not Found` Project directory not found
+
+---
+
+#### `POST /api/knowledge/review-pass`
+
+Set the knowledge reconciliation review-pass trigger setting. This controls
+when the LLM reconciliation pass runs after an extraction.
+
+**Request Body:**
+```json
+{
+  "value": "always"
+}
+```
+
+**Fields:**
+- `value` (string, required) — One of: `"always"`, `"on_stale"`, `"never"`
+
+**Response:**
+```json
+{
+  "knowledge_review_pass": "always"
+}
+```
+
+**Status Codes:**
+- `200 OK` Setting updated
+- `400 Bad Request` Invalid value
+
+---
+
+#### `POST /api/knowledge/lock`
+
+Lock a knowledge entity to prevent LLM updates and deletion during future
+extraction passes.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/",
+  "category": "characters",
+  "entity_key": "Mara"
+}
+```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+- `category` (string, required) — Knowledge category
+- `entity_key` (string, required) — Entity key to lock
+
+**Response:**
+```json
+{
+  "category": "characters",
+  "entity_key": "Mara",
+  "locked": true
+}
+```
+
+**Status Codes:**
+- `200 OK` Entity locked
+- `404 Not Found` Project directory or entity not found
+
+---
+
+#### `POST /api/knowledge/unlock`
+
+Unlock a knowledge entity so it can be updated or deleted by future extraction
+passes.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/",
+  "category": "characters",
+  "entity_key": "Mara"
+}
+```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+- `category` (string, required) — Knowledge category
+- `entity_key` (string, required) — Entity key to unlock
+
+**Response:**
+```json
+{
+  "category": "characters",
+  "entity_key": "Mara",
+  "locked": false
+}
+```
+
+**Status Codes:**
+- `200 OK` Entity unlocked
+- `404 Not Found` Project directory or entity not found
+
+---
+
+### Analytics
+
+Cross-session analytics endpoints for tracking patterns in author behaviour,
+acceptance trends, scene finding history, and knowledge coverage gaps.
+
+All analytics endpoints require `project_path` as a query parameter.
+
+#### `GET /api/analytics/rejection-patterns`
+
+Return aggregated rejection-pattern analytics for a project — which lens/severity
+combinations the author most commonly rejects across sessions.
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
+- `limit` (integer, optional, default `50`, range `1–500`) — Maximum number of aggregated rows
+- `start_date` (string, optional) — ISO 8601 lower bound for session creation timestamp
+
+**Request:** None
+
+**Response:**
+```json
+{
+  "analytics_version": "v1",
+  "filters": {
+    "limit": 50
+  },
+  "rows": [
+    {
+      "lens": "prose",
+      "severity": "minor",
+      "rejection_count": 14,
+      "total_count": 20,
+      "rejection_rate": 0.70
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200 OK` Success
+- `404 Not Found` Project directory not found
+
+---
+
+#### `GET /api/analytics/acceptance-rate-trend`
+
+Return acceptance-rate trend across sessions for a project, bucketed by day or week.
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
+- `bucket` (string, optional, default `"daily"`) — Aggregation bucket; one of `"daily"` or `"weekly"`
+- `window` (integer, optional, default `30`, range `1–366`) — Maximum number of trend points to return
+
+**Request:** None
+
+**Response:**
+```json
+{
+  "analytics_version": "v1",
+  "filters": {
+    "bucket": "daily",
+    "sample_size": 87,
+    "points": 14
+  },
+  "rows": [
+    {
+      "bucket": "2026-03-10",
+      "accepted": 5,
+      "total": 8,
+      "acceptance_rate": 0.625
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200 OK` Success
+- `404 Not Found` Project directory not found
+
+---
+
+#### `GET /api/analytics/scene-finding-history`
+
+Return per-scene finding history across all sessions for a specific scene.
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
+- `scene_id` (string, required) — Scene path/identifier to filter findings by
+- `limit` (integer, optional, default `50`, range `1–500`) — Maximum number of findings to return
+- `offset` (integer, optional, default `0`) — Zero-based offset for pagination
+
+**Request:** None
+
+**Response:**
+```json
+{
+  "analytics_version": "v1",
+  "filters": {
+    "scene_id": "text/chapter-01.txt"
+  },
+  "rows": [
+    {
+      "session_id": 3,
+      "session_created_at": "2026-03-10T09:30:00",
+      "lens": "prose",
+      "severity": "major",
+      "status": "accepted",
+      "location": "L042-L045",
+      "evidence": "..."
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200 OK` Success
+- `404 Not Found` Project directory not found
+
+---
+
+#### `GET /api/analytics/index-coverage-gaps`
+
+Return a report of knowledge coverage gaps — scenes that have findings with
+no matching entry in extracted knowledge (characters, terms, threads).
+
+**Query Parameters:**
+- `project_path` (string, required) — Path to project directory
+- `session_start_id` (integer, optional) — Lower bound for session ID range
+- `session_end_id` (integer, optional) — Upper bound for session ID range
+- `scopes` (string[], optional) — Repeated scope filters; e.g., `scopes=cast&scopes=glossary`
+
+**Request:** None
+
+**Response:**
+```json
+{
+  "analytics_version": "v1",
+  "filters": {
+    "session_start_id": null,
+    "session_end_id": null,
+    "scopes": null
+  },
+  "summary": {
+    "total_gaps": 3,
+    "scenes_with_gaps": 2
+  },
+  "missing_scene_paths": ["text/chapter-03.txt"],
+  "rows": [
+    {
+      "scene_path": "text/chapter-01.txt",
+      "scope": "cast",
+      "entity": "Amelia",
+      "context": "Amelia appears in scene but has no knowledge entry"
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200 OK` Success
+- `400 Bad Request` `session_start_id` > `session_end_id`
+- `404 Not Found` Project directory not found
 
 ---
 
@@ -100,9 +1178,10 @@ Start a new analysis session.
 {
   "scene_path": "/path/to/scene.txt",
   "scene_paths": ["/path/to/scene-01.txt", "/path/to/scene-02.txt"],
+  "mode": "deep",
   "project_path": "/path/to/project/",
   "api_key": "sk-ant-...",
-  "model": "sonnet"
+  "discussion_api_key": "sk-openai-..."
 }
 ```
 
@@ -111,8 +1190,10 @@ Start a new analysis session.
 - `scene_paths` (string[], optional) — Multi-scene input (ordered scene set). If provided, this is used.
 - At least one of `scene_path` or `scene_paths` must be present.
 - `project_path` (string, required) — Absolute path to project directory
-- `api_key` (string, optional) — API key for the model's provider. If omitted, resolved from environment (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`)
-- `model` (string, optional) — Model short name (default: "sonnet"). See `GET /api/config` for available models
+- `mode` (string, optional, default `deep`) — One of `quick`, `deep`; `quick` runs the full lens pipeline with the quick checker model slot; `deep` runs the full pipeline with the deep checker + frontier tiers
+- `api_key` (string, optional) — API key for the resolved analysis model provider. If omitted, resolved from environment
+- `discussion_api_key` (string, optional) — API key for the resolved discussion model provider when different from analysis provider
+- Deprecated request fields `model` and `discussion_model` are rejected with `400 Bad Request`
 
 **Response:**
 ```json
@@ -121,6 +1202,28 @@ Start a new analysis session.
   "total_findings": 12,
   "scene_path": "/path/to/scene-01.txt",
   "scene_paths": ["/path/to/scene-01.txt", "/path/to/scene-02.txt"],
+  "mode_cost_hint": "Deep mode runs checker + frontier discussion for highest coverage and highest expected cost.",
+  "tier_cost_summary": {
+    "mode": "deep",
+    "actuals_available": false,
+    "checker": {
+      "name": "sonnet",
+      "label": "Sonnet 4.5 (default)",
+      "provider": "anthropic",
+      "input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null
+    },
+    "frontier": {
+      "name": "gpt-4o",
+      "label": "GPT-4o (default)",
+      "provider": "openai",
+      "input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null
+    },
+    "total_cost_usd": null
+  },
   "summary": {
     "prose": {"critical": 1, "major": 2, "minor": 3},
     "structure": {"critical": 0, "major": 1, "minor": 1},
@@ -145,7 +1248,7 @@ Start a new analysis session.
 
 **Status Codes:**
 - `200 OK` Analysis started successfully
-- `400 Bad Request` Invalid request (missing fields, invalid paths)
+- `400 Bad Request` Invalid request (missing fields, invalid mode/paths, deprecated model override fields)
 - `500 Internal Server Error` Analysis failed
 
 ---
@@ -193,6 +1296,35 @@ data: {"total_findings": 12}
 **Status Codes:**
 - `200 OK` Streaming started
 - `404 Not Found` No active analysis
+
+---
+
+#### `POST /api/analyze/rerun`
+
+Re-run analysis for the active session's scene set with the current model
+settings. Used after making edits to a scene to get a fresh set of findings
+without starting a new session from scratch.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/",
+  "api_key": "sk-ant-...",
+  "discussion_api_key": "sk-openai-..."
+}
+```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+- `api_key` (string, optional) — API key for the analysis model provider
+- `discussion_api_key` (string, optional) — API key for the discussion model provider when different from analysis provider
+
+**Response:** Same shape as `POST /api/analyze`.
+
+**Status Codes:**
+- `200 OK` Re-analysis started successfully
+- `404 Not Found` No active session
+- `500 Internal Server Error` Analysis failed
 
 ---
 
@@ -330,6 +1462,65 @@ This endpoint is used by clients to inspect historical sessions while still usin
   }
 }
 ```
+
+---
+
+#### `POST /api/resume-session`
+
+Resume a specific active session by ID. Similar to `POST /api/resume` but
+targets a session by its database ID rather than the project's most-recent
+active session.
+
+**Request Body:**
+```json
+{
+  "project_path": "/path/to/project/",
+  "session_id": 3,
+  "api_key": "sk-ant-...",
+  "discussion_api_key": "sk-openai-...",
+  "scene_path_override": "/path/to/moved/scene.txt",
+  "scene_path_overrides": {"old/path.txt": "new/path.txt"},
+  "reopen": false
+}
+```
+
+**Fields:**
+- `project_path` (string, required) — Absolute path to project directory
+- `session_id` (integer, required) — ID of the session to resume
+- `api_key` (string, optional) — API key for the analysis model provider
+- `discussion_api_key` (string, optional) — API key for the discussion model provider
+- `scene_path_override` (string, optional) — Single-scene path remap for moved files
+- `scene_path_overrides` (object, optional) — Multi-scene path remap `{oldPath: newPath}`
+- `reopen` (boolean, optional, default `false`) — Force-reopen a completed or abandoned session
+
+**Response:** Same shape as `POST /api/resume`.
+
+**Status Codes:**
+- `200 OK` Session resumed
+- `404 Not Found` Session not found
+- `409 Conflict` Scene path not found
+
+---
+
+#### `POST /api/session/summary`
+
+Generate and return the session-end disconfirming meta-observation. Produces
+an LLM summary of the overall session findings to help the author understand
+recurring patterns before they close the session.
+
+**Request:** None
+
+**Response:**
+```json
+{
+  "summary": "Across 12 findings, a pattern emerges: the author consistently..."
+}
+```
+
+**Status Codes:**
+- `200 OK` Summary generated
+- `404 Not Found` No active session
+- `500 Internal Server Error` Provider/Core processing error
 
 ---
 
@@ -607,7 +1798,7 @@ Get the current scene content.
 **Response:**
 ```json
 {
-  "content": "@@META\nID: 01.03.01\n..."
+  "content": "@@META\nPrev: 01.02.05_scene.txt\nNext: 01.03.02_scene.txt\n@@END\n..."
 }
 ```
 
@@ -810,6 +2001,35 @@ Mark ambiguity finding as intentional or accidental.
 
 ---
 
+#### `POST /api/finding/review`
+
+Re-check the current finding against scene edits. Compares the finding's
+evidence against the current scene content to determine whether the finding
+is still valid after the author has edited the scene.
+
+**Request:** None
+
+**Response:** The updated Finding object, with `stale` set to `false` if the
+finding is still valid, or updated `status` if the finding was invalidated by
+the edits.
+
+```json
+{
+  "number": 5,
+  "severity": "major",
+  "lens": "prose",
+  "status": "pending",
+  "stale": false,
+  "evidence": "..."
+}
+```
+
+**Status Codes:**
+- `200 OK` Review complete
+- `404 Not Found` No current finding
+
+---
+
 ### Discussion
 
 #### `POST /api/finding/discuss`
@@ -924,7 +2144,7 @@ Skip all remaining minor-severity findings.
 Skip to the next finding from a specific lens.
 
 **Path Parameters:**
-- `lens` (string) — One of: `prose`, `structure`, `logic`, `clarity`, `continuity`, `dialogue`
+- `lens` (string) — One of: `prose`, `structure`, `logic`, `clarity`, `continuity`, `dialogue`, `horizon`
   - Group-level skip aliases are also supported by the web route layer (`structure`, `coherence`),
     where `coherence` covers `logic`, `clarity`, `continuity`, and `dialogue`.
 
@@ -976,7 +2196,7 @@ Save LEARNING.md to project directory.
 interface Finding {
   number: number;
   severity: "critical" | "major" | "minor";
-  lens: "prose" | "structure" | "logic" | "clarity" | "continuity" | "dialogue";
+  lens: "prose" | "structure" | "logic" | "clarity" | "continuity" | "dialogue" | "horizon";
   location: string;                    // e.g., "L042-L045"
   line_start: number | null;           // 1-based line number
   line_end: number | null;

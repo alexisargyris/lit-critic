@@ -1,14 +1,14 @@
 # Working with Findings
 
-This guide explains how to interpret and respond to findings from lit-critic's six editorial lenses.
+This guide explains how to interpret and respond to findings from lit-critic's seven editorial lenses.
 
 ---
 
 ## Understanding Findings
 
-Each finding represents one concern identified by one of the six lenses. Findings are presented one at a time in priority order.
+Each finding represents one concern identified by one of the seven lenses. Findings are presented one at a time in priority order.
 
-Priority is influenced by the active lens preset for that analysis run. If you use `auto`, lit-critic resolves to a scene-aware preset (`single-scene` or `multi-scene`) before analysis; if you pick a manual preset, that override is used instead.
+Priority is determined by the coordinator using a stable ordering. Findings are grouped by lens family (Prose, Structure, Coherence) and then ordered by severity within each group (`critical` → `major` → `minor`). This keeps ordering consistent across runs and independent of any preset selection.
 
 ### Finding Components
 
@@ -133,7 +133,7 @@ These two actions solve different problems:
   - It updates that finding in-place (or marks it resolved) without starting a full new run.
 
 - **Re-run Analysis with Updated Indexes**: runs a *full analysis* again when index context changes
-  (`CANON.md`, `CAST.md`, `GLOSSARY.md`, `STYLE.md`, `THREADS.md`, `TIMELINE.md`, `LEARNING.md`).
+  (`CANON.md`, `STYLE.md`, `LEARNING.md`) or extracted knowledge is refreshed.
   - Use this when the world/context references changed and findings may be stale across the whole set.
   - In VS Code, the Discussion Panel can show a stale-context banner with a **Re-run Analysis** action.
 
@@ -218,8 +218,7 @@ This helps the learning system understand your intentional choices vs. mistakes.
 
 When Continuity lens finds contradictions:
 
-- Check your **ContAnchors** metadata
-- Verify against **CANON.md** or **CAST.md**
+- Verify against **CANON.md** or extracted knowledge (Knowledge view — Cast, Timeline)
 - If the tool is wrong, explain in discussion
 - If you're wrong, accept and fix
 
@@ -227,8 +226,7 @@ When Continuity lens finds contradictions:
 
 When Structure lens finds missing objectives or stale threads:
 
-- Check **THREADS.md** for thread status
-- Verify scene's **Objective** in @@META header
+- Check the **Knowledge view** for thread status (Threads category)
 - Discuss if the finding misunderstands your structure
 
 ---
@@ -425,5 +423,5 @@ long-term review record.
 - **[Using the Tool](using-the-tool.md)** CLI, Web UI, VS Code interfaces
 - **[Learning System](learning-system.md)** How preferences are tracked
 - **[Scene Format](scene-format.md)** @@META documentation
-- **[Index Files](index-files.md)** CANON, CAST, etc.
+- **[Knowledge Management](index-files.md)** CANON.md, STYLE.md, and auto-extracted knowledge
 - **[Getting Started](getting-started.md)** Initial setup

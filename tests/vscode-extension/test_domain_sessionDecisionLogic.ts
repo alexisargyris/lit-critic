@@ -1,7 +1,9 @@
 import { strict as assert } from 'assert';
 
 import {
+    formatSessionTypeLabel,
     formatSessionLabel,
+    getSessionType,
     tryParseRepoPathInvalidDetail,
 } from '../../vscode-extension/src/domain/sessionDecisionLogic';
 
@@ -32,5 +34,16 @@ describe('domain/sessionDecisionLogic', () => {
         });
 
         assert.equal(label, '#7 — chapter-1.txt');
+    });
+
+    it('derives session type from depth_mode', () => {
+        assert.equal(getSessionType({ depth_mode: 'preflight' } as any), 'unknown');
+        assert.equal(getSessionType({ depth_mode: 'quick' } as any), 'quick');
+        assert.equal(getSessionType({ depth_mode: 'deep' } as any), 'deep');
+    });
+
+    it('falls back to unknown session type when depth_mode is missing', () => {
+        assert.equal(getSessionType({} as any), 'unknown');
+        assert.equal(formatSessionTypeLabel({} as any), 'Unknown');
     });
 });

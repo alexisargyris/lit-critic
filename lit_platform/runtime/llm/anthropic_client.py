@@ -42,7 +42,14 @@ class AnthropicClient(LLMClient):
 
         response = await self._client.messages.create(**kwargs)
 
-        text = response.content[0].text if response.content else ""
+        # Iterate content blocks and collect text blocks — models may return
+        # non-text blocks first (e.g. thinking blocks), so we cannot assume
+        # content[0] is always the text response.
+        text_parts: list[str] = []
+        for block in response.content:
+            if getattr(block, "type", None) == "text":
+                text_parts.append(block.text)
+        text = "\n".join(text_parts)
         truncated = getattr(response, "stop_reason", None) == "max_tokens"
 
         return LLMResponse(text=text, truncated=truncated)

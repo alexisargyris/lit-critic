@@ -10,7 +10,6 @@ function delay(ms: number): Promise<void> {
 describe('OperationTracker', () => {
     it('should not show status/progress UI for fast operations', async () => {
         const lines: string[] = [];
-        let statusCalls = 0;
         let progressCalls = 0;
         const mockVscode = createFreshMockVscode();
 
@@ -24,12 +23,7 @@ describe('OperationTracker', () => {
                 show: () => {},
                 dispose: () => {},
             } as any,
-            slowThresholdMs: 50,
             progressThresholdMs: 100,
-            setStatusBarMessage: ((_: string) => {
-                statusCalls += 1;
-                return { dispose: () => {} };
-            }) as any,
             withProgress: (async () => {
                 progressCalls += 1;
             }) as any,
@@ -41,16 +35,13 @@ describe('OperationTracker', () => {
         );
 
         assert.equal(result, 'ok');
-        assert.equal(statusCalls, 0);
         assert.equal(progressCalls, 0);
         assert.ok(lines.some((line) => line.includes('OK fast-op')));
 
         tracker.dispose();
     });
 
-    it('should show status bar feedback for slow operations', async () => {
-        let statusCalls = 0;
-        let statusDisposed = 0;
+    it('should show progress notification for slow operations (status bar tier removed)', async () => {
         let progressCalls = 0;
         const mockVscode = createFreshMockVscode();
 
@@ -64,16 +55,9 @@ describe('OperationTracker', () => {
                 show: () => {},
                 dispose: () => {},
             } as any,
-            setStatusBarMessage: ((_: string) => {
-                statusCalls += 1;
-                return {
-                    dispose: () => {
-                        statusDisposed += 1;
-                    },
-                };
-            }) as any,
-            withProgress: (async () => {
+            withProgress: (async (_options: any, task: any) => {
                 progressCalls += 1;
+                await task({ report: () => {} }, { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) });
             }) as any,
         });
 
@@ -81,17 +65,14 @@ describe('OperationTracker', () => {
             {
                 id: 'slow-op',
                 title: 'Slow operation',
-                slowThresholdMs: 1,
-                progressThresholdMs: 100,
+                progressThresholdMs: 1,
             },
             async () => {
                 await delay(20);
             },
         );
 
-        assert.equal(statusCalls, 1);
-        assert.equal(statusDisposed, 1);
-        assert.equal(progressCalls, 0);
+        assert.equal(progressCalls, 1);
 
         tracker.dispose();
     });
@@ -111,7 +92,6 @@ describe('OperationTracker', () => {
                 show: () => {},
                 dispose: () => {},
             } as any,
-            setStatusBarMessage: ((_: string) => ({ dispose: () => {} })) as any,
             withProgress: (async (_options: any, task: any) => {
                 progressCalls += 1;
                 await task(
@@ -129,7 +109,6 @@ describe('OperationTracker', () => {
             {
                 id: 'very-slow-op',
                 title: 'Very slow operation',
-                slowThresholdMs: 1,
                 progressThresholdMs: 5,
             },
             async () => {
@@ -157,9 +136,7 @@ describe('OperationTracker', () => {
                 show: () => {},
                 dispose: () => {},
             } as any,
-            slowThresholdMs: 1,
             progressThresholdMs: 5,
-            setStatusBarMessage: ((_: string) => ({ dispose: () => {} })) as any,
             withProgress: (async (_options: any, task: any) => {
                 await task(
                     { report: () => {} },

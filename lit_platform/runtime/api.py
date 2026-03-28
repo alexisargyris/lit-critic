@@ -12,10 +12,10 @@ from lit_platform.session_state_machine import apply_re_evaluation_result
 from .llm import LLMClient
 from .config import MODEL, MAX_TOKENS, COORDINATOR_MAX_TOKENS
 from .models import Finding, LensResult, CoordinatorError
-from .lens_preferences import normalize_lens_preferences, rerank_coordinated_findings
 from .prompts import (
     get_lens_prompt, get_coordinator_prompt, get_coordinator_chunk_prompt,
-    get_re_evaluation_prompt, COORDINATOR_TOOL, LENS_GROUPS,
+    get_re_evaluation_prompt, get_index_extraction_prompt, get_index_audit_prompt,
+    COORDINATOR_TOOL, INDEX_EXTRACTION_TOOL, INDEX_AUDIT_TOOL, LENS_GROUPS,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,6 +121,8 @@ def _validate_coordinator_output(data: dict) -> dict:
         finding.setdefault("ambiguity_type", None)
         finding.setdefault("line_start", None)
         finding.setdefault("line_end", None)
+        # Tag origin — "legacy" until per-tier dispatch is wired in Phase 3
+        finding.setdefault("origin", "legacy")
 
         # Validate line_start/line_end when present
         ls = finding["line_start"]
@@ -221,8 +223,7 @@ async def _run_coordinator_chunk(client: LLMClient, group_name: str,
 async def run_coordinator_chunked(client: LLMClient, lens_results: list[LensResult],
                                   scene: str, *, model: str = MODEL,
                                   max_tokens: int = COORDINATOR_MAX_TOKENS,
-                                  progress_callback=None,
-                                  lens_preferences: dict | None = None) -> dict:
+                                  progress_callback=None) -> dict:
     """Run the coordinator in 3 chunks (prose → structure → coherence).
 
     Each chunk is a smaller coordinator call that handles one lens group.
@@ -305,15 +306,12 @@ async def run_coordinator_chunked(client: LLMClient, lens_results: list[LensResu
         "ambiguities": all_ambiguities,
         "summary": summary,
     }
-    if lens_preferences is not None:
-        coordinated = rerank_coordinated_findings(coordinated, normalize_lens_preferences(lens_preferences))
     return coordinated
 
 
 async def run_coordinator(client: LLMClient, lens_results: list[LensResult], scene: str, *,
                           model: str = MODEL, max_tokens: int = COORDINATOR_MAX_TOKENS,
-                          max_retries: int = COORDINATOR_MAX_RETRIES,
-                          lens_preferences: dict | None = None) -> dict:
+                          max_retries: int = COORDINATOR_MAX_RETRIES) -> dict:
     """Run the coordinator to merge and prioritize findings (single-call mode).
 
     Uses tool/function calling to guarantee structured JSON output, with automatic
@@ -343,8 +341,6 @@ async def run_coordinator(client: LLMClient, lens_results: list[LensResult], sce
 
             data = _extract_tool_use_input(response)
             data = _validate_coordinator_output(data)
-            if lens_preferences is not None:
-                data = rerank_coordinated_findings(data, normalize_lens_preferences(lens_preferences))
             return data
 
         except CoordinatorError:
@@ -367,8 +363,7 @@ async def run_coordinator(client: LLMClient, lens_results: list[LensResult], sce
 
 
 async def run_analysis(client: LLMClient, scene: str, indexes: dict[str, str],
-                       model: str = MODEL, max_tokens: int = MAX_TOKENS,
-                       lens_preferences: dict | None = None) -> dict:
+                       model: str = MODEL, max_tokens: int = MAX_TOKENS) -> dict:
     """Run all lenses in parallel and coordinate results.
 
     Uses the chunked coordinator by default (3 smaller calls by lens group).
@@ -376,19 +371,20 @@ async def run_analysis(client: LLMClient, scene: str, indexes: dict[str, str],
 
     Raises CoordinatorError if coordination fails after all attempts.
     """
+    analysis_lenses = ["prose", "structure", "logic", "clarity", "continuity", "dialogue", "horizon"]
 
-    print("Running 6 lenses in parallel...")
+    print(f"Running {len(analysis_lenses)} lenses in parallel...")
 
     lens_tasks = [
-        run_lens(client, "prose", scene, indexes, model=model, max_tokens=max_tokens),
-        run_lens(client, "structure", scene, indexes, model=model, max_tokens=max_tokens),
-        run_lens(client, "logic", scene, indexes, model=model, max_tokens=max_tokens),
-        run_lens(client, "clarity", scene, indexes, model=model, max_tokens=max_tokens),
-        run_lens(client, "continuity", scene, indexes, model=model, max_tokens=max_tokens),
-        run_lens(client, "dialogue", scene, indexes, model=model, max_tokens=max_tokens),
+        run_lens(client, lens_name, scene, indexes, model=model, max_tokens=max_tokens)
+        for lens_name in analysis_lenses
     ]
 
     lens_results = await asyncio.gather(*lens_tasks)
+
+    coordinator_lens_results = []
+    for result in lens_results:
+        coordinator_lens_results.append(result)
 
     for result in lens_results:
         if result.error:
@@ -399,17 +395,85 @@ async def run_analysis(client: LLMClient, scene: str, indexes: dict[str, str],
     print("Coordinating results (chunked: prose → structure → coherence)...")
     try:
         coordinated = await run_coordinator_chunked(
-            client, lens_results, scene, model=model,
-            lens_preferences=lens_preferences,
+            client, coordinator_lens_results, scene, model=model,
         )
     except CoordinatorError:
         print("  Chunked coordinator failed. Falling back to single-call coordinator...")
         coordinated = await run_coordinator(
-            client, lens_results, scene, model=model,
-            lens_preferences=lens_preferences,
+            client, coordinator_lens_results, scene, model=model,
         )
 
+    horizon_result = next((r for r in lens_results if r.lens_name == "horizon"), None)
+    coordinated["horizon_observations"] = horizon_result.raw_output if horizon_result and not horizon_result.error else "[]"
+
     return coordinated
+
+
+async def run_index_extraction(client: LLMClient, scene: str, indexes: dict[str, str],
+                               model: str = MODEL, max_tokens: int = MAX_TOKENS) -> dict:
+    """Scan a scene and extract proposed entries for index files.
+
+    Sends the scene + existing index files to the LLM via tool calling.
+    Returns a dict with keys: cast, glossary, threads, timeline — each a list
+    of proposed entry dicts.  Returns empty lists on failure.
+    """
+    prompt = get_index_extraction_prompt(scene, indexes)
+
+    try:
+        response = await client.create_message_with_tool(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+            tool_schema=INDEX_EXTRACTION_TOOL,
+            tool_name="extract_index_entries",
+        )
+
+        if hasattr(response, "tool_input") and response.tool_input:
+            data = response.tool_input
+            # Ensure all required keys exist
+            data.setdefault("cast", [])
+            data.setdefault("glossary", [])
+            data.setdefault("threads", [])
+            data.setdefault("timeline", [])
+            return data
+
+        logger.warning("Index extraction: no tool_use block in response.")
+        return {"cast": [], "glossary": [], "threads": [], "timeline": []}
+
+    except Exception as e:
+        logger.warning("Index extraction failed: %s", e)
+        return {"cast": [], "glossary": [], "threads": [], "timeline": [], "error": str(e)}
+
+
+async def run_index_audit(client: LLMClient, indexes: dict[str, str],
+                          model: str = MODEL, max_tokens: int = MAX_TOKENS) -> dict:
+    """Run semantic contradiction audit on index files using tool calling.
+
+    Returns a dict with key ``contradictions``.
+    Returns ``{"contradictions": []}`` on failure.
+    """
+    prompt = get_index_audit_prompt(indexes)
+
+    try:
+        response = await client.create_message_with_tool(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+            tool_schema=INDEX_AUDIT_TOOL,
+            tool_name="report_index_contradictions",
+        )
+
+        if hasattr(response, "tool_input") and response.tool_input:
+            data = response.tool_input
+            data.setdefault("contradictions", [])
+            return data
+
+        logger.warning("Index audit: no tool_use block in response.")
+        return {"contradictions": []}
+
+    except Exception as e:
+        logger.warning("Index audit failed: %s", e)
+        return {"contradictions": [], "error": str(e)}
 
 
 async def re_evaluate_finding(client: LLMClient, finding: Finding, scene_content: str,

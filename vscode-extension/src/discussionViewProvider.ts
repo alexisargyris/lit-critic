@@ -1,12 +1,15 @@
 /**
- * Discussion Panel — Webview panel for interactive discussion about a finding.
+ * DiscussionViewProvider — WebviewViewProvider for the Discussion sidebar panel.
  *
- * Opens as a VS Code Webview panel showing:
- *   - Current finding details (severity, lens, location, evidence, impact, options)
- *   - Chat-style interface for discussion with the critic
- *   - Streaming responses via SSE
- *   - Action buttons: Accept, Reject, Review
- *   - Ambiguity buttons for ambiguity findings
+ * Replaces DiscussionPanel (WebviewPanel) with a WebviewView that lives in the
+ * Secondary Side Bar under the `lit-critic-review` view container.
+ *
+ * Public surface is identical to DiscussionPanel so callers need no changes:
+ *   show(), notifySceneChange(), notifyIndexChange(), clearIndexChangeNotice(),
+ *   close(), startDiscuss(), onFindingAction, onDiscussionResult
+ *
+ * Note: retainContextWhenHidden is set at registration time via
+ *   vscode.window.registerWebviewViewProvider(..., { webviewOptions: { retainContextWhenHidden: true } })
  */
 
 import * as vscode from 'vscode';
@@ -24,22 +27,64 @@ type PanelMessage =
     | { type: 'rerunAnalysis' }
     | { type: 'dismissIndexChange' };
 
-export class DiscussionPanel implements vscode.Disposable {
-    private panel: vscode.WebviewPanel | null = null;
-    private apiClient: ApiClient;
+interface PendingShowState {
+    finding: Finding;
+    current: number;
+    total: number;
+    isAmbiguity: boolean;
+    discussionTransition?: DiscussionContextTransition;
+    readOnlyNotice?: string;
+}
+
+export class DiscussionViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
+    private _view: vscode.WebviewView | undefined;
+    private _pendingShow: PendingShowState | undefined;
     private abortStream: (() => void) | null = null;
     private streamTimeout: ReturnType<typeof setTimeout> | null = null;
 
     // Callbacks for the extension to hook into
-    onFindingAction: ((action: string, data?: unknown) => void) | null = null;
+    onFindingAction: ((action: string, data?: unknown) => void | Promise<void>) | null = null;
     onDiscussionResult: ((result: DiscussResponse) => void) | null = null;
 
-    constructor(apiClient: ApiClient) {
-        this.apiClient = apiClient;
+    /**
+     * @param getApiClient Lazy getter — resolved only when a discuss message is
+     *   sent (i.e. after the server is running). Allows registration at
+     *   activate() time before the API client is initialized.
+     */
+    constructor(private getApiClient: () => ApiClient) {}
+
+    resolveWebviewView(
+        webviewView: vscode.WebviewView,
+        _context: vscode.WebviewViewResolveContext,
+        _token: vscode.CancellationToken,
+    ): void {
+        this._view = webviewView;
+
+        webviewView.webview.options = {
+            enableScripts: true,
+        };
+
+        webviewView.webview.html = this.getIdleHtml();
+
+        webviewView.onDidDispose(() => {
+            this._view = undefined;
+            this.abortCurrentStream();
+        });
+
+        webviewView.webview.onDidReceiveMessage((msg: PanelMessage) => {
+            void this.handleMessage(msg);
+        });
+
+        // Apply any state that arrived before the view was resolved
+        if (this._pendingShow) {
+            const p = this._pendingShow;
+            this._pendingShow = undefined;
+            this.show(p.finding, p.current, p.total, p.isAmbiguity, p.discussionTransition, p.readOnlyNotice);
+        }
     }
 
     /**
-     * Show or update the discussion panel with a finding.
+     * Show or update the discussion view with a finding.
      */
     show(
         finding: Finding,
@@ -49,28 +94,14 @@ export class DiscussionPanel implements vscode.Disposable {
         discussionTransition?: DiscussionContextTransition,
         readOnlyNotice?: string,
     ): void {
-        if (!this.panel) {
-            this.panel = vscode.window.createWebviewPanel(
-                'literaryCriticDiscussion',
-                'lit-critic — Discussion',
-                vscode.ViewColumn.Beside,
-                {
-                    enableScripts: true,
-                    retainContextWhenHidden: true,
-                }
-            );
-
-            this.panel.onDidDispose(() => {
-                this.panel = null;
-                this.abortCurrentStream();
-            });
-
-            this.panel.webview.onDidReceiveMessage((msg: PanelMessage) => {
-                this.handleMessage(msg);
-            });
+        if (!this._view) {
+            // View not yet resolved — queue and open the sidebar container
+            this._pendingShow = { finding, current, total, isAmbiguity, discussionTransition, readOnlyNotice };
+            void vscode.commands.executeCommand('literaryCritic.discussionView.focus');
+            return;
         }
 
-        this.panel.webview.html = getDiscussionPanelHtml(
+        this._view.webview.html = getDiscussionPanelHtml(
             finding,
             current,
             total,
@@ -79,14 +110,8 @@ export class DiscussionPanel implements vscode.Disposable {
             readOnlyNotice,
         );
 
-        // Only reveal if the panel isn't already showing — calling reveal()
-        // every time causes VS Code to re-layout editors (looks like the
-        // scene file is being re-opened).
-        // Use the panel's current column (where it already lives) instead of
-        // ViewColumn.Beside, which would create a new group relative to the
-        // active editor (ambiguous when clicking from the sidebar tree).
-        if (!this.panel.visible) {
-            this.panel.reveal(this.panel.viewColumn || vscode.ViewColumn.Two, true);
+        if (!this._view.visible) {
+            this._view.show(true);
         }
     }
 
@@ -114,16 +139,23 @@ export class DiscussionPanel implements vscode.Disposable {
     }
 
     /**
-     * Close the panel.
+     * Reset the view to the idle/empty state.
+     * VS Code owns the view lifecycle; we cannot dispose it.
      */
     close(): void {
         this.abortCurrentStream();
-        this.panel?.dispose();
-        this.panel = null;
+        this._pendingShow = undefined;
+        if (this._view) {
+            this._view.webview.html = this.getIdleHtml();
+        }
     }
 
     dispose(): void {
-        this.close();
+        this.abortCurrentStream();
+    }
+
+    async startDiscuss(message: string): Promise<void> {
+        await this.handleDiscuss(message);
     }
 
     // ------------------------------------------------------------------
@@ -134,28 +166,32 @@ export class DiscussionPanel implements vscode.Disposable {
         try {
             switch (msg.type) {
                 case 'discuss':
-                    await this.handleDiscuss(msg.message);
+                    if (this.onFindingAction) {
+                        await this.onFindingAction('discuss', msg.message);
+                    } else {
+                        await this.handleDiscuss(msg.message);
+                    }
                     break;
                 case 'accept':
-                    this.onFindingAction?.('accept');
+                    await this.onFindingAction?.('accept');
                     break;
                 case 'reject':
-                    this.onFindingAction?.('reject', msg.reason);
+                    await this.onFindingAction?.('reject', msg.reason);
                     break;
                 case 'continue':
-                    this.onFindingAction?.('continue');
+                    await this.onFindingAction?.('continue');
                     break;
                 case 'reviewFinding':
-                    this.onFindingAction?.('reviewFinding');
+                    await this.onFindingAction?.('reviewFinding');
                     break;
                 case 'ambiguity':
-                    this.onFindingAction?.('ambiguity', msg.intentional);
+                    await this.onFindingAction?.('ambiguity', msg.intentional);
                     break;
                 case 'rerunAnalysis':
-                    this.onFindingAction?.('rerunAnalysis');
+                    await this.onFindingAction?.('rerunAnalysis');
                     break;
                 case 'dismissIndexChange':
-                    this.onFindingAction?.('dismissIndexChange');
+                    await this.onFindingAction?.('dismissIndexChange');
                     break;
             }
         } catch (err) {
@@ -181,7 +217,7 @@ export class DiscussionPanel implements vscode.Disposable {
             }
         };
 
-        this.abortStream = this.apiClient.streamDiscuss(
+        this.abortStream = this.getApiClient().streamDiscuss(
             message,
             (token: string) => {
                 this.postMessage({ type: 'streamToken', text: token });
@@ -230,7 +266,39 @@ export class DiscussionPanel implements vscode.Disposable {
     }
 
     private postMessage(msg: Record<string, unknown>): void {
-        this.panel?.webview.postMessage(msg);
+        this._view?.webview.postMessage(msg);
+    }
+
+    private getIdleHtml(): string {
+        return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body {
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size);
+    color: var(--vscode-editor-foreground);
+    background: var(--vscode-editor-background);
+    padding: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    margin: 0;
+    box-sizing: border-box;
+}
+.idle-message {
+    text-align: center;
+    opacity: 0.6;
+    font-style: italic;
+}
+</style>
+</head>
+<body>
+<div class="idle-message">Start a session to see findings here.</div>
+</body>
+</html>`;
     }
 }
-

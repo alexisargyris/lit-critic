@@ -24,6 +24,7 @@ export class StatusBar implements vscode.Disposable {
     setReady(): void {
         this.item.text = '$(book) lit-critic';
         this.item.tooltip = 'lit-critic ready';
+        this.item.backgroundColor = undefined;
         this.item.command = undefined;
     }
 
@@ -32,6 +33,7 @@ export class StatusBar implements vscode.Disposable {
         const busyMessage = message || 'Analyzing...';
         this.item.text = `$(sync~spin) lit-critic: ${busyMessage}`;
         this.item.tooltip = `${busyMessage} · lit-critic is busy — please wait.`;
+        this.item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
         this.item.command = undefined;
     }
 
@@ -39,6 +41,7 @@ export class StatusBar implements vscode.Disposable {
     setProgress(current: number, total: number): void {
         this.item.text = `$(book) ${current}/${total} findings`;
         this.item.tooltip = `lit-critic: ${current} of ${total} findings reviewed`;
+        this.item.backgroundColor = undefined;
         this.item.command = undefined;
     }
 
@@ -46,6 +49,7 @@ export class StatusBar implements vscode.Disposable {
     setComplete(): void {
         this.item.text = '$(book) Review complete';
         this.item.tooltip = 'All findings have been reviewed';
+        this.item.backgroundColor = undefined;
         this.item.command = undefined;
     }
 
@@ -53,6 +57,7 @@ export class StatusBar implements vscode.Disposable {
     setError(message: string): void {
         this.item.text = '$(error) lit-critic';
         this.item.tooltip = message;
+        this.item.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
         this.item.command = undefined;
     }
 

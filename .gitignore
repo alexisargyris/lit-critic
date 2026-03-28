@@ -4,6 +4,9 @@ venv/
 # Node dependencies
 node_modules/
 
+# Log files
+*.log
+
 # NPM logs
 npm-debug.log*
 yarn-debug.log*
@@ -38,5 +41,5 @@ build/
 # Sync scripts (local-only, not tracked)
 scripts/
 
-# Implementation specs (local-only, not tracked)
-specs/
+# Claude AI worktree scaffolding (local-only, not tracked)
+.claude/

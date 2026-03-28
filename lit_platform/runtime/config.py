@@ -273,10 +273,11 @@ def refresh_available_models(force: bool = False) -> dict[str, dict[str, Any]]:
 
     _load_cached_models_once()
 
+    if not _auto_discovery_enabled():
+        return AVAILABLE_MODELS
+
     now = time.time()
     if not force:
-        if not _auto_discovery_enabled():
-            return AVAILABLE_MODELS
         ttl = _discovery_ttl_seconds()
         if _last_refresh_attempt_at is not None and (now - _last_refresh_attempt_at) < ttl:
             return AVAILABLE_MODELS
@@ -372,6 +373,7 @@ INDEX_FILES = [
 
 OPTIONAL_FILES = [
     "LEARNING.md",
+    "TEMPLATE.md",
 ]
 
 CONTEXT_FILES = INDEX_FILES + OPTIONAL_FILES

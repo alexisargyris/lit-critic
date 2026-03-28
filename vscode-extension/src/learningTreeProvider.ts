@@ -65,7 +65,7 @@ export class LearningTreeProvider implements vscode.TreeDataProvider<LearningTre
 
     getChildren(element?: LearningTreeElement): vscode.ProviderResult<LearningTreeElement[]> {
         if (!this.learning) {
-            return [];
+            return [new LearningEntryItem('No entries found', undefined, 'empty')];
         }
 
         if (!element) {
@@ -118,7 +118,7 @@ export class LearningTreeProvider implements vscode.TreeDataProvider<LearningTre
             }
 
             if (categories.length === 0) {
-                return [new LearningEntryItem('No learning data yet', undefined, 'empty')];
+                return [new LearningEntryItem('No entries found', undefined, 'empty')];
             }
 
             return categories;

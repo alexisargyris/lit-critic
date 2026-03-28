@@ -1,7 +1,15 @@
 import { strict as assert } from 'assert';
+import * as path from 'path';
 
 import { StartupService, StartupPorts } from '../../vscode-extension/src/bootstrap/startupService';
 import { REPO_MARKER } from '../../vscode-extension/src/repoPreflight';
+
+// ---------------------------------------------------------------------------
+// The project root is one level up from the vscode-extension/ directory where
+// mocha runs.  It contains lit-critic-web.py, which is required for
+// validateRepoPath to return ok: true.
+// ---------------------------------------------------------------------------
+const PROJECT_ROOT = path.resolve(process.cwd(), '..');
 
 // ---------------------------------------------------------------------------
 // Fake StartupPorts factory — only override what each test needs
@@ -31,15 +39,14 @@ function makePorts(overrides: Partial<StartupPorts> = {}): StartupPorts {
 describe('StartupService.findRepoRoot', () => {
     it('returns configured path when it points to a directory with the marker', () => {
         // Use the real project root as a valid path (lit-critic-web.py lives there).
-        const realRoot = process.cwd().replace(/\\/g, '/');
         const ports = makePorts({
-            getConfiguredRepoPath: () => realRoot,
+            getConfiguredRepoPath: () => PROJECT_ROOT,
             pathExists: (p) => p.includes(REPO_MARKER),
         });
         const svc = new StartupService(ports);
         const result = svc.findRepoRoot();
-        // validateRepoPath checks the real filesystem; since tests run in the
-        // project root which does contain lit-critic-web.py, the path is valid.
+        // validateRepoPath checks the real filesystem; since PROJECT_ROOT does
+        // contain lit-critic-web.py, the path is valid.
         assert.ok(result, 'should resolve configured path');
     });
 
@@ -48,7 +55,7 @@ describe('StartupService.findRepoRoot', () => {
         const ports = makePorts({
             getConfiguredRepoPath: () => '',
             getWorkspaceFolders: () => [{ uri: { fsPath: fakeRoot } }],
-            pathExists: (p) => p === `${fakeRoot}/${REPO_MARKER}`,
+            pathExists: (p) => p === path.join(fakeRoot, REPO_MARKER),
         });
         const svc = new StartupService(ports);
         const result = svc.findRepoRoot();
@@ -81,7 +88,7 @@ describe('StartupService.findRepoRootFromWorkspace', () => {
         const root = '/my/repo';
         const ports = makePorts({
             getWorkspaceFolders: () => [{ uri: { fsPath: root } }],
-            pathExists: (p) => p === `${root}/${REPO_MARKER}`,
+            pathExists: (p) => p === path.join(root, REPO_MARKER),
         });
         const svc = new StartupService(ports);
         assert.equal(svc.findRepoRootFromWorkspace(), root);
@@ -92,7 +99,7 @@ describe('StartupService.findRepoRootFromWorkspace', () => {
         const deeper = `${repoRoot}/child/scene`;
         const ports = makePorts({
             getWorkspaceFolders: () => [{ uri: { fsPath: deeper } }],
-            pathExists: (p) => p === `${repoRoot}/${REPO_MARKER}`,
+            pathExists: (p) => p === path.join(repoRoot, REPO_MARKER),
         });
         const svc = new StartupService(ports);
         assert.equal(svc.findRepoRootFromWorkspace(), repoRoot);
@@ -122,7 +129,7 @@ describe('StartupService.detectProjectPath', () => {
         const projectDir = '/my/novel';
         const ports = makePorts({
             getWorkspaceFolders: () => [{ uri: { fsPath: projectDir } }],
-            pathExists: (p) => p === `${projectDir}/CANON.md`,
+            pathExists: (p) => p === path.join(projectDir, 'CANON.md'),
         });
         const svc = new StartupService(ports);
         assert.equal(svc.detectProjectPath(), projectDir);
@@ -144,10 +151,9 @@ describe('StartupService.detectProjectPath', () => {
 
 describe('StartupService.ensureRepoRootWithRecovery', () => {
     it('returns immediately when configured path already valid (uses real fs, project root)', async () => {
-        const realRoot = process.cwd();
         const ports = makePorts({
-            // Feed back the real working directory — it contains lit-critic-web.py
-            getConfiguredRepoPath: () => realRoot,
+            // Feed back the real project root — it contains lit-critic-web.py
+            getConfiguredRepoPath: () => PROJECT_ROOT,
         });
         const svc = new StartupService(ports);
         const result = await svc.ensureRepoRootWithRecovery();
@@ -155,18 +161,12 @@ describe('StartupService.ensureRepoRootWithRecovery', () => {
     });
 
     it('returns workspace root when configured path is empty but workspace root is valid', async () => {
-        const realRoot = process.cwd();
         const ports = makePorts({
             getConfiguredRepoPath: () => '',
-            getWorkspaceFolders: () => [{ uri: { fsPath: realRoot } }],
-            // pathExists is NOT overridden — the real fs call happens inside validateRepoPath
-            // which is called with the workspace root.  We use process.cwd() which does
-            // contain lit-critic-web.py, so it should pass.
-            pathExists: (p) => {
-                // Only needed for the workspace walk inside findRepoRootFromWorkspace;
-                // validateRepoPath uses the real fs internally.
-                return p.endsWith(REPO_MARKER);
-            },
+            getWorkspaceFolders: () => [{ uri: { fsPath: PROJECT_ROOT } }],
+            // pathExists is used inside findRepoRootFromWorkspace to locate the
+            // marker. PROJECT_ROOT contains lit-critic-web.py so this returns true.
+            pathExists: (p) => p.endsWith(REPO_MARKER),
         });
         const svc = new StartupService(ports);
         const result = await svc.ensureRepoRootWithRecovery();
@@ -217,13 +217,14 @@ describe('StartupService.ensureRepoRootWithRecovery', () => {
     });
 
     it('persists and returns chosen folder path when valid folder is selected', async () => {
-        const realRoot = process.cwd();
         let savedPath = '';
         const ports = makePorts({
             getConfiguredRepoPath: () => '/invalid/path',
             getWorkspaceFolders: () => undefined,
             showErrorModal: async () => 'Select Folder…',
-            showFolderPicker: async () => realRoot,
+            // Use the real project root — it contains lit-critic-web.py so
+            // validateRepoPath will return ok: true and exit the loop.
+            showFolderPicker: async () => PROJECT_ROOT,
             updateConfiguredRepoPath: async (v) => { savedPath = v; },
         });
         const svc = new StartupService(ports);
@@ -233,7 +234,6 @@ describe('StartupService.ensureRepoRootWithRecovery', () => {
     });
 
     it('re-reads config after Open Settings and returns if now valid', async () => {
-        const realRoot = process.cwd();
         let settingsOpened = false;
         const ports = makePorts({
             getConfiguredRepoPath: () => '/invalid/before-settings',
@@ -242,7 +242,8 @@ describe('StartupService.ensureRepoRootWithRecovery', () => {
                 return settingsOpened ? 'Cancel' : 'Open Settings';
             },
             openSettings: async (_key) => { settingsOpened = true; },
-            getConfiguredRepoPathAfterSettingsEdit: () => realRoot,
+            // After settings are opened, return the real project root which is valid.
+            getConfiguredRepoPathAfterSettingsEdit: () => PROJECT_ROOT,
         });
         const svc = new StartupService(ports);
         const result = await svc.ensureRepoRootWithRecovery();
@@ -313,7 +314,7 @@ describe('StartupService.revealLitCriticActivityContainerIfProjectDetected', () 
         const projectDir = '/my/novel';
         const ports = makePorts({
             getWorkspaceFolders: () => [{ uri: { fsPath: projectDir } }],
-            pathExists: (p) => p === `${projectDir}/CANON.md`,
+            pathExists: (p) => p === path.join(projectDir, 'CANON.md'),
             executeCommand: async (cmd) => { executedCmd = cmd; },
         });
         const svc = new StartupService(ports);
@@ -337,7 +338,7 @@ describe('StartupService.revealLitCriticActivityContainerIfProjectDetected', () 
         const projectDir = '/my/novel';
         const ports = makePorts({
             getWorkspaceFolders: () => [{ uri: { fsPath: projectDir } }],
-            pathExists: (p) => p === `${projectDir}/CANON.md`,
+            pathExists: (p) => p === path.join(projectDir, 'CANON.md'),
             executeCommand: async () => { throw new Error('no view'); },
         });
         const svc = new StartupService(ports);

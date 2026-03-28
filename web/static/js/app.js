@@ -10,6 +10,8 @@ const App = {
     sessionSummary: null,
     currentFinding: null,
     repoPreflight: null,
+    analysisMode: 'deep',
+    modeCostHints: {},
     /** @type {string[]} Additional scene paths for multi-scene analysis */
     extraScenePaths: [],
 
@@ -18,13 +20,8 @@ const App = {
         // Restore saved form values from localStorage
         const savedProject = localStorage.getItem('lc_project_path');
         const savedScene = localStorage.getItem('lc_scene_path');
-        const savedLensPreset = localStorage.getItem('lc_lens_preset');
         if (savedProject) document.getElementById('project-path').value = savedProject;
         if (savedScene) document.getElementById('scene-path').value = savedScene;
-        if (savedLensPreset) {
-            const presetSelect = document.getElementById('lens-preset-select');
-            if (presetSelect) presetSelect.dataset.saved = savedLensPreset;
-        }
 
         // Check if API key is already configured server-side
         App.checkApiKeyConfig();
@@ -58,6 +55,13 @@ const App = {
         if (addSceneBtn) {
             addSceneBtn.addEventListener('click', () => {
                 App.addExtraScene();
+            });
+        }
+
+        const runAuditBtn = document.getElementById('run-audit-btn');
+        if (runAuditBtn) {
+            runAuditBtn.addEventListener('click', () => {
+                App.runIndexAudit();
             });
         }
 
@@ -142,6 +146,105 @@ const App = {
             // If the endpoint doesn't exist or fails, skip the warning
         }
         return true;
+    },
+
+    async runIndexAudit() {
+        const projectPath = document.getElementById('project-path').value.trim();
+        const deep = Boolean(document.getElementById('audit-deep-toggle')?.checked);
+        const auditModeLabel = deep ? 'Audit Deep' : 'Audit Quick';
+        const model = document.getElementById('model-select')?.value;
+        const apiKey = document.getElementById('api-key')?.value.trim();
+
+        const loadingEl = document.getElementById('audit-loading');
+        const errorEl = document.getElementById('audit-error');
+        const resultsEl = document.getElementById('audit-results');
+
+        if (!projectPath) {
+            App.toast('Enter a project directory before running audit.', 'error');
+            return;
+        }
+
+        if (loadingEl) {
+            loadingEl.textContent = `Running ${auditModeLabel}...`;
+        }
+        loadingEl?.classList.remove('hidden');
+        errorEl?.classList.add('hidden');
+        resultsEl?.classList.add('hidden');
+
+        try {
+            const result = await App.api('POST', '/audit', {
+                project_path: projectPath,
+                deep,
+                ...(model ? { model } : {}),
+                ...(apiKey ? { api_key: apiKey } : {}),
+            });
+            App.renderIndexAuditResult(result);
+            App.toast(`${auditModeLabel} completed.`, 'success');
+        } catch (err) {
+            if (errorEl) {
+                errorEl.textContent = err.message;
+                errorEl.classList.remove('hidden');
+            }
+            App.toast(err.message, 'error');
+        } finally {
+            loadingEl?.classList.add('hidden');
+        }
+    },
+
+    renderIndexAuditResult(result) {
+        const deterministic = result.deterministic || [];
+        const semantic = result.semantic || [];
+        const deepError = result.deep_error || null;
+        const placeholderCensus = result.placeholder_census || {};
+
+        const deterministicCountEl = document.getElementById('audit-deterministic-count');
+        const semanticCountEl = document.getElementById('audit-semantic-count');
+        const deepErrorEl = document.getElementById('audit-deep-error');
+        const placeholderListEl = document.getElementById('audit-placeholder-list');
+        const semanticPanelEl = document.getElementById('audit-semantic-panel');
+        const semanticListEl = document.getElementById('audit-semantic-list');
+        const reportEl = document.getElementById('audit-formatted-report');
+        const resultsEl = document.getElementById('audit-results');
+
+        if (deterministicCountEl) deterministicCountEl.textContent = String(deterministic.length);
+        if (semanticCountEl) semanticCountEl.textContent = String(semantic.length);
+        if (deepErrorEl) deepErrorEl.textContent = deepError || 'None';
+
+        if (placeholderListEl) {
+            placeholderListEl.innerHTML = '';
+            const entries = Object.entries(placeholderCensus);
+            if (entries.length === 0) {
+                const li = document.createElement('li');
+                li.textContent = 'No placeholders detected.';
+                placeholderListEl.appendChild(li);
+            } else {
+                entries.forEach(([file, count]) => {
+                    const li = document.createElement('li');
+                    li.textContent = `${file}: ${count}`;
+                    placeholderListEl.appendChild(li);
+                });
+            }
+        }
+
+        if (semanticPanelEl && semanticListEl) {
+            semanticListEl.innerHTML = '';
+            if (semantic.length > 0) {
+                semanticPanelEl.classList.remove('hidden');
+                semantic.forEach((f) => {
+                    const li = document.createElement('li');
+                    li.textContent = `${f.file} — ${f.location}: ${f.message}`;
+                    semanticListEl.appendChild(li);
+                });
+            } else {
+                semanticPanelEl.classList.add('hidden');
+            }
+        }
+
+        if (reportEl) {
+            reportEl.textContent = result.formatted_report || '';
+        }
+
+        resultsEl?.classList.remove('hidden');
     },
 
     // --- View Management ---
@@ -248,6 +351,8 @@ const App = {
     async checkApiKeyConfig() {
         try {
             const config = await App.api('GET', '/config');
+            App.analysisMode = config.default_analysis_mode || 'deep';
+            App.modeCostHints = config.mode_cost_hints || {};
             if (config.api_key_configured) {
                 const configured = config.api_keys_configured || {};
                 const providers = Object.entries(configured)
@@ -265,32 +370,8 @@ const App = {
             if (config.available_models) {
                 App.populateModelSelector(config.available_models, config.default_model);
             }
-            if (config.lens_presets) {
-                App.populateLensPresetSelector(config.lens_presets);
-            }
         } catch (err) {
             // If the check fails, just show the input as usual
-        }
-    },
-
-    populateLensPresetSelector(presets) {
-        const select = document.getElementById('lens-preset-select');
-        if (!select) return;
-        const saved = select.dataset.saved || localStorage.getItem('lc_lens_preset') || 'auto';
-        const labels = {
-            'auto': 'Auto (recommended)',
-            'balanced': 'Balanced (override)',
-            'prose-first': 'Prose-first (override)',
-            'story-logic': 'Story-logic (override)',
-            'clarity-pass': 'Clarity-pass (override)',
-        };
-        select.innerHTML = '';
-        for (const presetName of Object.keys(presets)) {
-            const option = document.createElement('option');
-            option.value = presetName;
-            option.textContent = labels[presetName] || presetName;
-            if (presetName === saved) option.selected = true;
-            select.appendChild(option);
         }
     },
 
@@ -342,11 +423,6 @@ const App = {
 
         const model = document.getElementById('model-select').value;
         const discussionModel = document.getElementById('discussion-model-select').value;
-        const lensPreset = document.getElementById('lens-preset-select').value || 'auto';
-        let effectivePreset = lensPreset;
-        if (lensPreset === 'auto') {
-            effectivePreset = scenePaths.length > 1 ? 'multi-scene' : 'single-scene';
-        }
 
         // Word-count guardrail (spec §4): warn but don't block
         const proceed = await App.checkWordCountWarning(scenePaths);
@@ -360,11 +436,11 @@ const App = {
         localStorage.setItem('lc_scene_path', scenePath);
         localStorage.setItem('lc_model', model);
         localStorage.setItem('lc_discussion_model', discussionModel);
-        localStorage.setItem('lc_lens_preset', lensPreset);
 
         // Switch to analysis view
         App.showView('analysis-view');
         App.resetAnalysisProgress();
+        App.renderModeCostEstimate();
 
         // Start SSE listener for progress
         App.listenToProgress();
@@ -375,11 +451,7 @@ const App = {
                 project_path: projectPath,
                 api_key: apiKey || null,
                 discussion_api_key: discussionApiKey || null,
-                model: model,
-                discussion_model: discussionModel || null,
-                lens_preferences: {
-                    preset: effectivePreset,
-                },
+                mode: App.analysisMode,
             };
             // Include scene_paths array for multi-scene analysis
             if (scenePaths.length > 1) {
@@ -394,6 +466,14 @@ const App = {
             document.getElementById('analysis-error').textContent = err.message;
             document.getElementById('analysis-error').classList.remove('hidden');
         }
+    },
+
+    renderModeCostEstimate() {
+        const hint = App.modeCostHints[App.analysisMode] || 'Estimated cost depends on selected mode and scene size.';
+        const coordEl = document.getElementById('coordination-status');
+        if (!coordEl) return;
+        coordEl.innerHTML = `<span class="lens-icon">ℹ️</span> ${hint}`;
+        coordEl.classList.remove('hidden');
     },
 
     resetAnalysisProgress() {
@@ -593,6 +673,14 @@ const App = {
             if (summary.discussion_model) {
                 modelText += ` · Discussion: ${summary.discussion_model.label}`;
             }
+            const tier = summary.tier_cost_summary;
+            if (tier) {
+                if (tier.actuals_available && tier.total_cost_usd !== null) {
+                    modelText += ` · Tier Cost: $${Number(tier.total_cost_usd).toFixed(4)}`;
+                } else {
+                    modelText += ' · Tier Cost: actual token/cost data unavailable';
+                }
+            }
             document.getElementById('model-label').textContent = modelText;
         }
 
@@ -646,6 +734,7 @@ const App = {
         const f = data.finding;
         const severity = (f.severity || '').toLowerCase();
         const lens = (f.lens || '').toLowerCase();
+        const origin = (f.origin || '').toLowerCase();
 
         // Update progress
         document.getElementById('progress-text').textContent = `${data.current} / ${data.total}`;
@@ -662,6 +751,20 @@ const App = {
         const lensBadge = document.getElementById('finding-lens');
         lensBadge.textContent = (f.lens || '').toUpperCase();
         lensBadge.className = `lens-badge ${lens}`;
+
+        // Origin badge
+        const originBadge = document.getElementById('finding-origin');
+        if (originBadge) {
+            const displayOrigin = origin === 'llm' ? 'critic' : origin;
+            const supportedOrigins = ['code', 'checker', 'critic'];
+            if (supportedOrigins.includes(displayOrigin)) {
+                originBadge.textContent = displayOrigin.toUpperCase();
+                originBadge.className = `origin-badge ${displayOrigin}`;
+            } else {
+                originBadge.className = 'origin-badge hidden';
+                originBadge.textContent = '';
+            }
+        }
 
         // Finding card severity styling
         const card = document.getElementById('finding-card');

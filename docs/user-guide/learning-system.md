@@ -85,7 +85,7 @@ AI: "Understood. I'll note that in your learning profile."
 When you start a new review:
 
 1. The tool loads learning data from the project database (`.lit-critic.db`)
-2. All six lenses receive the learning content as context
+2. All seven lenses receive the learning content as context
 3. Lenses are instructed to respect your documented preferences
 
 **Effect:**
@@ -123,7 +123,7 @@ To **export** a human-readable `LEARNING.md` file:
 ### CLI
 
 ```bash
-python lit-critic.py learning export --project ~/novel/
+python -m cli learning export --project ~/novel/
 ```
 
 ### Web UI
@@ -190,20 +190,37 @@ You can also manage individual entries:
 
 **CLI:**
 ```bash
-python lit-critic.py learning view --project ~/novel/
+python -m cli learning list --project ~/novel/
 ```
 
 ---
 
 ## Confidence Levels
 
-The system tracks how many times a preference has been confirmed:
+Each preference entry has a **confidence score** (0.5–0.9) that grows as the same pattern is confirmed across sessions:
 
-- **1–2 instances** Tentative preference (still learning)
-- **3–5 instances** Established preference (moderate confidence)
-- **6+ instances** Strong preference (high confidence)
+| Rejections | Confidence | Lens behaviour |
+|-----------|------------|----------------|
+| 1st | 0.5 (LOW) | Lens **may still flag** the issue, noting your prior preference |
+| 2nd | 0.7 (HIGH) | Lens flags **only if the evidence is compelling**, and notes the contradiction |
+| 3rd+ | 0.8–0.9 (HIGH) | Same as above — confidence approaches 0.9 but never reaches 1.0 |
 
-Stronger preferences have more influence on future analyses.
+**No preference is permanently immune.** A high-confidence preference reduces noise but does not remove the finding category from the reviewer's attention. If there is strong evidence in a specific scene, the lens will still surface it and tell you it contradicts a learned preference. You decide.
+
+The confidence score is exported into `LEARNING.md` as a machine-readable prefix:
+
+```markdown
+## Preferences
+
+- [confidence: 0.5] [prose] Author uses sentence fragments for pacing
+- [confidence: 0.8] [dialogue] Author uses comma splices in speech intentionally
+```
+
+### Blind Spots
+
+The system also tracks **blind spots** — patterns the author has repeatedly *accepted*. After 3 or more accepted findings in the same lens/pattern category across different sessions, the system creates a blind spot entry. Lens prompts receive an instruction to pay **extra attention** to those areas.
+
+Blind spots are listed in `LEARNING.md` under `## Blind Spots`.
 
 ---
 
@@ -358,7 +375,7 @@ Generally not recommended—each project has its own style. But if you have stro
 
 To start fresh:
 
-1. **Reset learning data** (Web learning page, VS Code learning command, or CLI `python lit-critic.py learning reset --project <path>`)
+1. **Reset learning data** (Web learning page, VS Code learning command, or CLI `python -m cli learning reset --project <path>`)
 2. **Run a new review** to build fresh signals
 3. **Export learning** when you want a new `LEARNING.md` snapshot
 
@@ -439,4 +456,4 @@ plot advancement. I'll adjust my structure lens."
 - **[Using the Tool](using-the-tool.md)** CLI, Web UI, VS Code
 - **[Getting Started](getting-started.md)** Initial setup
 - **[Scene Format](scene-format.md)** @@META documentation
-- **[Index Files](index-files.md)** CANON, CAST, etc.
+- **[Knowledge Management](index-files.md)** CANON.md, STYLE.md, and auto-extracted knowledge

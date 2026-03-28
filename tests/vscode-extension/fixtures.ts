@@ -138,10 +138,6 @@ export const sampleServerConfig = {
         'haiku': { label: 'Haiku 4.5 (fast & cheap)' },
     },
     default_model: 'sonnet',
-    lens_presets: {
-        balanced: { prose: 1.0, structure: 1.0, logic: 1.0, clarity: 1.0, continuity: 1.0, dialogue: 1.0 },
-        'prose-first': { prose: 1.6, structure: 1.1, logic: 0.9, clarity: 0.9, continuity: 0.8, dialogue: 1.1 },
-    },
 };
 
 // ---------------------------------------------------------------------------
@@ -319,6 +315,7 @@ export function createFreshMockVscode() {
         createTreeView: (viewId: string, options: any) => ({
             dispose: () => {},
             visible: true,
+            reveal: async (_item: any, _options?: any) => {},
         }),
         registerFileDecorationProvider: (provider: any) => ({
             dispose: () => {},
@@ -337,7 +334,12 @@ export function createFreshMockVscode() {
         },
         showInformationMessage: async (message: string, ...items: string[]) => items[0],
         showWarningMessage: async (message: string, ...items: string[]) => items[0],
-        showErrorMessage: async (message: string, ...items: string[]) => items[0],
+        showErrorMessage: async (message: string, ...items: any[]) => {
+            // Skip the { modal: true } options object the real VS Code API accepts as
+            // the second argument — return the first *string* button label, just as
+            // the real VS Code window API does.
+            return items.find((i: any) => typeof i === 'string');
+        },
         showQuickPick: async (items: any[], options?: any) => items[0],
         showInputBox: async (options?: any) => 'test input',
         showOpenDialog: async (options?: any) => [],
@@ -347,6 +349,7 @@ export function createFreshMockVscode() {
             dispose: () => {},
         }),
         createWebviewPanel: (viewType: string, title: string, showOptions: any, options: any) => new MockWebviewPanel(viewType, title, showOptions, options),
+        registerWebviewViewProvider: (_viewId: string, _provider: any, _options?: any) => ({ dispose: () => {} }),
         activeTextEditor: undefined,
         visibleTextEditors: [],
         showTextDocument: async (uri: any, options?: any) => ({}),
@@ -357,6 +360,12 @@ export function createFreshMockVscode() {
             update: async (key: string, value: any, target?: any) => {},
         }),
         workspaceFolders: undefined,
+        createFileSystemWatcher: (_globPattern: any) => ({
+            onDidCreate: (_listener: any) => ({ dispose: () => {} }),
+            onDidChange: (_listener: any) => ({ dispose: () => {} }),
+            onDidDelete: (_listener: any) => ({ dispose: () => {} }),
+            dispose: () => {},
+        }),
     },
     commands: {
         registerCommand: (command: string, callback: (...args: any[]) => any) => ({
@@ -377,6 +386,14 @@ export function createFreshMockVscode() {
                 toString: () => value,
             };
         },
+    },
+    RelativePattern: class {
+        baseUri: any;
+        pattern: string;
+        constructor(baseUri: any, pattern: string) {
+            this.baseUri = baseUri;
+            this.pattern = pattern;
+        }
     },
     Range: class {
         start: any;
@@ -478,6 +495,71 @@ export function createFreshMockVscode() {
     },
         EventEmitter: MockEventEmitter,
     };
+}
+
+/**
+ * MockWebviewView — mirrors MockWebviewPanel but for WebviewView (sidebar panels).
+ * Used to test WebviewViewProvider implementations.
+ */
+export class MockWebviewView {
+    webview: {
+        html: string;
+        options: any;
+        onDidReceiveMessage: (handler: any) => { dispose: () => void };
+        postMessage: (msg: any) => void;
+        _messageHandlers: Array<(msg: any) => void>;
+    };
+    visible: boolean = true;
+    private _disposeHandlers: Array<() => void> = [];
+
+    constructor() {
+        const messageHandlers: Array<(msg: any) => void> = [];
+
+        this.webview = {
+            html: '',
+            options: {},
+            onDidReceiveMessage: (handler: any) => {
+                messageHandlers.push(handler);
+                return {
+                    dispose: () => {
+                        const idx = messageHandlers.indexOf(handler);
+                        if (idx >= 0) messageHandlers.splice(idx, 1);
+                    },
+                };
+            },
+            postMessage: (_msg: any) => {},
+            _messageHandlers: messageHandlers,
+        };
+    }
+
+    onDidDispose(handler: () => void): { dispose: () => void } {
+        this._disposeHandlers.push(handler);
+        return {
+            dispose: () => {
+                const idx = this._disposeHandlers.indexOf(handler);
+                if (idx >= 0) this._disposeHandlers.splice(idx, 1);
+            },
+        };
+    }
+
+    show(_preserveFocus?: boolean): void {
+        this.visible = true;
+    }
+
+    dispose(): void {
+        this.visible = false;
+        for (const handler of this._disposeHandlers) {
+            handler();
+        }
+        this._disposeHandlers = [];
+    }
+
+    /** Test helper to simulate receiving a message from the webview content */
+    _simulateMessage(msg: any): void {
+        for (const handler of this.webview._messageHandlers) {
+            handler(msg);
+        }
+    }
 }
 
 /** Singleton mock for backward compatibility */

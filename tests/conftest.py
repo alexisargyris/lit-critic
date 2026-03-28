@@ -263,11 +263,32 @@ def db_conn(tmp_path):
     conn.close()
 
 
+@pytest.fixture(autouse=True)
+def _wal_checkpoint_cleanup(tmp_path):
+    """After every test, checkpoint and truncate any WAL-mode SQLite databases
+    left in tmp_path.  This releases the memory-mapped -shm handle on Windows
+    promptly instead of waiting for GC, preventing handle exhaustion across
+    hundreds of tests that each create file-based WAL databases."""
+    yield
+    for db_file in tmp_path.rglob("*.db"):
+        try:
+            import sqlite3 as _sqlite3
+            _conn = _sqlite3.connect(str(db_file))
+            _conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            _conn.close()
+        except Exception:
+            pass
+
+
 @pytest.fixture
 def project_db_conn(temp_project_dir):
     """Create a real DB in the temp project directory."""
     conn = get_connection(temp_project_dir)
     yield conn
+    # Checkpoint and truncate the WAL file before closing so Windows
+    # releases the memory-mapped -shm handle promptly, preventing
+    # handle accumulation across hundreds of tests.
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     conn.close()
 
 

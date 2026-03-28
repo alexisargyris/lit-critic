@@ -33,10 +33,22 @@ describe('FindingsTreeProvider', () => {
     });
 
     describe('tree item creation', () => {
-        it('should format finding label with finding number only', () => {
+        it('should format finding label with line range and default origin', () => {
             const finding = sampleFindings[0];
-            const label = `#${finding.number}`;
-            assert.match(label, /#1/);
+            const lineRange = finding.line_end !== null && finding.line_end !== finding.line_start
+                ? `L${finding.line_start}-L${finding.line_end}`
+                : `L${finding.line_start}`;
+            const label = `#${finding.number} ${lineRange} · LLM`;
+            assert.match(label, /#1 L42-L45 · LLM/);
+        });
+
+        it('should format deterministic origin label for finding tree items', () => {
+            const finding = { ...sampleFindings[0], origin: 'deterministic' };
+            const lineRange = finding.line_end !== null && finding.line_end !== finding.line_start
+                ? `L${finding.line_start}-L${finding.line_end}`
+                : `L${finding.line_start}`;
+            const label = `#${finding.number} ${lineRange} · Deterministic`;
+            assert.match(label, /Deterministic/);
         });
 
         it('should format line range', () => {

@@ -12,11 +12,9 @@ export interface OperationProfile {
 
 interface OperationTrackerOptions {
     outputChannel?: vscode.OutputChannel;
-    slowThresholdMs?: number;
     progressThresholdMs?: number;
     verySlowThresholdMs?: number;
     now?: () => number;
-    setStatusBarMessage?: typeof vscode.window.setStatusBarMessage;
     withProgress?: typeof vscode.window.withProgress;
 }
 
@@ -26,40 +24,25 @@ interface OperationTrackerOptions {
  */
 export class OperationTracker implements vscode.Disposable {
     private readonly output: vscode.OutputChannel;
-    private readonly defaultSlowThresholdMs: number;
     private readonly defaultProgressThresholdMs: number;
     private readonly verySlowThresholdMs: number;
     private readonly now: () => number;
-    private readonly setStatusBarMessage: typeof vscode.window.setStatusBarMessage;
     private readonly withProgress: typeof vscode.window.withProgress;
 
     constructor(options: OperationTrackerOptions = {}) {
         this.output = options.outputChannel || vscode.window.createOutputChannel('lit-critic');
-        this.defaultSlowThresholdMs = options.slowThresholdMs ?? 400;
-        this.defaultProgressThresholdMs = options.progressThresholdMs ?? 1500;
+        this.defaultProgressThresholdMs = options.progressThresholdMs ?? 400;
         this.verySlowThresholdMs = options.verySlowThresholdMs ?? 5000;
         this.now = options.now || (() => Date.now());
-        this.setStatusBarMessage = options.setStatusBarMessage || vscode.window.setStatusBarMessage.bind(vscode.window);
         this.withProgress = options.withProgress || vscode.window.withProgress.bind(vscode.window);
     }
 
     async run<T>(profile: OperationProfile, operation: () => Promise<T>): Promise<T> {
-        const slowThresholdMs = profile.slowThresholdMs ?? this.defaultSlowThresholdMs;
-        const progressThresholdMs = Math.max(
-            profile.progressThresholdMs ?? this.defaultProgressThresholdMs,
-            slowThresholdMs,
-        );
+        const progressThresholdMs = profile.progressThresholdMs ?? this.defaultProgressThresholdMs;
         const start = this.now();
 
-        let statusMessageDisposable: vscode.Disposable | undefined;
         let progressPromise: Thenable<void> | undefined;
         let resolveProgress: (() => void) | undefined;
-
-        const slowTimer = setTimeout(() => {
-            statusMessageDisposable = this.setStatusBarMessage(
-                `$(sync~spin) lit-critic: ${profile.statusMessage || profile.title}`,
-            );
-        }, slowThresholdMs);
 
         const progressTimer = setTimeout(() => {
             progressPromise = this.withProgress(
@@ -75,11 +58,7 @@ export class OperationTracker implements vscode.Disposable {
         }, progressThresholdMs);
 
         const completeUi = async (): Promise<void> => {
-            clearTimeout(slowTimer);
             clearTimeout(progressTimer);
-
-            statusMessageDisposable?.dispose();
-            statusMessageDisposable = undefined;
 
             if (resolveProgress) {
                 resolveProgress();

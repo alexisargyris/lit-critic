@@ -40,6 +40,7 @@ class FindingContract(_StrictModel):
     flagged_by: list[str] = Field(default_factory=list)
     ambiguity_type: str | None = None
     stale: bool = False
+    origin: Literal["code", "checker", "critic", "legacy"] = "legacy"
 
 
 class AnalyzeModelConfig(_StrictModel):
@@ -102,3 +103,5 @@ class ReEvaluateFindingResponse(_StrictModel):
     updated_finding: FindingContract | None = None
     reason: str | None = None
     meta: MetaContract
+
+

@@ -32,10 +32,17 @@ Web/API Surface (web/routes.py)
         |  Platform services + facade
         v
 Platform (lit_platform/*)
+     /      |       \
+    /       |        \
+   v        v         v
+Project files   SQLite (.lit-critic.db)   Core (core/api.py)
+(scenes/indexes)  (native + derived data)      ^
+       |                  ^                     |
+       |  parse/hash      |  store/query        | /v1/* contracts
+       +------------------>+---------------------+
+            projection services
         |
-        |  /v1/* contracts
-        v
-Core (core/api.py)
+        +-- session/discussion services consume authored + projected data
 ```
 
 ### Deployment modes
@@ -76,6 +83,8 @@ Platform is the workflow boundary and source of orchestration truth.
 - `session_state_machine.py` — state transitions and review behavior helpers
 - `persistence/*` — SQLite lifecycle and data access
 - `services/*` — session/discussion/learning orchestration services
+- `services/scene_projection_service.py` + `services/index_projection_service.py` — build DB projections from authored files
+- `services/project_knowledge_service.py` — orchestrates refresh/staleness checks used by CLI/web/extension surfaces
 
 ### Platform guarantees
 
@@ -137,18 +146,43 @@ All VS Code surface interactions are injected through narrow port interfaces (`S
 
 ## 6) Data Ownership and Persistence
 
+lit-critic uses a three-part ownership model so each layer has clear responsibility:
+
+- **Authored data** (human-edited): scene files + index files in the project filesystem
+- **Derived data** (machine-built, reproducible): scene/index projections in SQLite
+- **Native runtime data** (workflow state): sessions/findings/learning in SQLite
+
 ### Filesystem (source of truth)
 
 - Scene text files
-- Index files (`CANON.md`, `CAST.md`, `GLOSSARY.md`, `STYLE.md`, `THREADS.md`, `TIMELINE.md`)
+- Author-authored knowledge files (`CANON.md`, `STYLE.md`)
+
+> `CAST.md`, `GLOSSARY.md`, `THREADS.md`, and `TIMELINE.md` are no longer maintained as files. Their content is extracted automatically from prose and stored in the project database.
 
 ### SQLite (`.lit-critic.db`)
 
 Owned by Platform for:
 
-- sessions
-- findings
-- learning
+- native workflow state:
+  - sessions
+  - findings
+  - learning
+- derived project-knowledge projection state:
+  - `scene_projection` (scene metadata + file hash + refresh timestamp)
+  - `index_projection` (index hash + parsed entries blob when applicable — CANON.md and STYLE.md)
+- extracted knowledge state:
+  - `extracted_scene_metadata` (per-scene LLM-extracted metadata)
+  - `extracted_characters`, `extracted_terms`, `extracted_threads`, `extracted_thread_events`, `extracted_timeline` (auto-extracted knowledge from prose)
+  - `knowledge_overrides` (author corrections applied on top of extracted values; survive re-extraction)
+
+### DB projection layer (derived cache)
+
+The projection layer is a deterministic cache derived from authored project files.
+
+- Refresh can be explicit (`scenes refresh`, `indexes refresh`, `/api/project/refresh`) or lazy (`ensure_project_knowledge_fresh`)
+- Staleness is hash-based; unchanged files are skipped
+- `STYLE.md` is tracked hash-only (no structured entries)
+- If projection rows are missing or stale, they are rebuildable from filesystem sources
 
 Key persisted multi-scene fields include:
 

@@ -26,6 +26,8 @@ This reduces accidental breakage between Platform/Core and across client surface
 Canonical component versions live in:
 
 - `versioning/compatibility.json` → `components`
+- Optional push/release declaration metadata lives in:
+  - `versioning/compatibility.json` → `release_intent`
 
 The local validator (`versioning/validate_semver.py`) enforces parity between this file and version declarations in code/manifests.
 
@@ -108,6 +110,33 @@ Until CI is introduced, SemVer is enforced through local automation:
 
 5. **Release checklist**
    - See: `docs/technical/release-checklist.md`
+
+---
+
+## 5.5) Work-in-Progress Push Declaration (Non-Release)
+
+When pushing partial work (for example, an incomplete multi-step spec implementation),
+declare intent in `versioning/compatibility.json` under `release_intent`.
+
+Recommended shape:
+
+```json
+"release_intent": {
+  "status": "wip",
+  "summary": "Short explanation of what is incomplete.",
+  "spec": "path/to/spec.md",
+  "implemented": ["completed parts"],
+  "pending": ["remaining parts"]
+}
+```
+
+Guidelines:
+
+- Use `status: "wip"` for non-release pushes.
+- Keep `implemented` and `pending` aligned with the source spec checklist.
+- Do **not** create/push release tags while `status` is `wip`.
+- Before a real release, either remove the WIP declaration or update it to a
+  release-ready state with fully completed scope.
 
 ---
 

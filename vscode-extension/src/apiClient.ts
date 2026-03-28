@@ -22,7 +22,47 @@ import {
     ScenePathRecoverySelection,
     RepoPreflightStatus,
     RepoPathInvalidDetail,
+    IndexAuditResponse,
+    SceneAuditResponse,
+    SceneProjectionResponse,
+    IndexProjectionResponse,
+    ProjectKnowledgeRefreshResponse,
+    ProjectKnowledgeStatus,
+    KnowledgeReviewResponse,
+    KnowledgeOverrideResponse,
+    KnowledgeOverrideDeleteResponse,
+    KnowledgeEntityDeleteResponse,
+    KnowledgeExportResponse,
+    KnowledgeLockResponse,
+    SceneLockResponse,
+    SceneRenameResponse,
+    SceneRefreshResponse,
+    SceneOrphanPurgeResponse,
+    InputStalenessResponse,
 } from './types';
+
+type LegacyIndexInsertBucket = {
+    added?: unknown[];
+};
+
+type LegacyThreadIndexBucket = LegacyIndexInsertBucket & {
+    advanced?: unknown[];
+    closed?: unknown[];
+};
+
+type LegacyIndexSceneReport = {
+    cast?: LegacyIndexInsertBucket;
+    glossary?: LegacyIndexInsertBucket;
+    threads?: LegacyThreadIndexBucket;
+    timeline?: LegacyIndexInsertBucket;
+    error?: string;
+    [key: string]: unknown;
+};
+
+type LegacyIndexSceneResponse = {
+    report: LegacyIndexSceneReport;
+    summary: string;
+};
 
 export class ApiClient {
     private baseUrl: string;
@@ -243,22 +283,38 @@ export class ApiClient {
     async analyze(
         scenePath: string,
         projectPath: string,
-        model?: string,
-        discussionModel?: string,
         apiKey?: string,
-        lensPreferences?: { preset: string; weights?: Record<string, number> },
         scenePaths?: string[],
+        mode?: 'quick' | 'deep',
     ): Promise<AnalysisSummary> {
         const effectivePaths = scenePaths && scenePaths.length > 0 ? scenePaths : [scenePath];
         return this.request<AnalysisSummary>('POST', '/api/analyze', {
             scene_path: effectivePaths[0],
             scene_paths: effectivePaths,
             project_path: projectPath,
-            ...(model ? { model } : {}),
-            ...(discussionModel ? { discussion_model: discussionModel } : {}),
             ...(apiKey ? { api_key: apiKey } : {}),
-            ...(lensPreferences ? { lens_preferences: lensPreferences } : {}),
+            ...(mode ? { mode } : {}),
         });
+    }
+
+    /** POST /api/config/models — persist model-slot configuration. */
+    async updateConfigModels(modelSlots: { frontier: string; deep: string; quick: string }): Promise<{ model_slots: { frontier: string; deep: string; quick: string } }> {
+        return this.request<{ model_slots: { frontier: string; deep: string; quick: string } }>('POST', '/api/config/models', modelSlots);
+    }
+
+    /** POST /api/config — persist scene discovery configuration. */
+    async updateConfig(sceneConfig: { scene_folder: string; scene_extensions: string[] }): Promise<{
+        scene_folder: string;
+        scene_extensions: string[];
+        default_scene_folder: string;
+        default_scene_extensions: string[];
+    }> {
+        return this.request<{
+            scene_folder: string;
+            scene_extensions: string[];
+            default_scene_folder: string;
+            default_scene_extensions: string[];
+        }>('POST', '/api/config', sceneConfig);
     }
 
     /** POST /api/analyze/rerun — re-run analysis for current active session context. */
@@ -321,13 +377,17 @@ export class ApiClient {
         sessionId: number,
         apiKey?: string,
         recoverySelection?: ScenePathRecoverySelection,
+        reopen: boolean = false,
     ): Promise<AnalysisSummary> {
-        return this.request<AnalysisSummary>('POST', '/api/view-session', {
+        const response = await this.request<AnalysisSummary>('POST', '/api/view-session', {
             project_path: projectPath,
             session_id: sessionId,
             ...(apiKey ? { api_key: apiKey } : {}),
+            ...(reopen ? { reopen: true } : {}),
             ...this.buildScenePathRecoveryPayload(recoverySelection),
         });
+
+        return response;
     }
 
     async resumeWithRecovery(
@@ -411,9 +471,10 @@ export class ApiClient {
         sessionId: number,
         apiKey: string | undefined,
         getScenePathOverride: (detail: ResumeErrorDetail) => Promise<ScenePathRecoverySelection | undefined>,
+        reopen: boolean = false,
     ): Promise<AnalysisSummary> {
         try {
-            return await this.viewSession(projectPath, sessionId, apiKey);
+            return await this.viewSession(projectPath, sessionId, apiKey, undefined, reopen);
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             const detail = this.extractResumeErrorDetail(message);
@@ -431,7 +492,7 @@ export class ApiClient {
                 ...(selection.scenePathOverrides ? { scenePathOverrides: selection.scenePathOverrides } : {}),
             };
 
-            return this.viewSession(projectPath, sessionId, apiKey, normalized);
+            return this.viewSession(projectPath, sessionId, apiKey, normalized, reopen);
         }
     }
 
@@ -543,7 +604,8 @@ export class ApiClient {
 
     /** GET /api/sessions — list all sessions for a project. */
     async listSessions(projectPath: string): Promise<{ sessions: SessionSummary[] }> {
-        return this.request<{ sessions: SessionSummary[] }>('GET', `/api/sessions?project_path=${encodeURIComponent(projectPath)}`);
+        const response = await this.request<{ sessions: SessionSummary[] }>('GET', `/api/sessions?project_path=${encodeURIComponent(projectPath)}`);
+        return response;
     }
 
     /** GET /api/sessions/{id} — get detailed info for a session. */
@@ -577,4 +639,216 @@ export class ApiClient {
     async deleteLearningEntry(entryId: number, projectPath: string): Promise<{ deleted: boolean; entry_id: number }> {
         return this.request<{ deleted: boolean; entry_id: number }>('DELETE', `/api/learning/entries/${entryId}?project_path=${encodeURIComponent(projectPath)}`);
     }
+
+    /** GET /api/scenes — list projected scenes for a project. */
+    async getScenes(projectPath: string): Promise<SceneProjectionResponse> {
+        return this.request<SceneProjectionResponse>('GET', `/api/scenes?project_path=${encodeURIComponent(projectPath)}`);
+    }
+
+    /** GET /api/indexes — list projected indexes for a project. */
+    async getIndexes(projectPath: string): Promise<IndexProjectionResponse> {
+        return this.request<IndexProjectionResponse>('GET', `/api/indexes?project_path=${encodeURIComponent(projectPath)}`);
+    }
+
+    /** POST /api/knowledge/refresh — refresh scene + index projections and extracted knowledge. */
+    async refreshKnowledge(projectPath: string): Promise<ProjectKnowledgeRefreshResponse> {
+        return this.request<ProjectKnowledgeRefreshResponse>('POST', '/api/knowledge/refresh', {
+            project_path: projectPath,
+        });
+    }
+
+    /** Backward-compatible alias for older callers. */
+    async refreshProjectKnowledge(projectPath: string): Promise<ProjectKnowledgeRefreshResponse> {
+        return this.refreshKnowledge(projectPath);
+    }
+
+    /** GET /api/knowledge/review — load extracted entities + overrides for one category. */
+    async getKnowledgeReview(category: string, projectPath: string): Promise<KnowledgeReviewResponse> {
+        return this.request<KnowledgeReviewResponse>(
+            'GET',
+            `/api/knowledge/review?category=${encodeURIComponent(category)}&project_path=${encodeURIComponent(projectPath)}`,
+        );
+    }
+
+    /** POST /api/knowledge/override — save one override field value. */
+    async submitOverride(
+        category: string,
+        entityKey: string,
+        fieldName: string,
+        value: string,
+        projectPath: string,
+    ): Promise<KnowledgeOverrideResponse> {
+        return this.request<KnowledgeOverrideResponse>('POST', '/api/knowledge/override', {
+            category,
+            entity_key: entityKey,
+            field_name: fieldName,
+            value,
+            project_path: projectPath,
+        });
+    }
+
+    /** DELETE /api/knowledge/override — delete one override field value. */
+    async deleteOverride(
+        category: string,
+        entityKey: string,
+        fieldName: string,
+        projectPath: string,
+    ): Promise<KnowledgeOverrideDeleteResponse> {
+        return this.request<KnowledgeOverrideDeleteResponse>('DELETE', '/api/knowledge/override', {
+            category,
+            entity_key: entityKey,
+            field_name: fieldName,
+            project_path: projectPath,
+        });
+    }
+
+    /** DELETE /api/knowledge/entity — delete an extracted entity and all its overrides. */
+    async deleteKnowledgeEntity(
+        category: string,
+        entityKey: string,
+        projectPath: string,
+    ): Promise<KnowledgeEntityDeleteResponse> {
+        return this.request<KnowledgeEntityDeleteResponse>('DELETE', '/api/knowledge/entity', {
+            category,
+            entity_key: entityKey,
+            project_path: projectPath,
+        });
+    }
+
+    /** POST /api/knowledge/export — export extracted knowledge markdown. */
+    async exportKnowledge(projectPath: string): Promise<KnowledgeExportResponse> {
+        return this.request<KnowledgeExportResponse>('POST', '/api/knowledge/export', {
+            project_path: projectPath,
+        });
+    }
+
+    /** POST /api/scenes/lock — lock one scene from automatic extraction. */
+    async lockScene(sceneFilename: string, projectPath: string): Promise<SceneLockResponse> {
+        return this.request<SceneLockResponse>('POST', '/api/scenes/lock', {
+            scene_filename: sceneFilename,
+            project_path: projectPath,
+        });
+    }
+
+    /** POST /api/scenes/unlock — unlock one scene for automatic extraction. */
+    async unlockScene(sceneFilename: string, projectPath: string): Promise<SceneLockResponse> {
+        return this.request<SceneLockResponse>('POST', '/api/scenes/unlock', {
+            scene_filename: sceneFilename,
+            project_path: projectPath,
+        });
+    }
+
+    /** POST /api/knowledge/lock — lock a knowledge entity from LLM updates. */
+    async lockEntity(category: string, entityKey: string, projectPath: string): Promise<KnowledgeLockResponse> {
+        return this.request<KnowledgeLockResponse>('POST', '/api/knowledge/lock', {
+            category,
+            entity_key: entityKey,
+            project_path: projectPath,
+        });
+    }
+
+    /** POST /api/knowledge/unlock — unlock a knowledge entity for LLM updates. */
+    async unlockEntity(category: string, entityKey: string, projectPath: string): Promise<KnowledgeLockResponse> {
+        return this.request<KnowledgeLockResponse>('POST', '/api/knowledge/unlock', {
+            category,
+            entity_key: entityKey,
+            project_path: projectPath,
+        });
+    }
+
+    /** POST /api/knowledge/dismiss-flag — dismiss a review flag for one entity. */
+    async dismissReviewFlag(category: string, entityKey: string, projectPath: string): Promise<{ dismissed: boolean }> {
+        return this.request<{ dismissed: boolean }>('POST', '/api/knowledge/dismiss-flag', {
+            category,
+            entity_key: entityKey,
+            project_path: projectPath,
+        });
+    }
+
+    /** POST /api/scenes/rename — rename one scene and propagate references. */
+    async renameScene(oldName: string, newName: string, projectPath: string): Promise<SceneRenameResponse> {
+        return this.request<SceneRenameResponse>('POST', '/api/scenes/rename', {
+            old_filename: oldName,
+            new_filename: newName,
+            project_path: projectPath,
+        });
+    }
+
+    /** POST /api/scenes/refresh — write discoverable scene files into scene_projection DB. */
+    async refreshScenes(projectPath: string): Promise<SceneRefreshResponse> {
+        return this.request<SceneRefreshResponse>('POST', '/api/scenes/refresh', {
+            project_path: projectPath,
+        });
+    }
+
+    /** POST /api/scenes/purge-orphans — delete DB rows for scenes no longer on disk. */
+    async purgeOrphanedSceneRefs(projectPath: string): Promise<SceneOrphanPurgeResponse> {
+        return this.request<SceneOrphanPurgeResponse>('POST', '/api/scenes/purge-orphans', {
+            project_path: projectPath,
+        });
+    }
+
+    /** GET /api/project/status — projection freshness summary. */
+    async getProjectStatus(projectPath: string): Promise<ProjectKnowledgeStatus> {
+        return this.request<ProjectKnowledgeStatus>('GET', `/api/project/status?project_path=${encodeURIComponent(projectPath)}`);
+    }
+
+    /** GET /api/inputs/staleness — return stale inputs and their dependent knowledge/sessions. */
+    async getInputStaleness(projectPath: string): Promise<InputStalenessResponse> {
+        return this.request<InputStalenessResponse>('GET', `/api/inputs/staleness?project_path=${encodeURIComponent(projectPath)}`);
+    }
+
+    /**
+     * Backward-compat shim for legacy command paths; slated for removal once callers are migrated.
+     */
+    async indexScene(
+        scenePath: string,
+        projectPath: string,
+        model?: string,
+        apiKey?: string,
+    ): Promise<LegacyIndexSceneResponse> {
+        return this.request<LegacyIndexSceneResponse>('POST', '/api/index', {
+            scene_path: scenePath,
+            project_path: projectPath,
+            ...(model ? { model } : {}),
+            ...(apiKey ? { api_key: apiKey } : {}),
+        });
+    }
+
+    /**
+     * Backward-compat shim for legacy command paths; slated for removal once callers are migrated.
+     */
+    async auditIndexes(
+        projectPath: string,
+        deep: boolean = false,
+        model?: string,
+        apiKey?: string,
+    ): Promise<IndexAuditResponse> {
+        return this.request<IndexAuditResponse>('POST', '/api/audit', {
+            project_path: projectPath,
+            deep,
+            ...(model ? { model } : {}),
+            ...(apiKey ? { api_key: apiKey } : {}),
+        });
+    }
+
+    /**
+     * Backward-compat shim for legacy command paths; slated for removal once callers are migrated.
+     */
+    async auditScene(
+        scenePath: string,
+        projectPath: string,
+        deep: boolean = false,
+        model?: string,
+        apiKey?: string,
+    ): Promise<SceneAuditResponse> {
+        return this.request<SceneAuditResponse>('POST', '/api/scenes/audit', {
+            scene_path: scenePath,
+            project_path: projectPath,
+            deep,
+            ...(model ? { model } : {}),
+            ...(apiKey ? { api_key: apiKey } : {}),
+        });
+    }
+
 }

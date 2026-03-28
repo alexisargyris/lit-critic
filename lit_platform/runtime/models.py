@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from .llm import LLMClient
 
 from .config import DEFAULT_MODEL, AVAILABLE_MODELS
-from .lens_preferences import default_lens_preferences
 
 
 class CoordinatorError(Exception):
@@ -56,6 +55,7 @@ class Finding:
     flagged_by: list[str] = field(default_factory=list)
     ambiguity_type: Optional[str] = None
     stale: bool = False                # True when the finding's text region was edited by the author
+    origin: str = "legacy"             # "code", "checker", "critic", or "legacy" (pre-tiering)
     
     # Discussion state
     status: str = "pending"  # pending, accepted, rejected, revised, withdrawn, escalated, discussed
@@ -80,6 +80,7 @@ class Finding:
             "flagged_by": self.flagged_by,
             "ambiguity_type": self.ambiguity_type,
             "stale": self.stale,
+            "origin": self.origin,
         }
         if include_state:
             result["status"] = self.status
@@ -106,6 +107,7 @@ class Finding:
             flagged_by=data.get("flagged_by", []),
             ambiguity_type=data.get("ambiguity_type"),
             stale=data.get("stale", False),
+            origin=data.get("origin", "legacy"),
         )
         finding.status = data.get("status", "pending")
         finding.author_response = data.get("author_response", "")
@@ -148,7 +150,9 @@ class SessionState:
     glossary_issues: list[str] = field(default_factory=list)
     learning: LearningData = field(default_factory=LearningData)
     discussion_history: list[dict] = field(default_factory=list)
-    lens_preferences: dict = field(default_factory=default_lens_preferences)
+    depth_mode: str = "deep"
+    frontier_model: Optional[str] = None
+    checker_model: Optional[str] = None
     model: str = field(default_factory=lambda: DEFAULT_MODEL)
     discussion_model: Optional[str] = None  # None = use analysis model
     discussion_client: Optional["LLMClient"] = None  # None = use analysis client
@@ -159,42 +163,66 @@ class SessionState:
     db_conn: Optional[sqlite3.Connection] = field(default=None, repr=False)
     session_id: Optional[int] = None
 
+    def __post_init__(self) -> None:
+        # Canonical tier assignments (Phase 3) with legacy compatibility:
+        # - checker_model falls back to legacy analysis model
+        # - frontier_model falls back to legacy discussion/analysis model
+        self.checker_model = self.checker_model or self.model
+        self.frontier_model = self.frontier_model or self.discussion_model or self.model
+
+        if not self.depth_mode:
+            self.depth_mode = "deep"
+
+        # Keep legacy fields readable and aligned for transitional callers.
+        self.model = self.checker_model
+        self.discussion_model = self.frontier_model
+
+    @property
+    def effective_checker_model(self) -> str:
+        """Canonical checker-tier model, with legacy fallback safety."""
+        return self.checker_model or self.model
+
+    @property
+    def effective_frontier_model(self) -> str:
+        """Canonical frontier-tier model, with legacy fallback safety."""
+        return self.frontier_model or self.discussion_model or self.model
+
     @property
     def model_id(self) -> str:
         """Full API model identifier (e.g. 'claude-sonnet-4-5-20250929' or 'gpt-4o')."""
-        return AVAILABLE_MODELS[self.model]["id"]
+        return AVAILABLE_MODELS[self.effective_checker_model]["id"]
 
     @property
     def model_provider(self) -> str:
         """Provider name (e.g. 'anthropic' or 'openai')."""
-        return AVAILABLE_MODELS[self.model]["provider"]
+        return AVAILABLE_MODELS[self.effective_checker_model]["provider"]
 
     @property
     def model_max_tokens(self) -> int:
         """Max tokens for the selected model."""
-        return AVAILABLE_MODELS[self.model]["max_tokens"]
+        return AVAILABLE_MODELS[self.effective_checker_model]["max_tokens"]
 
     @property
     def model_label(self) -> str:
         """Human-readable label for the selected model."""
-        return AVAILABLE_MODELS[self.model]["label"]
+        return AVAILABLE_MODELS[self.effective_checker_model]["label"]
 
     @property
     def discussion_model_id(self) -> str:
         """Full API model identifier for discussion (falls back to analysis model if not set)."""
-        model = self.discussion_model or self.model
+        model = self.effective_frontier_model
         return AVAILABLE_MODELS[model]["id"]
 
     @property
     def discussion_model_provider(self) -> str:
         """Provider name for discussion model (falls back to analysis model if not set)."""
-        model = self.discussion_model or self.model
+        model = self.effective_frontier_model
         return AVAILABLE_MODELS[model]["provider"]
 
     @property
     def discussion_model_label(self) -> str:
         """Human-readable label for discussion model (falls back to analysis model if not set)."""
-        model = self.discussion_model or self.model
+        model = self.effective_frontier_model
         return AVAILABLE_MODELS[model]["label"]
 
     @property

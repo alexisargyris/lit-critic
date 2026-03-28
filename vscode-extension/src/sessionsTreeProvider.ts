@@ -15,12 +15,16 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { ApiClient } from './apiClient';
 import { SessionSummary } from './types';
+import { formatSessionTypeLabel, getSessionType } from './domain/sessionDecisionLogic';
 
 type SessionTreeElement = SceneGroupItem | SessionTreeItem | EmptyStateItem;
 
-function isSessionStale(session: SessionSummary): boolean {
-    return session.status === 'active' && Boolean(session.index_context_stale || session.rerun_recommended);
+function isSessionStale(session: SessionSummary, staleIds: ReadonlySet<number> = EMPTY_IDS): boolean {
+    return staleIds.has(session.id)
+        || (session.status === 'active' && Boolean(session.index_context_stale || session.rerun_recommended));
 }
+
+const EMPTY_IDS: ReadonlySet<number> = new Set<number>();
 
 export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTreeElement> {
     private _onDidChangeTreeData = new vscode.EventEmitter<SessionTreeElement | undefined | null | void>();
@@ -31,6 +35,13 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTree
     private apiClient: ApiClient | null = null;
     private currentSessionId: number | null = null;
     private cacheDirty = true;
+    private _staleSessions: Set<number> = new Set<number>();
+
+    setStaleSessions(ids: Set<number>): void {
+        this._staleSessions = new Set(ids);
+        this.cacheDirty = true;
+        this._onDidChangeTreeData.fire();
+    }
     private sceneGroupItems: SceneGroupItem[] = [];
     private sessionItemsByGroup: Map<string, SessionTreeItem[]> = new Map();
     private sessionItemsById: Map<number, SessionTreeItem> = new Map();
@@ -115,13 +126,12 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTree
     }
 
     getChildren(element?: SessionTreeElement): vscode.ProviderResult<SessionTreeElement[]> {
-        if (!this.projectPath) {
-            return [];
-        }
-
-        this.ensureCache();
-
         if (!element) {
+            if (!this.projectPath) {
+                return [new EmptyStateItem('No sessions found')];
+            }
+
+            this.ensureCache();
             if (this.sceneGroupItems.length === 0) {
                 return [new EmptyStateItem('No sessions found')];
             }
@@ -151,12 +161,14 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTree
 
         for (const group of sceneGroupItems) {
             const children = this.sortSessions(group.sessions).map((session) => {
+                const label = this.formatSessionLabel(session);
                 const item = new SessionTreeItem(
-                    this.formatSessionLabel(session),
+                    label,
                     this.formatSessionDescription(session),
                     vscode.TreeItemCollapsibleState.None,
                     session,
                     session.id === this.currentSessionId,
+                    this._staleSessions,
                 );
                 sessionItemsById.set(session.id, item);
                 return item;
@@ -212,7 +224,11 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTree
     }
 
     private formatSessionLabel(session: SessionSummary): string {
-        return `#${session.id}`;
+        const typeLabel = formatSessionTypeLabel(session);
+        if (typeLabel === 'Unknown') {
+            return `#${session.id}`;
+        }
+        return `#${session.id} · ${typeLabel}`;
     }
 
     private formatSessionDescription(session: SessionSummary): string {
@@ -220,7 +236,7 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionTree
             0,
             session.total_findings - session.accepted_count - session.rejected_count - session.withdrawn_count,
         );
-        const statusLabel = isSessionStale(session) ? `${session.status} · stale` : session.status;
+        const statusLabel = isSessionStale(session, this._staleSessions) ? `${session.status} · stale` : session.status;
         return `${statusLabel} · total ${session.total_findings} · accepted ${session.accepted_count} · rejected ${session.rejected_count} · withdrawn ${session.withdrawn_count} · pending ${pendingCount}`;
     }
 }
@@ -274,6 +290,7 @@ class SessionTreeItem extends vscode.TreeItem {
         public readonly collapsibleState: vscode.TreeItemCollapsibleState,
         public readonly session?: SessionSummary,
         public readonly isCurrent: boolean = false,
+        private readonly staleIds: ReadonlySet<number> = EMPTY_IDS,
     ) {
         super(label, collapsibleState);
 
@@ -290,9 +307,15 @@ class SessionTreeItem extends vscode.TreeItem {
                 this.description = description;
             }
 
+            const sessionType = getSessionType(session);
+
             // Set icon by state with stronger visual cues.
-            if (isSessionStale(session)) {
+            if (isSessionStale(session, this.staleIds)) {
                 this.iconPath = new vscode.ThemeIcon('warning');
+            } else if (sessionType === 'quick') {
+                this.iconPath = new vscode.ThemeIcon('zap');
+            } else if (sessionType === 'deep') {
+                this.iconPath = new vscode.ThemeIcon('layers');
             } else if (session.status === 'active') {
                 this.iconPath = new vscode.ThemeIcon('play-circle');
             } else if (session.accepted_count > 0 || session.rejected_count > 0) {
@@ -308,13 +331,14 @@ class SessionTreeItem extends vscode.TreeItem {
     }
 
     private buildTooltip(session: SessionSummary): string {
-        const stale = isSessionStale(session);
+        const stale = isSessionStale(session, this.staleIds);
         const changedIndexes = stale && session.index_changed_files?.length
             ? session.index_changed_files
             : [];
         const lines = [
             `Session #${session.id}`,
             formatSceneSetTooltip(session),
+            `Type: ${formatSessionTypeLabel(session)}`,
             `Status: ${stale ? `${session.status} (stale)` : session.status}`,
             `Model: ${session.model}`,
             ``,
@@ -330,6 +354,10 @@ class SessionTreeItem extends vscode.TreeItem {
 
         if (session.completed_at) {
             lines.push(`Completed: ${new Date(session.completed_at).toLocaleString()}`);
+        }
+
+        if (session.session_summary) {
+            lines.push(``, `─ META-OBSERVATION ─`, session.session_summary);
         }
 
         return lines.join('\n');

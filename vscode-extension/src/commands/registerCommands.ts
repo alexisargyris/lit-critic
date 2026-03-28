@@ -15,15 +15,12 @@ import * as vscode from 'vscode';
 
 export interface CommandHandlers {
     cmdAnalyze: () => Promise<void>;
-    cmdResume: () => Promise<void>;
     cmdNextFinding: () => Promise<void>;
     cmdAcceptFinding: () => Promise<void>;
     cmdRejectFinding: () => Promise<void>;
     cmdDiscuss: () => Promise<void>;
     cmdSelectFinding: (index: number) => Promise<void>;
     cmdReviewFinding: () => Promise<void>;
-    cmdClearSession: () => Promise<void>;
-    cmdRerunAnalysis: () => Promise<void>;
     cmdSelectModel: () => Promise<void>;
     cmdStopServer: () => void;
     cmdRefreshSessions: () => Promise<void>;
@@ -33,6 +30,18 @@ export interface CommandHandlers {
     cmdExportLearning: () => Promise<void>;
     cmdResetLearning: () => Promise<void>;
     cmdDeleteLearningEntry: (item: any) => Promise<void>;
+    cmdRefreshKnowledge: () => Promise<void>;
+    cmdEditKnowledgeEntry?: (item: any) => Promise<void>;
+    cmdResetKnowledgeOverride?: (item?: any) => Promise<void>;
+    cmdOpenKnowledgeReviewPanel?: (item?: any) => Promise<void>;
+    cmdDeleteKnowledgeEntity?: (item: any) => Promise<void>;
+    cmdNextKnowledgeEntity?: () => Promise<void>;
+    cmdPreviousKnowledgeEntity?: () => Promise<void>;
+    cmdToggleEntityLock?: (item?: any) => Promise<void>;
+    cmdKeepFlaggedEntity?: (item?: any) => Promise<void>;
+    cmdDeleteFlaggedEntity?: (item?: any) => Promise<void>;
+    cmdRevealSessionInTree?: (sessionId: number) => void;
+    [key: string]: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -41,15 +50,12 @@ export interface CommandHandlers {
 
 export const COMMAND_IDS = [
     'literaryCritic.analyze',
-    'literaryCritic.resume',
     'literaryCritic.nextFinding',
     'literaryCritic.acceptFinding',
     'literaryCritic.rejectFinding',
     'literaryCritic.discuss',
     'literaryCritic.selectFinding',
     'literaryCritic.reviewFinding',
-    'literaryCritic.clearSession',
-    'literaryCritic.rerunAnalysisWithUpdatedIndexes',
     'literaryCritic.selectModel',
     'literaryCritic.stopServer',
     'literaryCritic.refreshSessions',
@@ -59,6 +65,17 @@ export const COMMAND_IDS = [
     'literaryCritic.exportLearning',
     'literaryCritic.resetLearning',
     'literaryCritic.deleteLearningEntry',
+    'literaryCritic.refreshKnowledge',
+    'literaryCritic.editKnowledgeEntry',
+    'literaryCritic.resetKnowledgeOverride',
+    'literaryCritic.deleteKnowledgeEntity',
+    'literaryCritic.openKnowledgeReviewPanel',
+    'literaryCritic.nextKnowledgeEntity',
+    'literaryCritic.previousKnowledgeEntity',
+    'literaryCritic.toggleEntityLock',
+    'literaryCritic.keepFlaggedEntity',
+    'literaryCritic.deleteFlaggedEntity',
+    'literaryCritic.revealSessionInTree',
 ] as const;
 
 export type CommandId = typeof COMMAND_IDS[number];
@@ -80,15 +97,13 @@ export function registerCommands(
 ): vscode.Disposable[] {
     const disposables: vscode.Disposable[] = [
         vscode.commands.registerCommand('literaryCritic.analyze', handlers.cmdAnalyze),
-        vscode.commands.registerCommand('literaryCritic.resume', handlers.cmdResume),
+        // Internal-only command (no menu contribution)
         vscode.commands.registerCommand('literaryCritic.nextFinding', handlers.cmdNextFinding),
         vscode.commands.registerCommand('literaryCritic.acceptFinding', handlers.cmdAcceptFinding),
         vscode.commands.registerCommand('literaryCritic.rejectFinding', handlers.cmdRejectFinding),
         vscode.commands.registerCommand('literaryCritic.discuss', handlers.cmdDiscuss),
         vscode.commands.registerCommand('literaryCritic.selectFinding', handlers.cmdSelectFinding),
         vscode.commands.registerCommand('literaryCritic.reviewFinding', handlers.cmdReviewFinding),
-        vscode.commands.registerCommand('literaryCritic.clearSession', handlers.cmdClearSession),
-        vscode.commands.registerCommand('literaryCritic.rerunAnalysisWithUpdatedIndexes', handlers.cmdRerunAnalysis),
         vscode.commands.registerCommand('literaryCritic.selectModel', handlers.cmdSelectModel),
         vscode.commands.registerCommand('literaryCritic.stopServer', handlers.cmdStopServer),
         // Management commands
@@ -99,6 +114,18 @@ export function registerCommands(
         vscode.commands.registerCommand('literaryCritic.exportLearning', handlers.cmdExportLearning),
         vscode.commands.registerCommand('literaryCritic.resetLearning', handlers.cmdResetLearning),
         vscode.commands.registerCommand('literaryCritic.deleteLearningEntry', handlers.cmdDeleteLearningEntry),
+        vscode.commands.registerCommand('literaryCritic.refreshKnowledge', handlers.cmdRefreshKnowledge),
+        vscode.commands.registerCommand('literaryCritic.editKnowledgeEntry', handlers.cmdEditKnowledgeEntry ?? (async () => {})),
+        vscode.commands.registerCommand('literaryCritic.resetKnowledgeOverride', handlers.cmdResetKnowledgeOverride ?? (async () => {})),
+        vscode.commands.registerCommand('literaryCritic.deleteKnowledgeEntity', handlers.cmdDeleteKnowledgeEntity ?? (async () => {})),
+        vscode.commands.registerCommand('literaryCritic.openKnowledgeReviewPanel', handlers.cmdOpenKnowledgeReviewPanel ?? (async () => {})),
+        vscode.commands.registerCommand('literaryCritic.nextKnowledgeEntity', handlers.cmdNextKnowledgeEntity ?? (async () => {})),
+        vscode.commands.registerCommand('literaryCritic.previousKnowledgeEntity', handlers.cmdPreviousKnowledgeEntity ?? (async () => {})),
+        vscode.commands.registerCommand('literaryCritic.toggleEntityLock', handlers.cmdToggleEntityLock ?? (async () => {})),
+        vscode.commands.registerCommand('literaryCritic.keepFlaggedEntity', handlers.cmdKeepFlaggedEntity ?? (async () => {})),
+        vscode.commands.registerCommand('literaryCritic.deleteFlaggedEntity', handlers.cmdDeleteFlaggedEntity ?? (async () => {})),
+        // Internal-only: cross-tree navigation from Findings header to Sessions tree
+        vscode.commands.registerCommand('literaryCritic.revealSessionInTree', handlers.cmdRevealSessionInTree ?? ((_: number) => {})),
     ];
 
     subscriptions.push(...disposables);

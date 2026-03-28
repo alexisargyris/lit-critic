@@ -22,6 +22,10 @@ export class ServerManager implements vscode.Disposable {
     private _startupExitCode: number | null = null;
     private _startupExitSignal: NodeJS.Signals | null = null;
     private _startupError: Error | null = null;
+    /** Configurable ready-wait timeout (ms). Override in tests for fast failure. */
+    private _readyTimeoutMs: number;
+    /** Configurable health-check poll interval (ms). Override in tests for fast polling. */
+    private _readyIntervalMs: number;
 
     /** Fired when the server becomes ready (health check passed). */
     readonly onReady: vscode.Event<void>;
@@ -31,7 +35,10 @@ export class ServerManager implements vscode.Disposable {
     readonly onStopped: vscode.Event<void>;
     private _onStoppedEmitter = new vscode.EventEmitter<void>();
 
-    constructor(repoRoot: string) {
+    constructor(
+        repoRoot: string,
+        options?: { readyTimeoutMs?: number; readyIntervalMs?: number },
+    ) {
         this._repoRoot = repoRoot;
         this.outputChannel = vscode.window.createOutputChannel('lit-critic Server');
         this.onReady = this._onReadyEmitter.event;
@@ -39,6 +46,9 @@ export class ServerManager implements vscode.Disposable {
 
         const config = vscode.workspace.getConfiguration('literaryCritic');
         this._port = config.get<number>('serverPort', 8000);
+
+        this._readyTimeoutMs = options?.readyTimeoutMs ?? 120000;
+        this._readyIntervalMs = options?.readyIntervalMs ?? 500;
     }
 
     get isRunning(): boolean {
@@ -61,16 +71,19 @@ export class ServerManager implements vscode.Disposable {
      * Start the backend server. Resolves when the health check passes.
      * If the server is already running (externally or from a prior start), reuses it.
      */
-    async start(): Promise<void> {
+    async start(onStage?: (stage: 'checking' | 'launching' | 'waiting' | 'ready') => void): Promise<void> {
         // Reset startup failure markers for this start attempt.
         this._startupExitCode = null;
         this._startupExitSignal = null;
         this._startupError = null;
 
+        onStage?.('checking');
+
         // Check if something is already listening on the port
         if (await this.healthCheck()) {
             this._isRunning = true;
             this.outputChannel.appendLine(`Server already running on port ${this._port}`);
+            onStage?.('ready');
             this._onReadyEmitter.fire();
             return;
         }
@@ -100,10 +113,14 @@ export class ServerManager implements vscode.Disposable {
         this.outputChannel.appendLine(`Using Python: ${pythonPath}`);
         this.outputChannel.appendLine(`Starting server: ${pythonCmd} ${pythonArgs.join(' ')}`);
         this.outputChannel.show(true);
+        onStage?.('launching');
 
         this.process = spawn(pythonCmd, pythonArgs, {
             cwd: this._repoRoot,
-            env: { ...process.env },
+            // PYTHONUNBUFFERED=1 forces Python to flush stdout immediately instead
+            // of block-buffering it when piped, so print() output appears in the
+            // output channel without delay.
+            env: { ...process.env, PYTHONUNBUFFERED: '1' },
             stdio: ['ignore', 'pipe', 'pipe'],
         });
 
@@ -134,7 +151,9 @@ export class ServerManager implements vscode.Disposable {
         });
 
         // Wait for the server to become ready
-        await this.waitForReady();
+        onStage?.('waiting');
+        await this.waitForReady(this._readyTimeoutMs, this._readyIntervalMs);
+        onStage?.('ready');
     }
 
     /**

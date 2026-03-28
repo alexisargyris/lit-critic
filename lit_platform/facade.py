@@ -20,6 +20,8 @@ from contracts.v1.schemas import (
 
 from .context import condense_discussion_context
 from .core_client import CoreClient
+from .persistence.database import get_passive_connection
+from .services.knowledge_serializer import serialize_all_knowledge
 
 
 class PlatformFacade:
@@ -35,19 +37,39 @@ class PlatformFacade:
 
     @staticmethod
     def load_indexes_from_project(project_path: Path) -> IndexesContract:
-        """Load local index files and convert to v1 indexes contract."""
-        mapping = {
-            "CANON": "CANON.md",
-            "CAST": "CAST.md",
-            "GLOSSARY": "GLOSSARY.md",
-            "STYLE": "STYLE.md",
-            "THREADS": "THREADS.md",
-            "TIMELINE": "TIMELINE.md",
+        """Load authored + extracted knowledge and convert to v1 indexes contract."""
+        payload: dict[str, str | None] = {
+            "CANON": None,
+            "CAST": None,
+            "GLOSSARY": None,
+            "STYLE": None,
+            "THREADS": None,
+            "TIMELINE": None,
         }
-        payload: dict[str, str | None] = {}
-        for key, filename in mapping.items():
-            path = project_path / filename
-            payload[key] = path.read_text(encoding="utf-8") if path.exists() else None
+
+        canon_path = project_path / "CANON.md"
+        style_path = project_path / "STYLE.md"
+        payload["CANON"] = (
+            canon_path.read_text(encoding="utf-8") if canon_path.exists() else None
+        )
+        payload["STYLE"] = (
+            style_path.read_text(encoding="utf-8") if style_path.exists() else None
+        )
+
+        conn = get_passive_connection(project_path)
+        if conn is not None:
+            try:
+                serialized = serialize_all_knowledge(conn)
+            except Exception:  # noqa: BLE001 - keep fallback behavior when DB unavailable
+                serialized = {}
+            finally:
+                conn.close()
+
+            payload["CAST"] = serialized.get("cast")
+            payload["GLOSSARY"] = serialized.get("glossary")
+            payload["THREADS"] = serialized.get("threads")
+            payload["TIMELINE"] = serialized.get("timeline")
+
         return IndexesContract.model_validate(payload)
 
     @staticmethod

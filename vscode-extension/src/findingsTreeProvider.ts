@@ -12,7 +12,7 @@
  */
 
 import * as vscode from 'vscode';
-import { Finding } from './types';
+import { Finding, SessionSummary } from './types';
 
 const FINDING_URI_SCHEME = 'lit-critic-finding';
 const TREE_COUNT_URI_SCHEME = 'lit-critic-count';
@@ -143,6 +143,22 @@ function getFindingIcon(finding: Finding): vscode.ThemeIcon {
     return getActiveIcon(finding.severity);
 }
 
+function getFindingOriginValue(finding: Finding): string {
+    const origin = (finding as Finding & { origin?: string }).origin;
+    return (origin || 'llm').toLowerCase();
+}
+
+function getFindingOriginLabel(finding: Finding): string {
+    const origin = getFindingOriginValue(finding);
+    if (origin === 'deterministic') {
+        return 'Deterministic';
+    }
+    if (origin === 'llm') {
+        return 'LLM';
+    }
+    return origin.charAt(0).toUpperCase() + origin.slice(1);
+}
+
 function buildFindingUri(finding: Finding): vscode.Uri {
     const status = encodeURIComponent(getNormalizedStatus(finding.status));
     const severity = encodeURIComponent(getNormalizedSeverity(finding.severity) || 'minor');
@@ -267,13 +283,43 @@ export class FindingsDecorationProvider implements vscode.FileDecorationProvider
     }
 }
 
-export class FindingsTreeProvider implements vscode.TreeDataProvider<FindingTreeItem | LensGroupItem> {
+class EmptyStateItem extends vscode.TreeItem {
+    constructor(label: string) {
+        super(label, vscode.TreeItemCollapsibleState.None);
+        this.contextValue = 'empty';
+        this.iconPath = new vscode.ThemeIcon('info');
+    }
+}
+
+export class SessionContextItem extends vscode.TreeItem {
+    readonly sessionId: number;
+
+    constructor(session: SessionSummary) {
+        const depthLabel = session.depth_mode
+            ? session.depth_mode.charAt(0).toUpperCase() + session.depth_mode.slice(1)
+            : 'Session';
+        const label = `Session #${session.id} · ${depthLabel} · ${session.status}`;
+        super(label, vscode.TreeItemCollapsibleState.None);
+        this.sessionId = session.id;
+        this.contextValue = 'sessionContext';
+        this.iconPath = new vscode.ThemeIcon('pin');
+        this.tooltip = `Viewing findings for Session #${session.id} (${depthLabel}, ${session.status}). Click to reveal in Sessions tree.`;
+        this.command = {
+            command: 'literaryCritic.revealSessionInTree',
+            title: 'Reveal session in Sessions tree',
+            arguments: [session.id],
+        };
+    }
+}
+
+export class FindingsTreeProvider implements vscode.TreeDataProvider<FindingTreeItem | LensGroupItem | EmptyStateItem | SessionContextItem> {
     private _onDidChangeTreeData = new vscode.EventEmitter<FindingTreeItem | LensGroupItem | undefined | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
     private findings: Finding[] = [];
     private scenePath: string | null = null;
     private currentIndex: number = -1;
+    private sessionContext: SessionSummary | null = null;
     private cacheDirty = true;
     private lensItems: LensGroupItem[] = [];
     private findingItemsByLens: Map<string, FindingTreeItem[]> = new Map();
@@ -322,6 +368,15 @@ export class FindingsTreeProvider implements vscode.TreeDataProvider<FindingTree
     }
 
     /**
+     * Set the session context header displayed at the top of the findings tree.
+     * Pass null to show the "No session selected" empty state.
+     */
+    setSessionContext(session: SessionSummary | null): void {
+        this.sessionContext = session;
+        this.notifyTreeChanged();
+    }
+
+    /**
      * Clear all findings.
      */
     clear(): void {
@@ -335,7 +390,10 @@ export class FindingsTreeProvider implements vscode.TreeDataProvider<FindingTree
         return element;
     }
 
-    getParent(element: FindingTreeItem | LensGroupItem): LensGroupItem | undefined {
+    getParent(element: FindingTreeItem | LensGroupItem | SessionContextItem | EmptyStateItem): LensGroupItem | undefined {
+        if (element instanceof SessionContextItem || element instanceof EmptyStateItem) {
+            return undefined;
+        }
         this.ensureCache();
         if (element instanceof LensGroupItem) {
             return undefined;
@@ -345,11 +403,21 @@ export class FindingsTreeProvider implements vscode.TreeDataProvider<FindingTree
         return this.lensItems.find((item) => item.lens === lens);
     }
 
-    getChildren(element?: FindingTreeItem | LensGroupItem): (FindingTreeItem | LensGroupItem)[] {
+    getChildren(element?: FindingTreeItem | LensGroupItem | SessionContextItem | EmptyStateItem): (FindingTreeItem | LensGroupItem | EmptyStateItem | SessionContextItem)[] {
         this.ensureCache();
 
         if (!element) {
             // Root level — group by lens
+            const contextItem = this.sessionContext ? new SessionContextItem(this.sessionContext) : null;
+            if (this.lensItems.length === 0) {
+                if (!this.sessionContext) {
+                    return [new EmptyStateItem('No session selected')];
+                }
+                return [contextItem!, new EmptyStateItem('No findings in this session')];
+            }
+            if (contextItem) {
+                return [contextItem, ...this.lensItems];
+            }
             return this.lensItems;
         }
 
@@ -485,7 +553,8 @@ export class FindingTreeItem extends vscode.TreeItem {
                 : `L${finding.line_start}`
             : '';
 
-        const label = `#${finding.number}${lineRange ? ` ${lineRange}` : ''}`;
+        const originLabel = getFindingOriginLabel(finding);
+        const label = `#${finding.number}${lineRange ? ` ${lineRange}` : ''} · ${originLabel}`;
         super(label, vscode.TreeItemCollapsibleState.None);
 
         this.finding = finding;
@@ -508,8 +577,10 @@ export class FindingTreeItem extends vscode.TreeItem {
 
     private buildTooltip(finding: Finding): vscode.MarkdownString {
         const status = getNormalizedStatus(finding.status);
+        const originLabel = getFindingOriginLabel(finding);
         const md = new vscode.MarkdownString();
         md.appendMarkdown(`**#${finding.number} — ${finding.severity.toUpperCase()}** (${finding.lens})\n\n`);
+        md.appendMarkdown(`**Origin:** ${originLabel}\n\n`);
         md.appendMarkdown(`**Status:** ${status}\n\n`);
         md.appendMarkdown(`${finding.evidence}\n\n`);
         if (finding.impact) {

@@ -193,11 +193,11 @@ describe('ApiClient (Real)', () => {
             };
             
             client = createClient();
-            await client.analyze('/test/scene.txt', '/test/project', 'sonnet');
+            await client.analyze('/test/scene.txt', '/test/project');
             
             assert.equal(capturedBody.scene_path, '/test/scene.txt');
             assert.equal(capturedBody.project_path, '/test/project');
-            assert.equal(capturedBody.model, 'sonnet');
+            assert.equal(capturedBody.model, undefined);
         });
 
         it('should send POST to /api/resume', async () => {
@@ -738,7 +738,7 @@ describe('ApiClient (Real)', () => {
             client = createClient();
             
             await assert.rejects(
-                () => client.analyze('', '', ''),
+                () => client.analyze('', ''),
                 /Validation error:.*scene_path.*project_path/
             );
         });
