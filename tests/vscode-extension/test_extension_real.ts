@@ -38,6 +38,9 @@ describe('Extension (Real)', () => {
         if (!mockVscode.workspace.onDidChangeConfiguration) {
             mockVscode.workspace.onDidChangeConfiguration = () => ({ dispose: () => {} });
         }
+        if (!mockVscode.workspace.onDidSaveTextDocument) {
+            mockVscode.workspace.onDidSaveTextDocument = () => ({ dispose: () => {} });
+        }
         
         // Mock all internal modules with spy classes
         mockServerManager = class MockServerManager {
@@ -280,7 +283,7 @@ describe('Extension (Real)', () => {
             assert.ok(registeredCommands.includes('literaryCritic.reviewFinding'));
             assert.ok(registeredCommands.includes('literaryCritic.selectModel'));
             assert.ok(registeredCommands.includes('literaryCritic.stopServer'));
-            assert.ok(registeredCommands.includes('literaryCritic.refreshSessions'));
+            assert.ok(!registeredCommands.includes('literaryCritic.refreshSessions'), 'refreshSessions was removed (D3)');
             assert.ok(registeredCommands.includes('literaryCritic.viewSession'));
             assert.ok(registeredCommands.includes('literaryCritic.deleteSession'));
             assert.ok(registeredCommands.includes('literaryCritic.refreshLearning'));
@@ -3055,6 +3058,184 @@ describe('Extension (Real)', () => {
             await deleteLearningEntryCallback({ entry: { id: 43 } });
 
             assert.deepEqual(deletedEntryIds, [43]);
+        });
+
+        it('auto-chains cmdRefreshKnowledge before cmdAnalyze when stale inputs exist', async () => {
+            const callOrder: string[] = [];
+            let analyzeCallback: any;
+
+            // Return a stale item so autoLoadSidebar populates the registry
+            mockApiClient = class MockApiClient {
+                async updateRepoPath() { return { ok: true }; }
+                async getSession() { return { active: false }; }
+                async getConfig() {
+                    return { api_key_configured: true, available_models: { sonnet: { label: 'Sonnet' } }, default_model: 'sonnet' };
+                }
+                async getInputStaleness(_path: string) {
+                    return { stale_inputs: [{ path: '/test/repo/text/scene1.txt', type: 'scene', affected_knowledge: [], affected_sessions: [] }] };
+                }
+            };
+
+            const MockController = class {
+                handleFindingAction = () => {};
+                handleDiscussionResult = async (_: any) => {};
+                cmdAnalyze = async () => { callOrder.push('cmdAnalyze'); };
+                cmdRefreshKnowledge = async () => { callOrder.push('cmdRefreshKnowledge'); };
+                cmdNextFinding = async () => {};
+                cmdAcceptFinding = async () => {};
+                cmdRejectFinding = async () => {};
+                cmdDiscuss = async () => {};
+                cmdSelectFinding = async () => {};
+                cmdReviewFinding = async () => {};
+                cmdSelectModel = async () => {};
+                cmdStopServer = () => {};
+                cmdViewSession = async () => {};
+                cmdDeleteSession = async () => {};
+                cmdRefreshLearning = async () => {};
+                cmdExportLearning = async () => {};
+                cmdResetLearning = async () => {};
+                cmdDeleteLearningEntry = async () => {};
+                cmdEditKnowledgeEntry = async () => false;
+                cmdResetKnowledgeOverride = async () => {};
+                editKnowledgeEntry = async () => false;
+                resetKnowledgeOverride = async () => {};
+            };
+
+            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
+                if (cmd === 'literaryCritic.analyze') { analyzeCallback = callback; }
+                return { dispose: () => {} };
+            };
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+            mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/repo' } }];
+            mockFs.existsSync = (p: string) => p.includes('lit-critic-web.py') || p.includes('CANON.md');
+
+            const registerCommandsMod = proxyquire('../../vscode-extension/src/commands/registerCommands', { vscode: mockVscode });
+            const sceneDiscoveryConfigMod = proxyquire('../../vscode-extension/src/bootstrap/sceneDiscoveryConfig', { vscode: mockVscode });
+            const module = proxyquire('../../vscode-extension/src/extension', {
+                'vscode': mockVscode,
+                './serverManager': { ServerManager: mockServerManager },
+                './apiClient': { ApiClient: mockApiClient },
+                './findingsTreeProvider': { FindingsTreeProvider: mockFindingsTreeProvider, FindingsDecorationProvider: mockFindingsDecorationProvider },
+                './sessionsTreeProvider': { SessionsTreeProvider: mockSessionsTreeProvider },
+                './learningTreeProvider': { LearningTreeProvider: mockLearningTreeProvider },
+                './scenesTreeProvider': { ScenesTreeProvider: mockLearningTreeProvider },
+                './knowledgeTreeProvider': { KnowledgeTreeProvider: mockKnowledgeTreeProvider },
+                './knowledgeReviewViewProvider': { KnowledgeReviewViewProvider: mockKnowledgeReviewPanel },
+                './diagnosticsProvider': { DiagnosticsProvider: mockDiagnosticsProvider },
+                './discussionViewProvider': { DiscussionViewProvider: mockDiscussionPanel },
+                './statusBar': { StatusBar: mockStatusBar },
+                './operationTracker': { OperationTracker: mockOperationTracker },
+                'path': mockPath,
+                'fs': mockFs,
+                './commands/registerCommands': registerCommandsMod,
+                './bootstrap/sceneDiscoveryConfig': sceneDiscoveryConfigMod,
+                './workflows/sessionWorkflowController': { SessionWorkflowController: MockController },
+            });
+            activate = module.activate;
+
+            await activate({ subscriptions: [] });
+            assert.ok(analyzeCallback, 'Expected analyze command to be registered');
+
+            await analyzeCallback();
+
+            assert.ok(callOrder.includes('cmdRefreshKnowledge'), 'Expected cmdRefreshKnowledge to be called');
+            assert.ok(callOrder.includes('cmdAnalyze'), 'Expected cmdAnalyze to be called');
+            assert.equal(callOrder.indexOf('cmdRefreshKnowledge'), 0, 'Expected cmdRefreshKnowledge to be called first (D1)');
+            assert.equal(callOrder.indexOf('cmdAnalyze'), 1, 'Expected cmdAnalyze to be called second');
+        });
+
+        it('does not auto-chain cmdRefreshKnowledge when no stale inputs exist', async () => {
+            const callOrder: string[] = [];
+            let analyzeCallback: any;
+
+            // Return empty stale inputs
+            mockApiClient = class MockApiClient {
+                async updateRepoPath() { return { ok: true }; }
+                async getSession() { return { active: false }; }
+                async getConfig() {
+                    return { api_key_configured: true, available_models: { sonnet: { label: 'Sonnet' } }, default_model: 'sonnet' };
+                }
+                async getInputStaleness(_path: string) {
+                    return { stale_inputs: [] };
+                }
+            };
+
+            const MockController = class {
+                handleFindingAction = () => {};
+                handleDiscussionResult = async (_: any) => {};
+                cmdAnalyze = async () => { callOrder.push('cmdAnalyze'); };
+                cmdRefreshKnowledge = async () => { callOrder.push('cmdRefreshKnowledge'); };
+                cmdNextFinding = async () => {};
+                cmdAcceptFinding = async () => {};
+                cmdRejectFinding = async () => {};
+                cmdDiscuss = async () => {};
+                cmdSelectFinding = async () => {};
+                cmdReviewFinding = async () => {};
+                cmdSelectModel = async () => {};
+                cmdStopServer = () => {};
+                cmdViewSession = async () => {};
+                cmdDeleteSession = async () => {};
+                cmdRefreshLearning = async () => {};
+                cmdExportLearning = async () => {};
+                cmdResetLearning = async () => {};
+                cmdDeleteLearningEntry = async () => {};
+                cmdEditKnowledgeEntry = async () => false;
+                cmdResetKnowledgeOverride = async () => {};
+                editKnowledgeEntry = async () => false;
+                resetKnowledgeOverride = async () => {};
+            };
+
+            mockVscode.commands.registerCommand = (cmd: string, callback: any) => {
+                if (cmd === 'literaryCritic.analyze') { analyzeCallback = callback; }
+                return { dispose: () => {} };
+            };
+            mockVscode.workspace.getConfiguration = () => ({
+                get: (key: string, defaultValue: any) => {
+                    if (key === 'autoStartServer') return true;
+                    return defaultValue;
+                },
+                update: async () => {},
+            });
+            mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/repo' } }];
+            mockFs.existsSync = (p: string) => p.includes('lit-critic-web.py') || p.includes('CANON.md');
+
+            const registerCommandsMod = proxyquire('../../vscode-extension/src/commands/registerCommands', { vscode: mockVscode });
+            const sceneDiscoveryConfigMod = proxyquire('../../vscode-extension/src/bootstrap/sceneDiscoveryConfig', { vscode: mockVscode });
+            const module = proxyquire('../../vscode-extension/src/extension', {
+                'vscode': mockVscode,
+                './serverManager': { ServerManager: mockServerManager },
+                './apiClient': { ApiClient: mockApiClient },
+                './findingsTreeProvider': { FindingsTreeProvider: mockFindingsTreeProvider, FindingsDecorationProvider: mockFindingsDecorationProvider },
+                './sessionsTreeProvider': { SessionsTreeProvider: mockSessionsTreeProvider },
+                './learningTreeProvider': { LearningTreeProvider: mockLearningTreeProvider },
+                './scenesTreeProvider': { ScenesTreeProvider: mockLearningTreeProvider },
+                './knowledgeTreeProvider': { KnowledgeTreeProvider: mockKnowledgeTreeProvider },
+                './knowledgeReviewViewProvider': { KnowledgeReviewViewProvider: mockKnowledgeReviewPanel },
+                './diagnosticsProvider': { DiagnosticsProvider: mockDiagnosticsProvider },
+                './discussionViewProvider': { DiscussionViewProvider: mockDiscussionPanel },
+                './statusBar': { StatusBar: mockStatusBar },
+                './operationTracker': { OperationTracker: mockOperationTracker },
+                'path': mockPath,
+                'fs': mockFs,
+                './commands/registerCommands': registerCommandsMod,
+                './bootstrap/sceneDiscoveryConfig': sceneDiscoveryConfigMod,
+                './workflows/sessionWorkflowController': { SessionWorkflowController: MockController },
+            });
+            activate = module.activate;
+
+            await activate({ subscriptions: [] });
+            assert.ok(analyzeCallback, 'Expected analyze command to be registered');
+
+            await analyzeCallback();
+
+            assert.ok(!callOrder.includes('cmdRefreshKnowledge'), 'Expected cmdRefreshKnowledge NOT to be called when registry is empty');
+            assert.ok(callOrder.includes('cmdAnalyze'), 'Expected cmdAnalyze to be called');
         });
 
         it('should show error when deleteLearningEntry cannot resolve an entry id', async () => {

@@ -23,7 +23,6 @@ export interface CommandHandlers {
     cmdReviewFinding: () => Promise<void>;
     cmdSelectModel: () => Promise<void>;
     cmdStopServer: () => void;
-    cmdRefreshSessions: () => Promise<void>;
     cmdViewSession: (item: any) => Promise<void>;
     cmdDeleteSession: (item?: any) => Promise<void>;
     cmdRefreshLearning: () => Promise<void>;
@@ -58,7 +57,6 @@ export const COMMAND_IDS = [
     'literaryCritic.reviewFinding',
     'literaryCritic.selectModel',
     'literaryCritic.stopServer',
-    'literaryCritic.refreshSessions',
     'literaryCritic.viewSession',
     'literaryCritic.deleteSession',
     'literaryCritic.refreshLearning',
@@ -107,7 +105,6 @@ export function registerCommands(
         vscode.commands.registerCommand('literaryCritic.selectModel', handlers.cmdSelectModel),
         vscode.commands.registerCommand('literaryCritic.stopServer', handlers.cmdStopServer),
         // Management commands
-        vscode.commands.registerCommand('literaryCritic.refreshSessions', handlers.cmdRefreshSessions),
         vscode.commands.registerCommand('literaryCritic.viewSession', handlers.cmdViewSession),
         vscode.commands.registerCommand('literaryCritic.deleteSession', handlers.cmdDeleteSession),
         vscode.commands.registerCommand('literaryCritic.refreshLearning', handlers.cmdRefreshLearning),

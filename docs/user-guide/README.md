@@ -1,212 +1,88 @@
 # User Guide
 
-This guide helps you use lit-critic (short for Literary Critic) to review your fiction manuscripts.
-
-lit-critic is designed for authors who may not be technical. These docs explain everything in plain language, with examples from fiction writing.
+Welcome. This guide covers everything you need to use lit-critic as a novelist — from first installation to working with your project over many writing sessions.
 
 ---
 
-## What lit-critic Is (And Isn't)
+## What lit-critic is
 
-**lit-critic is your editorial assistant—not your ghostwriter.**
+An AI editorial assistant for novel writers. It reads your scenes and checks them against the rules you've established — your world's logic (CANON.md), your prose conventions (STYLE.md), and knowledge extracted automatically from your prose (characters, terms, threads, timeline).
 
-### What It IS ✅
-
-- **An editorial assistant** that checks your work against YOUR rules (CANON, CAST, STYLE, etc.)
-- **A continuity tracker** that catches logic gaps and timeline inconsistencies
-- **A discussion partner** for editorial decisions—you can debate, and it can revise or withdraw findings
-- **A learning system** that adapts to your style preferences over time
-
-### What It IS NOT ❌
-
-- **NOT a ghostwriter** Never writes scenes, paragraphs, or dialogue for you
-- **NOT a content generator** Never offers AI-generated prose as "suggestions"
-- **NOT a rewriter** Maximum suggestion: 2-3 example words to illustrate a concept
-- **NOT prescriptive** Checks YOUR rules, not external "best practices"
-
-### Example: How Suggestions Work
-
-**What you WON'T see:**
-> "Rewrite this paragraph as: 'Amelia stepped into the sanctuary, her footsteps echoing through the vaulted chamber as ancient symbols glowed faintly on the stone walls.'"
-
-**What you WILL see:**
-> "The entrance is described in detail twice within three sentences. Consider consolidating or varying the description."
-> 
-> Or at most: "Consider varying—perhaps 'entered' or 'crossed the threshold.'"
-
-### Bottom Line
-
-**You write your novel. Every word of prose is yours.** lit-critic helps you maintain consistency with the world and rules you've defined. It's an editor, not a co-author.
+It presents its observations as **findings**, each tied to a specific passage in your scene. You review them and decide: accept, reject, or debate. The tool never writes prose for you or rewrites your sentences.
 
 ---
 
-## Start Here
+## Start here
 
-### New to lit-critic?
+**New to lit-critic?**
 
-1. **[Getting Started](getting-started.md)** Install the tool and set up your first project
-2. **[Scene Format Guide](scene-format.md)** Learn the @@META header system
-3. **[Index Files Guide](index-files.md)** Understand CANON, CAST, GLOSSARY, STYLE, THREADS, TIMELINE
+1. → **[Setting Up Your Project](setting-up-your-project.md)** — installation, project folder, CANON.md, STYLE.md, scene files
+2. → **[Your First Review](your-first-review.md)** — walk through a real analysis session in VS Code, Web, or CLI
 
-### Ready to Review?
+**Ready to go deeper?**
 
-4. **[Using the Tool](using-the-tool.md)** Choose CLI, Web UI, or VS Code Extension
-5. **[Working with Findings](working-with-findings.md)** Accept, reject, or discuss feedback
-6. **[Learning System](learning-system.md)** How the tool adapts to your style
-7. **[Sycophancy & Editorial Independence](sycophancy.md)** Why LLMs are sycophantic and how lit-critic protects you
+3. → **[Understanding Findings](understanding-findings.md)** — what findings contain, how to respond effectively
+4. → **[Knowledge and Continuity](knowledge-and-continuity.md)** — how the tool tracks your world automatically
+5. → **[The Learning System](learning-system.md)** — how it adapts to your style over time
+6. → **[Why This Isn't Sycophantic](sycophancy.md)** — why the tool argues back, and why that matters
 
----
+**Practical questions?**
 
-## Quick Reference
-
-### Scene Files
-
-Every scene needs:
-- **File name** with Scene ID: `01.03.01_vault.txt`
-- **@@META ... @@END metadata block** (template is adaptable)
-- **Scene text** after `@@END`
-
-The 17-key template shown in the docs is a recommended baseline, not a strict schema. You can rename/reorder/add metadata fields without breaking lit-critic.
-
-See **[Scene Format Guide](scene-format.md)** and **[scene-template.txt](templates/scene-template.txt)** for details.
-
-### Index Files
-
-Six files track your novel's continuity:
-
-| File | Purpose | Template |
-|------|---------|----------|
-| **CANON.md** | World rules | [Template](templates/CANON-template.md) |
-| **CAST.md** | Characters | [Template](templates/CAST-template.md) |
-| **GLOSSARY.md** | Terms | [Template](templates/GLOSSARY-template.md) |
-| **STYLE.md** | Prose rules | [Template](templates/STYLE-template.md) |
-| **THREADS.md** | Narrative arcs | [Template](templates/THREADS-template.md) |
-| **TIMELINE.md** | Scene sequence | [Template](templates/TIMELINE-template.md) |
-
-See **[Index Files Guide](index-files.md)** for complete documentation.
-
-### The Six Lenses
-
-lit-critic analyzes your scenes through six perspectives:
-
-1. **Prose** Fluidity, rhythm, voice consistency
-2. **Structure** Pacing, scene objectives, narrative threads
-3. **Logic** Character motivation, cause-effect, world consistency
-4. **Clarity** Reference clarity, grounding, legibility
-5. **Continuity** Term consistency, fact tracking, timeline coherence
-6. **Dialogue** Character voice distinctiveness, register consistency, subtext, and turn dynamics
+→ **[Tips and FAQ](tips-and-faq.md)** — choosing an interface, cost, saving, multi-scene sessions, troubleshooting
 
 ---
 
-## Common Questions
+## The seven lenses
 
-### "Do I need to fill out all the index files?"
+lit-critic analyzes each scene through seven editorial perspectives:
 
-No! Start with empty files. Add to them as you write. The tool works with incomplete index files, though it gets more helpful as you populate them.
+| Lens | What it checks |
+|------|---------------|
+| **Prose** | Rhythm, fluidity, voice consistency |
+| **Structure** | Pacing, scene objectives, narrative threads |
+| **Logic** | Character motivation, cause-and-effect, world consistency |
+| **Clarity** | Reference resolution, grounding, legibility |
+| **Continuity** | Facts, terms, timeline coherence |
+| **Dialogue** | Character voice, register, subtext, turn dynamics |
+| **Horizon** | Artistic possibilities the scene systematically avoids |
 
-### "What's the most important @@META field?"
-
-**ContAnchors** (Continuity Anchors). This is where you track hard facts—numbers, states, measurements—that must not drift between scenes.
-
-### "Can I edit scenes during a review?"
-
-Yes! The tool detects changes, adjusts line numbers, and re-evaluates affected findings automatically.
-
-### "Do I have to accept every finding?"
-
-No. You can reject or discuss any finding. The tool adapts to your preferences over time via the learning system.
-
-### "Which interface should I use?"
-
-- **CLI** Fast, keyboard-driven, terminal-based
-- **Web UI** Visual, mouse-friendly, browser-based
-- **VS Code** Native editor integration with squiggly underlines
-
-All three use the same Platform-managed workflow and project data. Use whichever fits your workflow.
-
-### "Can I use lit-critic for novels not written in English?"
-
-**Yes!** lit-critic supports 100+ languages depending on your model choice. Your scene text can be in any language supported by your chosen AI model (Greek, Japanese, Spanish, Arabic, Chinese, etc.), and the tool will provide feedback in English.
-
-Your index files (CANON, CAST, GLOSSARY, etc.) can also be in your novel's language. The discussion system works in English, but it understands your non-English prose perfectly.
-
-**Why English feedback?** Capabilities vary by provider. Modern AI models comprehend 100+ languages excellently but produce editorial feedback most reliably in English. You get the best of both: native-level analysis of your Greek/Japanese/Spanish prose plus consistent, high-quality editorial feedback in English.
-
-**Example:** You write in Greek. lit-critic analyzes the Greek text and provides English feedback:
-> **Finding #5** (Continuity): The character's age is listed as 24 in CAST.md but the scene describes them as "in her thirties."
-
-No translation needed—the tool works with your language natively.
+All seven run in parallel. A typical scene takes 30–90 seconds.
 
 ---
 
-## Documentation Map
+## Your project files
+
+| File | Purpose | Who maintains it |
+|------|---------|-----------------|
+| `CANON.md` | World rules and invariants | You |
+| `STYLE.md` | Prose conventions | You |
+| Scene files | Your prose, with minimal `@@META` headers | You |
+| Characters, terms, threads, timeline | Extracted knowledge | Automatic |
+
+The tool extracts characters, terms, narrative threads, and timeline entries automatically from your prose — you don't maintain separate files for them.
+
+---
+
+## Documentation map
 
 ```
 docs/user-guide/
-├── README.md                    # ← You are here
-├── getting-started.md           # Setup and first project
-├── scene-format.md              # @@META documentation
-├── index-files.md               # CANON, CAST, GLOSSARY, etc.
-├── using-the-tool.md            # CLI, Web UI, VS Code
-├── working-with-findings.md     # Accept, reject, discuss
-├── learning-system.md           # Adaptation to your style
-├── sycophancy.md                # Sycophancy explained; anti-sycophancy design
+├── README.md                        ← You are here
+├── setting-up-your-project.md       ← Start here if you're new
+├── your-first-review.md             ← Step-by-step walkthrough
+├── understanding-findings.md        ← What findings are, how to respond
+├── knowledge-and-continuity.md      ← CANON.md, STYLE.md, auto-extracted knowledge
+├── learning-system.md               ← How the tool adapts to your style
+├── sycophancy.md                    ← Why the tool argues back
+├── tips-and-faq.md                  ← Practical guidance and common questions
 └── templates/
-    ├── scene-template.txt       # Annotated scene template
-    ├── CANON-template.md        # World rules template
-    ├── CAST-template.md         # Character tracking template
-    ├── GLOSSARY-template.md     # Term tracking template
-    ├── STYLE-template.md        # Prose rules template
-    ├── THREADS-template.md      # Narrative threads template
-    └── TIMELINE-template.md     # Scene sequence template
+    ├── scene-template.txt           ← Annotated scene file starter
+    ├── CANON-template.md            ← World rules starter
+    └── STYLE-template.md            ← Prose conventions starter
 ```
 
 ---
 
-## Need Help?
+## Technical documentation
 
-- **Start with**: [Getting Started](getting-started.md)
-- **Scene questions**: [Scene Format Guide](scene-format.md)
-- **Index questions**: [Index Files Guide](index-files.md)
-- **Usage questions**: [Using the Tool](using-the-tool.md)
-- **Feedback questions**: [Working with Findings](working-with-findings.md)
-- **Learning questions**: [Learning System](learning-system.md)
-
----
-
-## Tips for Success
-
-1. **Start small** Try one scene with minimal index files
-2. **Use templates** Copy and customize the templates in `templates/`
-3. **Update as you write** Keep TIMELINE.md and ContAnchors current
-4. **Export learning snapshots regularly** After every 2–3 scenes, run `export learning`
-5. **Trust your instincts** Reject findings that don't fit your vision
-6. **Discuss when unsure** Use the discussion feature to explore findings
-
----
-
-## Workflow Example
-
-### First Scene
-
-1. Create index files (can be empty): CANON, CAST, GLOSSARY, STYLE, THREADS, TIMELINE
-2. Write your first scene with a @@META header
-3. Run analysis: `python lit-critic.py analyze --scene text/01.01.01.txt --project ~/novel/`
-4. Review findings, discuss unclear ones
-5. Export learning snapshot: `export learning`
-6. Update TIMELINE.md with scene outcome
-
-### Subsequent Scenes
-
-1. Write scene with @@META header
-2. Update index files (add new characters to CAST, terms to GLOSSARY, etc.)
-3. Run analysis
-4. Review findings (tool now knows your preferences from LEARNING.md)
-5. Export learning snapshots periodically (`export learning`)
-6. Update TIMELINE.md
-
----
-
-## Ready to Start?
-
-→ **[Getting Started Guide](getting-started.md)**
+Architecture, API reference, installation for developers, testing, versioning, and release workflow are in **[docs/technical/](../technical/)**.

@@ -2,7 +2,7 @@
   "name": "lit-critic",
   "displayName": "lit-critic",
   "description": "Multi-lens editorial review system for fiction manuscripts",
-  "version": "2.19.12",
+  "version": "2.20.1",
   "publisher": "alexisargyris",
   "repository": {
     "type": "git",
@@ -28,24 +28,9 @@
         "icon": "$(search)"
       },
       {
-        "command": "literaryCritic.refreshScenes",
-        "title": "lit-critic: Refresh Inputs",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "literaryCritic.refreshSessions",
-        "title": "lit-critic: Refresh Sessions",
-        "icon": "$(refresh)"
-      },
-      {
         "command": "literaryCritic.refreshKnowledge",
-        "title": "lit-critic: Refresh Knowledge",
+        "title": "lit-critic: Update Knowledge (AI)",
         "icon": "$(refresh)"
-      },
-      {
-        "command": "literaryCritic.checkForChanges",
-        "title": "lit-critic: Check for Changes",
-        "icon": "$(eye)"
       },
       {
         "command": "literaryCritic.resetKnowledgeOverride",
@@ -258,6 +243,19 @@
             "Never run the reconciliation review pass."
           ],
           "description": "Controls when the knowledge reconciliation review pass runs after a refresh."
+        },
+        "literaryCritic.autoUpdateOnSave": {
+          "type": "string",
+          "default": "off",
+          "enum": [
+            "off",
+            "knowledge"
+          ],
+          "enumDescriptions": [
+            "Manual only — no automatic AI work on save.",
+            "Automatically update knowledge when changed scenes are detected on save."
+          ],
+          "description": "Controls automatic AI re-extraction when scene files are saved. 'off' = manual only; 'knowledge' = automatically update knowledge when changed scenes are detected on save."
         }
       }
     },
@@ -374,16 +372,6 @@
       ],
       "view/title": [
         {
-          "command": "literaryCritic.checkForChanges",
-          "when": "view == literaryCritic.scenes",
-          "group": "navigation"
-        },
-        {
-          "command": "literaryCritic.refreshScenes",
-          "when": "view == literaryCritic.scenes",
-          "group": "navigation"
-        },
-        {
           "command": "literaryCritic.refreshKnowledge",
           "when": "view == literaryCritic.indexes",
           "group": "navigation"
@@ -395,11 +383,6 @@
         },
         {
           "command": "literaryCritic.selectModel",
-          "when": "view == literaryCritic.sessions",
-          "group": "navigation"
-        },
-        {
-          "command": "literaryCritic.refreshSessions",
           "when": "view == literaryCritic.sessions",
           "group": "navigation"
         },

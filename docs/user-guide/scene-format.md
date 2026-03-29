@@ -135,7 +135,24 @@ The rename command atomically:
 - Updates `Prev` / `Next` in the adjacent scene files
 - Updates all database records referencing the old filename
 
+### If you already renamed a file by hand
+
+If you renamed a scene file outside the tool (via OS file explorer, git, etc.) and the database now has stale records pointing to the old filename, follow these recovery steps:
+
+1. **Refresh Scenes** — Click the **Refresh Scenes** toolbar button in the VS Code Scenes panel, or run:
+   ```bash
+   lit-critic scenes refresh --project /path/to/project
+   ```
+   This makes the tool discover the newly-named file and register it in the database. The scene will reappear in the Scenes tree.
+
+2. **Purge Orphaned Scene References** — In VS Code, open the Command Palette and run **"Literary Critic: Clean Up Stale Scene References"** (`literaryCritic.purgeOrphanedSceneRefs`). Confirm the prompt. The tool will remove all database rows that still reference the old filename, which no longer exists on disk. It reports how many stale rows were removed.
+
+3. **Run Knowledge Refresh** — The newly-registered scene will have no extracted knowledge yet. Run **Refresh Knowledge** to extract its characters, terms, threads, and timeline entries.
+
+> **Note:** This recovery path restores the scene to the Scenes tree and cleans up stale DB rows, but it cannot automatically reconstruct the `Prev` / `Next` chain links that used the old filename. After purging orphans, check the adjacent scenes' `@@META` headers and update any `Prev` or `Next` values that still reference the old filename.
+
 ---
+
 
 ## Auto-Extracted Knowledge
 
@@ -168,7 +185,8 @@ Your CANON.md and STYLE.md can also be in your novel's language — the tool wor
 ✅ Update both adjacent scenes and run `knowledge refresh` to validate the chain
 
 ❌ **Renaming files by hand**  
-✅ Use `lit-critic scenes rename` so database records stay in sync
+✅ Use `lit-critic scenes rename` so database records stay in sync. If you already renamed by hand, see [the recovery steps above](#if-you-already-renamed-a-file-by-hand).
+
 
 ❌ **Expecting old-style META fields (Cast, Threads, etc.) to do anything**  
 ✅ These fields are silently ignored — let auto-extraction handle them

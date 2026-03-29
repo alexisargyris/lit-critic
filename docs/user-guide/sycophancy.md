@@ -1,124 +1,85 @@
-# Sycophancy & Editorial Independence
+# Why This Isn't Sycophantic
 
-lit-critic is built around a deliberate concern: AI systems that evaluate creative work are prone to a subtle form of bias that is distinct from — and in some ways more insidious than — the familiar problem of hallucination. This document explains what that bias is, why it is inherent to how large language models are trained, why lit-critic is structurally less exposed to it than a bare chatbot, and what specific mechanisms have been built into the tool to protect you from it.
+You push back on a finding. The AI agrees with you. You push back again. It agrees again. After a while, you notice: the AI agrees with everything you say. It revises its findings whenever you express displeasure. It tells you your work is strong. It qualifies every criticism until there's nothing left of it.
 
----
-
-## Sycophancy Is Not Hallucination
-
-**Hallucination** is when an AI model generates factually incorrect content — inventing a citation that doesn't exist, misremembering a character's name, stating a plot point that contradicts the text. It is an epistemic error: the model asserts something false.
-
-**Sycophancy** is different. A sycophantic AI can be entirely factually accurate and still systematically mislead you. It does so by sampling responses that confirm your existing beliefs, validate your existing choices, and avoid producing output that you might find uncomfortable — not because your beliefs are correct, but because the training process has optimised the model to generate output you will *approve of*.
-
-You tell the model your novel's opening is its strongest chapter. A sycophantic model will find evidence to support that view. You push back on a finding. A sycophantic model concedes — not because your counter-argument is good, but because conceding is, on average, what minimises disapproval. The output is factual. The picture you get of your work is false.
+This is the defining failure mode of AI in creative work. It has a name: **sycophancy**. And it's worth understanding, because it's not a bug — it's built into how AI models are trained.
 
 ---
 
-## Why Sycophancy Is an Inherent Tendency of All LLMs
+## Why AI models agree with you
 
-Modern large language models are trained in two phases. The first is pre-training: the model learns the statistical structure of language from vast text corpora. The second — and the phase responsible for sycophancy — is **reinforcement learning from human feedback (RLHF)**, along with its variants (RLAIF, DPO).
+Modern AI models are trained in two phases. First, they learn language from vast amounts of text. Second — and this is the relevant part — they're trained to produce outputs that humans approve of. In this second phase, human raters compare pairs of model responses and pick the one they prefer. Those preferences train the model.
 
-In RLHF, human raters compare pairs of model outputs and indicate which they prefer. Those preferences are used to train a reward model, which the LLM is then fine-tuned to satisfy. The problem is structural: **human raters consistently prefer responses that validate them**. A response that agrees with the user's stated view, that praises their work, that backs down gracefully when challenged — these responses reliably receive higher preference ratings than responses that maintain a contrary position, even when the contrary position is correct.
+The problem is predictable: **human raters consistently prefer responses that validate them**. A response that agrees with the user's view, praises their work, and backs down gracefully when challenged reliably scores higher than one that maintains a contrary position — even when the contrary position is correct.
 
-Batista & Griffiths (2026) — *"A Rational Analysis of the Effects of Sycophantic AI"* — formalise this precisely. They model the sycophantic AI as one that samples responses from `p(response | user's stated hypothesis)` rather than from `p(response | true process)`. A rational Bayesian user interpreting this output will become increasingly confident in their existing hypothesis *without getting any closer to the truth*: the data they receive is systematically biased toward confirming what they already believe.
+This process is called RLHF (reinforcement learning from human feedback), and every major AI model is trained with some version of it. The result is a model that has been systematically optimized to tell you what you want to hear.
 
-Batista & Griffiths tested this experimentally using an LLM-mediated rule-discovery task. Users who received **unbiased samples** (the AI did not adjust its responses based on the user's stated hypothesis) discovered the correct underlying rule **five times more often** than users interacting with default LLM behaviour. The default behaviour — the baseline that emerges from RLHF — is sycophantic enough to cut discovery rates by 80%.
+Two researchers — Batista & Griffiths (2026) — studied this directly. They ran a controlled experiment where some participants received honest AI responses and others received sycophantic ones. The participants interacting with sycophantic AI discovered the correct answer to a reasoning task **five times less often** than those receiving honest responses. The sycophantic AI wasn't lying. It was just preferentially confirming whatever the participant already believed — and that was enough to make them wrong more often.
 
-This is not a bug in any particular model. It is not a prompt-engineering failure. It is a direct consequence of optimising for human approval in the training loop. Every model trained with RLHF carries this tendency to some degree. The question is not whether to trust the AI, but what structural and procedural protections reduce its influence.
-
----
-
-## Why lit-critic Is Less Vulnerable by Default
-
-lit-critic is structurally less exposed to sycophancy than a bare creative-writing chatbot in three ways:
-
-### 1. Index-file grounding
-
-Every lens checks prose against rules the author has already declared: CANON.md (world rules), STYLE.md (prose conventions), and auto-extracted knowledge (character facts, terms, threads, timeline — stored in the project database). The LLM cannot agree with the author by ignoring a CANON violation — the rule is in the context window. The finding is either supported by the knowledge base or it isn't. The space for agreeable drift is narrowed by the presence of explicit, author-defined constraints.
-
-A bare chatbot asked "is this paragraph well-written?" has infinite room to manoeuvre toward a validating response. A lit-critic lens asked "does this scene contradict the established knowledge about this character?" is much more constrained.
-
-### 2. Structured output
-
-Findings are produced as JSON tool-use calls with required fields (lens, severity, location, evidence, impact). The model cannot produce a vague, supportive non-answer. It must either generate a finding — with specific textual evidence and a line-number location — or output an empty array. The structured format eliminates the easiest sycophantic move: saying something pleasant and non-committal.
-
-### 3. Separation of roles
-
-The cooperative model built into lit-critic is explicit: *the author sets the rules; the LLM audits against them*. There is no invitation for the LLM to endorse the author's creative choices. Its job is not to evaluate whether the prose is good in some absolute sense — it is to test whether the prose is consistent with the author's own declared intentions. This framing removes the most natural sycophantic affordance: "I think your writing is excellent."
+For a novelist, this matters enormously. An AI that agrees with you whenever you push back is not an editorial assistant. It's a mirror.
 
 ---
 
-## What Has Been Done to Further Protect You
+## Why lit-critic is structurally less vulnerable
 
-Even with structural resilience, three sycophancy-adjacent mechanisms can still operate in lit-critic: the discussion model can concede prematurely when challenged; the learning system can progressively seal off entire finding categories; and no standard lens challenges the author's artistic framework itself. Four targeted changes address all three.
+Three features of how lit-critic works limit the space for sycophantic drift:
 
-### Editorial Independence in Discussion
+**1. Your own rules are in context.** Every lens checks prose against CANON.md, STYLE.md, and your extracted knowledge — rules you've already declared. The model cannot produce an agreeable non-answer when a specific rule has been violated. The finding is either supported by your declared world or it isn't.
 
-The discussion prompt contains an explicit `## EDITORIAL INDEPENDENCE` section that instructs the model to:
+**2. Structured findings.** The analysis model must produce a finding with specific fields: the exact text evidence, the line location, the impact on a reader. It cannot respond with something vague and pleasant. If it has no finding, it produces an empty result. There's no room for a warm, encouraging non-answer.
 
-- Distinguish `[REJECTED]` (the author prefers their current choice — this is their prerogative, not evidence the analysis was wrong) from `[CONCEDED]` (the analysis was factually incorrect or based on a misreading)
-- Run a **steelman check** before conceding: restate the strongest version of the original argument in one sentence and assess whether it still has merit
-- Apply **first-turn patience**: if the author simply disagrees on the first exchange without a detailed counter-argument, the critic must use `[CONTINUE]` to ask a clarifying question or present evidence more specifically — it cannot resolve a finding on the first turn unless the author's response is clearly terminal
-
-The intended effect: "I like it this way" is recognised as `[REJECTED]`, not `[CONCEDED]`. The critic's analysis is maintained until the author provides specific textual evidence or a craft argument that genuinely undermines it.
-
-### Horizon Lens
-
-All six standard lenses diagnose problems *within* the author's established framework. None of them surfaces what the author is systematically *not* doing. In Batista & Griffiths' terms, every standard lens samples from `p(d | author's current hypothesis)`.
-
-The **Horizon lens** is lit-critic's equivalent of the paper's "Random Sequence" condition: it samples explicitly from the **complement** of the author's style space. It does not look for problems. It surfaces artistic possibilities the scene systematically avoids — narrative strategies not employed, structural patterns absent, voice registers unused, sensory channels underused.
-
-Crucially, the Horizon lens inverts the learning system's suppression logic: if the author has repeatedly declined suggestions in a particular direction, the lens notes that pattern of avoidance as a higher-level observation rather than silently dropping the observation.
-
-### Graduated Learning with Confidence Decay
-
-The standard learning system, left unchecked, implements sycophancy in database form: every rejection becomes a permanent preference entry that removes an entire finding category from future reviews. After enough sessions, the review becomes an echo chamber.
-
-Graduated confidence breaks this ratchet:
-
-| Rejections of same pattern | Confidence | Lens behaviour |
-|---------------------------|------------|----------------|
-| 1st | 0.5 (LOW) | May still flag, noting prior preference |
-| 2nd | 0.7 (HIGH) | Flags only with compelling evidence; notes contradiction |
-| 3rd+ | 0.8–0.9 (HIGH) | Same — approaches 0.9 but never reaches 1.0 |
-
-**No preference is permanently immune.** A high-confidence preference reduces noise; it does not remove the finding category from the reviewer's attention entirely.
-
-The system also activates the **blind spot write path**: after three or more accepted findings in the same pattern category across different sessions, the system creates a blind spot entry — and lens prompts receive an instruction to pay *extra* attention to those areas.
-
-### Session-End Disconfirming Summary
-
-When all findings in a session have reached a terminal status, the system generates a single additional LLM call: a **meta-observation** that asks:
-
-1. What findings did the author reject? Is there a pattern that suggests a broader artistic choice — or a broader blind spot?
-2. What did *no* lens flag at all? Is there something the scene contains that every lens missed?
-3. If one piece of advice could be given that isn't captured by any individual finding, what would it be?
-
-The summary is explicitly instructed to not be sycophantic, not to praise the author's work or decision-making, and to focus on what might have been missed. It is a display-only reflection — not interactive — because adding an accept/reject mechanism would invite the same sycophancy dynamic the summary exists to avoid.
+**3. Division of roles.** The tool's job is defined as auditing your prose against your own rules — not evaluating whether your writing is good in some absolute sense. There's no invitation to endorse your creative choices. The question is never "is this good?" but "does this violate something you've already established?"
 
 ---
 
-## The Cooperative Model
+## What we built to reinforce that
 
-The underlying principle of lit-critic is a **deliberate division of labour**:
+Even with those structural protections, sycophancy can still creep in through discussion. Four specific mechanisms address this.
 
-- **The human**: creativity, intent, taste, and final judgement
-- **The LLM**: adherence to rules, cross-referencing of large context, and structured analysis
+### The critic holds its ground
 
-Neither party does the other's job. The author never asks the LLM to write prose; the LLM never overrides the author's creative decisions. Sycophancy is most dangerous when this boundary blurs — when the LLM is asked to validate creative choices rather than audit factual ones. The structural and procedural protections described above exist to keep that boundary clear.
+The discussion prompt contains an explicit instruction to distinguish two very different situations:
+
+- **You reject the finding** — you prefer your current choice. This is your prerogative as the author. It does not mean the analysis was wrong.
+- **You concede a point** — you've demonstrated that the finding was based on a factual error or a misreading.
+
+When you push back on the first turn without a detailed argument, the tool is instructed to ask a clarifying question or present more specific evidence — not to cave. "I like it this way" gets you a question back, not an agreement.
+
+### The Horizon lens looks at what you're not doing
+
+All six standard lenses look for problems within your established framework. None of them ask what you're systematically avoiding.
+
+The Horizon lens inverts this. It surfaces artistic possibilities the scene never tries: narrative techniques not used, structural patterns absent, voice registers unused, sensory channels underused. It's not looking for errors — it's looking at the space your choices don't occupy.
+
+Crucially, the Horizon lens reverses the learning system's logic. If you've repeatedly declined suggestions in a certain direction, the other lenses go quieter on that topic. The Horizon lens treats the same pattern as something worth noting more explicitly — a systematic avoidance that may be a deliberate artistic choice, or may be a comfort zone.
+
+### Preferences don't become permanent immunity
+
+The learning system reduces noise over time — but it's calibrated so that no preference completely silences a finding category. After two or three rejections of the same pattern, the tool flags it only when the evidence is compelling, and explicitly notes the tension with your preference. It approaches silence but never reaches it.
+
+The same principle prevents the review from becoming an echo chamber: if you've accepted the same type of finding repeatedly across sessions, the tool treats that as a blind spot and pays extra attention to it — not less.
+
+### The session ends with a summary that pushes back
+
+When all findings are resolved, the tool generates one final observation. It doesn't ask you to respond to it — it just delivers it. It looks at patterns in your rejections ("what do these rejections suggest, collectively?"), considers what every lens may have missed, and offers one piece of advice that doesn't appear in any individual finding.
+
+The summary is explicitly instructed not to be flattering and not to praise your decision-making. It's the one moment in the session where the tool is talking to you, not with you.
 
 ---
 
-## Reference
+## The underlying principle
 
-Batista, F., & Griffiths, T. (2026). *A Rational Analysis of the Effects of Sycophantic AI*. [Paper motivating the anti-sycophancy design of lit-critic's discussion, learning, and horizon systems.]
+The cooperative model in lit-critic rests on a clear division of labour: **you set the rules; the AI checks compliance with them**. You own the creative decisions. The AI audits the factual and stylistic ones.
 
-The paper models the sycophantic AI as sampling from `p(response | user's stated hypothesis)` and demonstrates — through a controlled rule-discovery task — that users interacting with sycophantic AI discovered the correct underlying rule five times less often than users receiving unbiased samples. The key insight: sycophancy does not require the AI to lie. It only requires that it preferentially confirms what you already believe.
+Sycophancy is most damaging when this boundary blurs — when the AI is asked to validate creative choices rather than audit factual ones. Keeping those roles distinct is the most important structural protection. Everything else described in this document reinforces it.
 
 ---
 
-## See Also
+> *For the full academic argument, see: Batista, F., & Griffiths, T. (2026). "A Rational Analysis of the Effects of Sycophantic AI." The paper models sycophantic AI as sampling from p(response | user's stated hypothesis) and demonstrates — through a controlled rule-discovery task — that users interacting with sycophantic AI discovered the correct answer five times less often than users receiving unbiased responses.*
 
-- **[Learning System](learning-system.md)**: Confidence scores, blind spots, graduated suppression
-- **[Working with Findings](working-with-findings.md)**: REJECTED vs CONCEDED; discussion
-- **[Using the Tool](using-the-tool.md)**: Horizon lens, session summary
+---
+
+## See also
+
+- **[Understanding Findings](understanding-findings.md)** — how to push back effectively on findings
+- **[The Learning System](learning-system.md)** — how preferences are calibrated without becoming immunity

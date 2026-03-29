@@ -5,7 +5,7 @@
     "platform": "2.17.4",
     "cli": "2.9.1",
     "web": "2.13.4",
-    "vscode_extension": "2.19.12"
+    "vscode_extension": "2.20.1"
   },
   "compatibility": {
     "platform": {

@@ -86,6 +86,13 @@ let startupService: StartupService;
 let stalenessRegistry: StalenessRegistry = new StalenessRegistry();
 let controller: SessionWorkflowController;
 let extensionContext: vscode.ExtensionContext | undefined;
+let sceneFileWatcherDisposables: vscode.Disposable[] = [];
+let saveDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+// When true, the file system watcher skips refresh calls. Set during in-tool
+// renames so the watcher doesn't duplicate the refresh the rename command
+// already does explicitly.
+let sceneWatcherSuppressed = false;
+
 
 const state = createRuntimeStateStore();
 
@@ -466,8 +473,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Must always happen so Command Palette entries are available.
     registerCommands(context.subscriptions, {
         cmdAnalyze: async () => {
+            // D1: Stale inputs exist → auto-run knowledge update before analysis.
+            // The author just wants feedback — the system does the right thing without prompting.
+            if (stalenessRegistry.hasStaleInputs()) {
+                await controller.cmdRefreshKnowledge();
+            }
             await controller.cmdAnalyze();
-            void recheckStaleness(getStalenessServiceDeps()).catch(() => {});
+            void recheckStaleness(getStalenessServiceDeps()).then((count) => updateKnowledgeStalenessMessage(count)).catch(() => {});
         },
         cmdNextFinding: controller.cmdNextFinding,
         cmdAcceptFinding: controller.cmdAcceptFinding,
@@ -477,7 +489,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         cmdReviewFinding: controller.cmdReviewFinding,
         cmdSelectModel: controller.cmdSelectModel,
         cmdStopServer: controller.cmdStopServer,
-        cmdRefreshSessions: controller.cmdRefreshSessions,
         cmdViewSession: controller.cmdViewSession,
         cmdDeleteSession: controller.cmdDeleteSession,
         cmdRefreshLearning: controller.cmdRefreshLearning,
@@ -486,7 +497,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         cmdDeleteLearningEntry: controller.cmdDeleteLearningEntry,
         cmdRefreshKnowledge: async () => {
             await controller.cmdRefreshKnowledge();
-            void recheckStaleness(getStalenessServiceDeps()).catch(() => {});
+            void recheckStaleness(getStalenessServiceDeps()).then((count) => updateKnowledgeStalenessMessage(count)).catch(() => {});
         },
         cmdEditKnowledgeEntry: controller.cmdEditKnowledgeEntry,
         cmdResetKnowledgeOverride: async (item?: unknown) => {
@@ -681,28 +692,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('literaryCritic.refreshScenes', async () => {
-            await runTrackedOperation(
-                {
-                    id: 'refresh-scenes-tree',
-                    title: 'Refreshing scenes',
-                    statusMessage: 'Refreshing scenes...',
-                },
-                async () => {
-                    const projectPath = detectProjectPath();
-                    if (!projectPath) {
-                        return;
-                    }
-
-                    await ensureServer();
-                    const client = ensureApiClient();
-                    await client.refreshScenes(projectPath).catch(() => {});
-                    scenesTreeProvider.setApiClient(client);
-                    scenesTreeProvider.setProjectPath(projectPath);
-                    await scenesTreeProvider.refresh();
-                },
-            );
-        }),
         vscode.commands.registerCommand('literaryCritic.refreshIndexes', async () => {
             await runTrackedOperation(
                 {
@@ -729,25 +718,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     await knowledgeTreeProvider.refresh();
                 },
             );
-        }),
-        vscode.commands.registerCommand('literaryCritic.checkForChanges', async () => {
-            const projectPath = detectProjectPath();
-            if (!projectPath) {
-                vscode.window.showWarningMessage('No project detected. Open a lit-critic project first.');
-                return;
-            }
-            try {
-                await ensureServer();
-                const count = await recheckStaleness(getStalenessServiceDeps());
-                if (count === 0) {
-                    vscode.window.showInformationMessage('Everything is up to date.');
-                } else {
-                    vscode.window.showInformationMessage(`${count} stale input${count === 1 ? '' : 's'} found.`);
-                }
-            } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                vscode.window.showErrorMessage(`Check for Changes failed: ${msg}`);
-            }
         }),
         vscode.commands.registerCommand('literaryCritic.purgeOrphanedSceneRefs', async () => {
             const projectPath = detectProjectPath();
@@ -807,19 +777,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 return;
             }
             const newPath = oldDir + newName.trim();
+            // Suppress the file system watcher while the rename is in flight so
+            // the disk-level delete+create events don't trigger a second refresh.
+            sceneWatcherSuppressed = true;
+            let renameError: string | undefined;
             try {
-                await ensureServer();
-                const client = ensureApiClient();
-                await client.renameScene(oldPath, newPath, projectPath);
-                await client.refreshScenes(projectPath).catch(() => {});
-                scenesTreeProvider.setApiClient(client);
-                scenesTreeProvider.setProjectPath(projectPath);
-                await scenesTreeProvider.refresh();
-                void vscode.window.showInformationMessage(`lit-critic: Scene renamed to "${newName.trim()}".`);
+                await vscode.window.withProgress(
+                    { location: vscode.ProgressLocation.Notification, title: 'lit-critic', cancellable: false },
+                    async (progress) => {
+                        progress.report({ message: `Renaming scene to "${newName.trim()}"…` });
+                        await ensureServer();
+                        const client = ensureApiClient();
+                        await client.renameScene(oldPath, newPath, projectPath);
+                        progress.report({ message: 'Updating scene list…' });
+                        await client.refreshScenes(projectPath).catch(() => {});
+                        scenesTreeProvider.setApiClient(client);
+                        scenesTreeProvider.setProjectPath(projectPath);
+                        await scenesTreeProvider.refresh();
+                    },
+                );
             } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                void vscode.window.showErrorMessage(`lit-critic: Rename failed: ${msg}`);
+                renameError = err instanceof Error ? err.message : String(err);
+            } finally {
+                sceneWatcherSuppressed = false;
             }
+            if (renameError) {
+                void vscode.window.showErrorMessage(`lit-critic: Rename failed: ${renameError}`);
+            } else {
+                void vscode.window.showInformationMessage(`lit-critic: Scene renamed to "${newName.trim()}".`);
+            }
+
+
         }),
     );
 
@@ -868,6 +856,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                                 scenesTreeProvider.setProjectPath(projectPath);
                                 await scenesTreeProvider.refresh().catch(() => {});
                             }
+                            // Re-create file watchers with the new folder/extension config.
+                            setupSceneFileWatcher();
                         }
                     } catch {
                         // Non-fatal: backend may be temporarily unavailable.
@@ -875,6 +865,49 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 })();
             }
         })
+    );
+
+    // Debounced save listener: re-check staleness 2s after a scene file is saved.
+    context.subscriptions.push(
+        vscode.workspace.onDidSaveTextDocument((document) => {
+            const savedPath = document.uri.fsPath;
+            const cfg = vscode.workspace.getConfiguration('literaryCritic');
+            const sceneFolder = cfg.get<string>('sceneFolder', 'text');
+            const sceneExtensions = cfg.get<string[]>('sceneExtensions', ['txt']);
+            const projectPath = detectProjectPath();
+            if (!projectPath) { return; }
+
+            // Only react to files inside the scene folder with a matching extension.
+            const normalizedSaved = savedPath.replace(/\\/g, '/');
+            const normalizedProject = projectPath.replace(/\\/g, '/');
+            const inSceneFolder = normalizedSaved.includes(`/${sceneFolder}/`)
+                || normalizedSaved.startsWith(`${normalizedProject}/${sceneFolder}/`);
+            const hasSceneExt = sceneExtensions.some((ext) => normalizedSaved.endsWith(`.${ext}`));
+            if (!inSceneFolder || !hasSceneExt) { return; }
+
+            // Debounce: clear any pending timer and start a new 2-second countdown.
+            if (saveDebounceTimer !== undefined) {
+                clearTimeout(saveDebounceTimer);
+            }
+            saveDebounceTimer = setTimeout(() => {
+                saveDebounceTimer = undefined;
+                void recheckStaleness(getStalenessServiceDeps())
+                    .then((count) => {
+                        updateKnowledgeStalenessMessage(count);
+                        // D2: autoUpdateOnSave='knowledge' — automatically run knowledge extraction
+                        // when stale scenes are detected on save. 'full' (auto-analyze) is
+                        // intentionally excluded from initial scope (see Design Decision D2).
+                        if (count > 0) {
+                            const autoUpdate = vscode.workspace.getConfiguration('literaryCritic')
+                                .get<string>('autoUpdateOnSave', 'off');
+                            if (autoUpdate === 'knowledge') {
+                                void controller.cmdRefreshKnowledge();
+                            }
+                        }
+                    })
+                    .catch(() => {});
+            }, 2000);
+        }),
     );
 
     let repoRoot = findRepoRoot();
@@ -1209,7 +1242,8 @@ async function autoLoadSidebar(): Promise<void> {
             // user can see what changed, then let them decide when to run Refresh Knowledge.
             // This mirrors the post-startup "Check for Changes" behavior: we never run an
             // automatic LLM extraction or DB write on startup without an explicit user action.
-            await recheckStaleness(getStalenessServiceDeps()).catch(() => {});
+            const startupStaleCount = await recheckStaleness(getStalenessServiceDeps()).catch(() => 0);
+            updateKnowledgeStalenessMessage(startupStaleCount);
 
             const client = ensureApiClient();
             scenesTreeProvider.setApiClient(client);
@@ -1247,6 +1281,11 @@ async function autoLoadSidebar(): Promise<void> {
             // This helps recover from transient first-pass startup timing
             // where existing sessions may not appear until a later action.
             await sessionsTreeProvider.refresh().catch(() => {});
+
+            // Set up the file system watcher now that the server is ready and
+            // the project path is known. The watcher auto-refreshes the Inputs
+            // tree and re-checks staleness when scene files are created/deleted/changed.
+            setupSceneFileWatcher();
         },
     );
 }
@@ -1365,6 +1404,78 @@ function getStalenessServiceDeps(): StalenessServiceDeps {
         knowledgeTreeProvider,
         sessionsTreeProvider,
     };
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge staleness message helper
+// ---------------------------------------------------------------------------
+
+function updateKnowledgeStalenessMessage(count: number): void {
+    if (!knowledgeTreeView) { return; }
+    knowledgeTreeView.message = count > 0
+        ? `⚠ ${count} scene${count === 1 ? '' : 's'} changed since last update. Run "Update Knowledge (AI)" to re-read.`
+        : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Scene file watcher — auto-refreshes Inputs tree and staleness on fs changes
+// ---------------------------------------------------------------------------
+
+function setupSceneFileWatcher(): vscode.Disposable[] {
+    // Dispose any previously created watchers before creating new ones.
+    for (const d of sceneFileWatcherDisposables) {
+        d.dispose();
+    }
+    sceneFileWatcherDisposables = [];
+
+    const projectPath = detectProjectPath();
+    if (!projectPath) {
+        return [];
+    }
+
+    const config = vscode.workspace.getConfiguration('literaryCritic');
+    const sceneFolder = config.get<string>('sceneFolder', 'text');
+    const sceneExtensions = config.get<string[]>('sceneExtensions', ['txt']);
+
+    const handleChange = () => {
+        // Skip while an in-tool rename is in progress — the rename command issues
+        // its own single refresh, so these watcher events would be duplicates.
+        if (sceneWatcherSuppressed) { return; }
+        void (async () => {
+            try {
+                const currentPath = detectProjectPath();
+                if (!currentPath || !serverManager?.isRunning) { return; }
+                const client = ensureApiClient();
+                await client.refreshScenes(currentPath).catch(() => {});
+                scenesTreeProvider.setApiClient(client);
+                scenesTreeProvider.setProjectPath(currentPath);
+                await scenesTreeProvider.refresh().catch(() => {});
+                const watcherCount = await recheckStaleness(getStalenessServiceDeps()).catch(() => 0);
+                updateKnowledgeStalenessMessage(watcherCount);
+            } catch {
+                // Non-fatal
+            }
+        })();
+    };
+
+
+    const disposables: vscode.Disposable[] = [];
+    for (const ext of sceneExtensions) {
+        const pattern = new vscode.RelativePattern(projectPath, `${sceneFolder}/**/*.${ext}`);
+        const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+        disposables.push(
+            watcher,
+            watcher.onDidCreate(handleChange),
+            watcher.onDidDelete(handleChange),
+            watcher.onDidChange(handleChange),
+        );
+    }
+
+    sceneFileWatcherDisposables = disposables;
+    if (extensionContext) {
+        extensionContext.subscriptions.push(...disposables);
+    }
+    return disposables;
 }
 
 // ---------------------------------------------------------------------------

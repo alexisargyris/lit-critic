@@ -1,9 +1,9 @@
 # Release Checklist (No-CI Workflow)
 
-Use this checklist before creating/pushing any release tag.
+Use this checklist before pushing a release.
 
 If you are pushing **work-in-progress** changes (not a release), use the WIP
-declaration step below and skip tag creation.
+declaration step below.
 
 ---
 
@@ -62,24 +62,7 @@ npm --prefix vscode-extension test -- --grep repoPreflight
 
 ---
 
-## 4) Create Component Tags
-
-Use component-scoped tags only for changed components.
-
-Examples:
-
-```bash
-git tag -a core-v2.0.0 -m "core 2.0.0"
-git tag -a platform-v2.0.0 -m "platform 2.0.0"
-git tag -a cli-v2.0.0 -m "cli 2.0.0"
-```
-
-- [ ] Tag names follow `<component>-vX.Y.Z`
-- [ ] Tag versions match `versioning/compatibility.json`
-
----
-
-## 4.5) WIP Push Path (No Tags)
+## 4) WIP Push Path (No Tags)
 
 Use this path when implementation is intentionally partial and you need to push
 collaboration/progress state without declaring a release.
@@ -89,7 +72,7 @@ collaboration/progress state without declaring a release.
   - [ ] `spec` references the governing spec file
   - [ ] `implemented` lists completed scope
   - [ ] `pending` lists remaining scope
-- [ ] Confirm no release tags are created/pushed for this commit range
+- [ ] Confirm no version bumps are made for this commit range
 
 ---
 
@@ -97,8 +80,6 @@ collaboration/progress state without declaring a release.
 
 ```bash
 git push
-git push --tags
 ```
 
 - [ ] Branch pushed
-- [ ] Tags pushed

@@ -99,7 +99,6 @@ const EXPECTED_COMMAND_IDS = [
     'literaryCritic.reviewFinding',
     'literaryCritic.selectModel',
     'literaryCritic.stopServer',
-    'literaryCritic.refreshSessions',
     'literaryCritic.viewSession',
     'literaryCritic.deleteSession',
     'literaryCritic.refreshLearning',
@@ -135,9 +134,9 @@ describe('COMMAND_IDS', () => {
         assert.equal(unique.size, mod.COMMAND_IDS.length, 'COMMAND_IDS must not contain duplicates');
     });
 
-    it('contains 27 command IDs', () => {
+    it('contains 26 command IDs', () => {
         const { mod } = loadModule();
-        assert.equal(mod.COMMAND_IDS.length, 27, 'Expected exactly 27 command IDs');
+        assert.equal(mod.COMMAND_IDS.length, 26, 'Expected exactly 26 command IDs');
     });
 });
 

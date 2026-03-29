@@ -134,28 +134,13 @@ Guidelines:
 
 - Use `status: "wip"` for non-release pushes.
 - Keep `implemented` and `pending` aligned with the source spec checklist.
-- Do **not** create/push release tags while `status` is `wip`.
+- Do **not** bump component versions while `status` is `wip`.
 - Before a real release, either remove the WIP declaration or update it to a
   release-ready state with fully completed scope.
 
 ---
 
-## 6) Tagging Convention (Recommended)
-
-Use component-scoped tags:
-
-- `contracts-vX.Y.Z`
-- `core-vX.Y.Z`
-- `platform-vX.Y.Z`
-- `cli-vX.Y.Z`
-- `web-vX.Y.Z`
-- `vscode-extension-vX.Y.Z`
-
-This keeps independent release cadence explicit.
-
----
-
-## 7) Future CI Integration
+## 6) Future CI Integration
 
 When CI is added, reuse the exact local validator command:
 

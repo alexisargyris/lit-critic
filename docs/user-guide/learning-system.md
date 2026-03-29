@@ -1,459 +1,136 @@
-# Learning System
+# The Learning System
 
-lit-critic learns your preferences over time and adapts to your writing style. This guide explains how the learning system works and how to use it effectively.
+Every time you accept, reject, or discuss a finding, lit-critic learns something about your style. Over time it calibrates: fewer findings on issues you've consistently dismissed, more attention to patterns you've consistently agreed with. A mature learning profile means reviews that are faster and more relevant to your actual work.
 
----
-
-## Overview
-
-The learning system tracks your editorial preferences through:
-
-1. **Accept/Reject patterns** Types of findings you consistently accept or reject
-2. **Discussion outcomes** Explicit preferences you state in conversations
-3. **Ambiguity choices** When you mark ambiguity as intentional vs. accidental
-4. **Cross-finding context** Arguments you use that apply to similar findings
-
-All learned preferences are stored in the **project database** (`.lit-critic.db`). You can export them to **LEARNING.md** as a human-readable file. The database is the source of truth; `LEARNING.md` is a convenient export for reading and sharing. On first use, any existing `LEARNING.md` is automatically imported into the database.
+Your preferences are stored as part of your project. You can export them to a readable file called `LEARNING.md` at any point.
 
 ---
 
-## What Gets Learned
+## What gets learned
 
-### 1. Rejection Patterns
+**Rejection patterns** — When you reject findings of a certain type repeatedly, the tool learns that this isn't something you care to address. It will flag it again only if the evidence is compelling.
 
-When you reject findings of a certain type multiple times, the system learns that this isn't an issue for your style.
+**Acceptance patterns** — When you consistently agree with a type of finding, the tool treats it as a recurring blind spot and pays extra attention to it in future scenes.
+
+**Explicit preferences from discussion** — When you explain your reasoning in a conversation, the tool extracts the principle and stores it.
 
 **Example:**
+
+```
+You: "I always use semicolons to connect thematically related thoughts. 
+That's my style, not a run-on."
+
+AI: "Understood. I'll note that you use semicolons deliberately for 
+thematic connection."
+```
+
+Later, `LEARNING.md` will contain:
 ```markdown
-## Prose Preferences
-
-- Author intentionally uses sentence fragments for pacing in 
-  action scenes (not an error)
-- Author prefers occasional one-sentence paragraphs for emphasis
-```
-
-### 2. Acceptance Patterns
-
-When you consistently accept certain types of findings, the system learns these are blind spots or active preferences.
-
-**Example:**
-```markdown
-## Prose Preferences
-
-- Author actively avoids filter words ("saw," "felt," "heard") 
-  in deep POV
-- Author accepts findings about overlong sentences (prefers 
-  concision)
-```
-
-### 3. Ambiguity Preferences
-
-When you mark ambiguity as intentional vs. accidental, the system learns your stylistic choices.
-
-**Example:**
-```markdown
-## Clarity Preferences
-
-- Author uses deliberate pronoun ambiguity for mystery/suspense
-- Author prefers clarity over economy in action sequences
-```
-
-### 4. Explicit Preferences
-
-When you state a preference during discussion, the system captures it as a rule.
-
-**Example conversation:**
-```
-You: "I always use em dashes without spaces. That's my style."
-
-AI: "Understood. I'll note that in your learning profile."
-```
-
-**Result in LEARNING.md:**
-```markdown
-## Style Preferences
-
-- Em dashes without spaces (author's consistent style)
+- Author uses semicolons to connect thematically related sentences (intentional style)
 ```
 
 ---
 
-## How LEARNING.md is Used
+## How it influences future reviews
 
-### During Analysis
+When you start a new review, all seven lenses receive your learning profile as context. The effect is gradual and calibrated:
 
-When you start a new review:
+- The **first time** you reject a pattern, the tool may still flag it — noting your prior rejection — if the evidence in the new scene is strong
+- After **two or three rejections** of the same pattern, the tool flags it only when the evidence is compelling, and acknowledges the tension with your preference
+- **No preference is permanent immunity.** A strong enough case will still surface even for patterns you've repeatedly dismissed
 
-1. The tool loads learning data from the project database (`.lit-critic.db`)
-2. All seven lenses receive the learning content as context
-3. Lenses are instructed to respect your documented preferences
-
-**Effect:**
-- Fewer findings on issues you've consistently rejected
-- More attention to areas you've accepted in the past
-- Better calibration to your specific style
-
-### During Discussion
-
-When you discuss a finding:
-
-1. The AI has access to your learning history
-2. The AI references past preferences in its reasoning
-3. The AI avoids rehashing arguments you've already made
-
-**Example:**
-```
-Finding: "This sentence fragment seems incomplete."
-
-AI: "I see from your learning profile that you 
-intentionally use fragments for pacing. However, this 
-particular fragment appears in an introspective scene 
-where you've previously preferred complete sentences. 
-Is this usage intentional?"
-```
+This means your reviews don't become an echo chamber. The tool becomes quieter about things you've clearly chosen, but never completely silent.
 
 ---
 
-## Saving and Exporting Learning
+## Exporting your preferences
 
-Learning data is **automatically saved** to the project database as you accept, reject, and discuss findings. There is no manual save step for the learning data itself.
+Your preferences are accumulated automatically. To export them as a readable file:
 
-To **export** a human-readable `LEARNING.md` file:
+**VS Code:** Command Palette → `lit-critic: Export Learning to LEARNING.md`
 
-### CLI
+**Web UI:** http://localhost:8000/learning → click **Export to LEARNING.md**
 
-```bash
-python -m cli learning export --project ~/novel/
-```
+**Terminal:** `python -m cli learning export --project ~/my-novel/`
 
-### Web UI
-
-Navigate to http://localhost:8000/learning and click **Export to LEARNING.md**.
-
-### VS Code
-
-Command Palette → `lit-critic: Export Learning to LEARNING.md`
-
-### What Happens
-
-- **LEARNING.md is generated** from the database as a human-readable export
-- **Format:** Clean, readable markdown organized by category
-- Future reviews load learning data from the database (not from LEARNING.md)
-
----
-
-## Learning Data Structure
-
-Learning data is organized by category in the database. When exported to LEARNING.md, it looks like:
-
+The exported file looks like:
 ```markdown
 # Learning
 
 PROJECT: My Novel
-LAST_UPDATED: 2026-02-09
+LAST_UPDATED: 2026-03-10
 REVIEW_COUNT: 12
 
 ## Preferences
 
-- Author uses sentence fragments for pacing in action scenes
+- Author uses sentence fragments for pacing in action scenes (intentional)
 - Author prefers "said" as default dialogue tag (avoids fancy tags)
 - Author accepts findings about filter words and actively removes them
 
 ## Blind Spots
 
 - Author consistently misses filter words in deep POV
-- Author tends to repeat location descriptions
-
-## Resolutions
-
-- Author resolved tense-rule findings by documenting convention in STYLE.md
-
-## Ambiguity Patterns
-
-### Intentional
-
-- Author uses deliberate pronoun ambiguity for mystery effect
-- Author leaves chapter endings ambiguous by design
-
-### Accidental
-
-- Author sometimes forgets to ground character positions after scene transitions
-```
-
-### Managing Learning Data
-
-You can also manage individual entries:
-
-**Web UI:** http://localhost:8000/learning — delete individual entries or reset all learning data.
-
-**VS Code:** The **Learning** sidebar tree view shows entries by category. Right-click to delete entries.
-
-**CLI:**
-```bash
-python -m cli learning list --project ~/novel/
 ```
 
 ---
 
-## Confidence Levels
+## Teaching from discussion
 
-Each preference entry has a **confidence score** (0.5–0.9) that grows as the same pattern is confirmed across sessions:
+The most powerful learning happens when you explain your thinking in a discussion rather than just accepting or rejecting.
 
-| Rejections | Confidence | Lens behaviour |
-|-----------|------------|----------------|
-| 1st | 0.5 (LOW) | Lens **may still flag** the issue, noting your prior preference |
-| 2nd | 0.7 (HIGH) | Lens flags **only if the evidence is compelling**, and notes the contradiction |
-| 3rd+ | 0.8–0.9 (HIGH) | Same as above — confidence approaches 0.9 but never reaches 1.0 |
+**Genre conventions:**
+```
+You: "In fantasy, it's standard to introduce terms without immediate 
+explanation. Readers expect to infer meaning from context."
 
-**No preference is permanently immune.** A high-confidence preference reduces noise but does not remove the finding category from the reviewer's attention. If there is strong evidence in a specific scene, the lens will still surface it and tell you it contradicts a learned preference. You decide.
-
-The confidence score is exported into `LEARNING.md` as a machine-readable prefix:
-
-```markdown
-## Preferences
-
-- [confidence: 0.5] [prose] Author uses sentence fragments for pacing
-- [confidence: 0.8] [dialogue] Author uses comma splices in speech intentionally
+AI: "Fair point. I'll adjust my clarity threshold for specialized 
+terms in your fantasy setting."
 ```
 
-### Blind Spots
+**Structural choices:**
+```
+You: "I deliberately write short transitional scenes without strong 
+objectives. They're palette cleansers between intense chapters."
 
-The system also tracks **blind spots** — patterns the author has repeatedly *accepted*. After 3 or more accepted findings in the same lens/pattern category across different sessions, the system creates a blind spot entry. Lens prompts receive an instruction to pay **extra attention** to those areas.
+AI: "Understood — these serve pacing rather than plot advancement."
+```
 
-Blind spots are listed in `LEARNING.md` under `## Blind Spots`.
+The more specific your explanation, the more useful the resulting learning entry.
 
 ---
 
-## Best Practices
+## Best practices
 
-### 1. Start Fresh with Each Project
+**Provide reject reasons.** "Intentional repetition for emphasis" teaches the tool far more than a silent dismissal.
 
-LEARNING.md is project-specific. Don't copy it between projects—each novel has its own style.
+**Be consistent.** If you accept "sentence fragments are errors" in scene 1 and reject it in scene 5, the tool gets a mixed signal. When a choice genuinely varies by scene type, say so in the discussion.
 
-### 2. Export Learning Snapshots Regularly
+**Review LEARNING.md occasionally.** Open it and read it. If something no longer reflects your preferences, you can delete entries directly from the Learning view in VS Code, or reset everything and start fresh.
 
-After every 2–3 scene reviews, run `export learning` to snapshot your preferences into `LEARNING.md`. Don't wait until the end of the project.
-
-### 3. Review LEARNING.md Periodically
-
-Open LEARNING.md and read it. Make sure it accurately reflects your preferences. You can edit it manually if needed.
-
-### 4. Provide Reject Reasons
-
-When rejecting a finding, briefly explain why. This helps the learning system extract meaningful patterns.
-
-**Good reject reason:**
-```
-"Intentional repetition for emphasis"
-```
-
-**Vague reject reason:**
-```
-"I don't like this"
-```
-
-### 5. Be Consistent
-
-If you accept "sentence fragments are errors" in scene 1 and reject it in scene 5, the system gets confused. Be consistent or explain why this case differs.
-
-### 6. Use Discussion to Teach
-
-When discussing a finding, state your preferences explicitly:
-
-**Good:**
-```
-"I always use present tense for flashbacks. That's my 
-established convention."
-```
-
-**Vague:**
-```
-"I think this is fine."
-```
-
----
-
-## Learning Across Sessions
-
-### Session 1: Initial Review
-
-You review your first scene. No LEARNING.md exists yet.
-
-- Findings reflect general editorial standards
-- You accept some, reject others
-- You export a learning snapshot at the end
-
-### Session 2: Second Scene
-
-You review a second scene. LEARNING.md now exists.
-
-- Lenses read your preferences
-- Fewer findings on rejected patterns
-- You continue to refine preferences
-- You export learning again
-
-### Session 10: Mature Profile
-
-After reviewing 10 scenes, LEARNING.md is comprehensive.
-
-- Lenses are well-calibrated to your style
-- Findings are more relevant and targeted
-- Review sessions are faster (fewer irrelevant findings)
+**Each project is separate.** LEARNING.md is specific to one novel. Don't copy it between projects.
 
 ---
 
 ## Limitations
 
-### What Learning Does NOT Do
-
-❌ **Override world rules** CANON.md violations are always flagged, regardless of preferences
-
-❌ **Ignore continuity errors** Factual contradictions are always flagged
-
-❌ **Replace your judgment** You still review every finding and decide
-
-❌ **Work across projects** LEARNING.md is project-specific
-
-### What Learning DOES Do
-
-✅ **Reduce noise** Fewer findings on issues you don't care about
-
-✅ **Improve relevance** More findings on issues you actively address
-
-✅ **Speed up reviews** Less time arguing about style preferences
-
-✅ **Respect your voice** Lenses adapt to your specific style
+| What the learning system does NOT do | Why |
+|--------------------------------------|-----|
+| Override world rules | CANON.md violations are always flagged, regardless of preferences |
+| Ignore continuity errors | Factual contradictions are always flagged |
+| Replace your judgment | You still review every finding and decide |
+| Guarantee silence on dismissed topics | Strong enough evidence will resurface even preferred patterns |
 
 ---
 
-## Editing LEARNING.md Manually
+## Managing learning data
 
-You can edit LEARNING.md directly if needed:
+**Delete individual entries:** VS Code → Learning view → right-click an entry → Delete
 
-### Adding Preferences
-
-```markdown
-## Prose Preferences
-
-- Author uses em dashes without spaces (consistent style)
-```
-
-### Removing Preferences
-
-Delete the line or section you no longer want tracked.
-
-### Clarifying Preferences
-
-```markdown
-- Author uses sentence fragments for pacing in action scenes 
-  (but not in introspective scenes)
-```
-
-### Organizing
-
-Feel free to reorganize for clarity—the tool reads the whole file regardless of order.
+**Reset everything:** VS Code → Command Palette → `lit-critic: Reset All Learning Data` (or http://localhost:8000/learning on the Web UI)
 
 ---
 
-## Sharing LEARNING.md
+## See also
 
-### With Collaborators
-
-If you're co-writing, LEARNING.md can be shared to align editorial standards:
-
-1. **Commit LEARNING.md to your repo**
-2. **Both authors run reviews with the same learning profile**
-3. **Periodically merge and reconcile preferences**
-
-### Across Projects
-
-Generally not recommended—each project has its own style. But if you have strong personal preferences (e.g., "always avoid filter words"), you can copy specific sections.
-
----
-
-## Resetting Learning
-
-To start fresh:
-
-1. **Reset learning data** (Web learning page, VS Code learning command, or CLI `python -m cli learning reset --project <path>`)
-2. **Run a new review** to build fresh signals
-3. **Export learning** when you want a new `LEARNING.md` snapshot
-
----
-
-## Advanced: Learning from Discussion
-
-The most powerful learning happens during discussion. When you explain your reasoning, the system extracts general rules.
-
-### Example 1: Style Rule
-
-**Discussion:**
-```
-You: "I always use semicolons to connect related thoughts. 
-That's my preferred style, not a run-on."
-
-AI: "Understood. I'll note that you use semicolons 
-deliberately for thematic connection."
-```
-
-**Result in LEARNING.md:**
-```markdown
-- Author uses semicolons to connect thematically related 
-  sentences (intentional style)
-```
-
-### Example 2: Genre Convention
-
-**Discussion:**
-```
-You: "In fantasy, it's standard to introduce terms without 
-immediate explanation. Readers expect to infer meaning."
-
-AI: "Fair point. I'll adjust my clarity threshold for 
-specialized terms in your fantasy setting."
-```
-
-**Result in LEARNING.md:**
-```markdown
-- Author introduces fantasy terms without immediate 
-  explanation (genre convention, readers infer)
-```
-
-### Example 3: Structural Choice
-
-**Discussion:**
-```
-You: "I deliberately write short transitional scenes 
-without strong objectives. They're palette cleansers 
-between intense chapters."
-
-AI: "I see. These scenes serve pacing rather than 
-plot advancement. I'll adjust my structure lens."
-```
-
-**Result in LEARNING.md:**
-```markdown
-- Author writes short transitional scenes without explicit 
-  objectives for pacing (intentional structure)
-```
-
----
-
-## Decay and Reinforcement
-
-(Note: Decay mechanism is a future enhancement, not currently implemented.)
-
-**Future behavior:**
-- Preferences weaken if not reinforced over many sessions
-- Preferences strengthen when repeatedly confirmed
-- This prevents stale preferences from lingering forever
-
----
-
-## See Also
-
-- **[Working with Findings](working-with-findings.md)** Accept, reject, discuss
-- **[Using the Tool](using-the-tool.md)** CLI, Web UI, VS Code
-- **[Getting Started](getting-started.md)** Initial setup
-- **[Scene Format](scene-format.md)** @@META documentation
-- **[Knowledge Management](index-files.md)** CANON.md, STYLE.md, and auto-extracted knowledge
+- **[Understanding Findings](understanding-findings.md)** — accept, reject, discuss
+- **[Your First Review](your-first-review.md)** — when to export your first snapshot

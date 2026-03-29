@@ -1,6 +1,6 @@
 {
   "name": "lit-critic",
-  "version": "2.19.12",
+  "version": "2.20.1",
   "description": "Multi-lens editorial review system for fiction manuscripts",
   "private": true,
   "scripts": {

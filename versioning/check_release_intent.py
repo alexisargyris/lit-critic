@@ -15,6 +15,11 @@ from pathlib import Path
 
 COMPATIBILITY_FILE = "versioning/compatibility.json"
 
+# Files within component directories that do not constitute code changes and
+# should not trigger the version-update requirement (e.g. docs rewrites).
+IGNORED_FILENAMES: frozenset[str] = frozenset({"README.md", "LICENSE", "CHANGELOG.md"})
+
+
 COMPONENT_PREFIXES: dict[str, tuple[str, ...]] = {
     "contracts_v1": ("contracts/v1/",),
     "core": ("core/",),
@@ -125,6 +130,9 @@ def _detect_outgoing_files_from_pre_push_stdin() -> tuple[list[str], str]:
 
 def _component_for_path(path: str) -> str | None:
     normalized = path.replace("\\", "/")
+    filename = normalized.rsplit("/", 1)[-1]
+    if filename in IGNORED_FILENAMES:
+        return None
     for component, prefixes in COMPONENT_PREFIXES.items():
         for prefix in prefixes:
             if normalized.startswith(prefix) or normalized == prefix:

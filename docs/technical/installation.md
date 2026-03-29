@@ -86,7 +86,7 @@ python lit-critic-web.py --reload
 python lit-critic.py --help
 ```
 
-For command examples, see the user guide: `docs/user-guide/using-the-tool.md`.
+For command examples, see the user guide: `docs/user-guide/your-first-review.md`.
 
 ## Run tests
 

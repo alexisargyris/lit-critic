@@ -54,4 +54,12 @@ export class StalenessRegistry {
         }
         return undefined;
     }
+
+    hasStaleInputs(): boolean {
+        return this._entries.size > 0;
+    }
+
+    staleInputCount(): number {
+        return this._entries.size;
+    }
 }
